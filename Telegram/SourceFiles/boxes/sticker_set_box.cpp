@@ -386,7 +386,7 @@ private:
 	void setupEmoji(int index);
 	[[nodiscard]] not_null<Ui::Text::CustomEmoji*> resolveCustomEmoji(
 		not_null<DocumentData*> document);
-	void customEmojiRepaint();
+	void customEmojiRepaint(not_null<DocumentData*> document);
 
 	void updateSelected();
 	void setSelected(int selected);
@@ -428,7 +428,13 @@ private:
 	void showPreviewAt(QPoint globalPos);
 
 	void updateItems();
+	void updateLottieItems();
+	void updateItem(not_null<DocumentData*> document);
+	void scheduleItemsUpdate();
+	void repaintPendingItems(crl::time now = 0);
 	void repaintItems(crl::time now = 0);
+	[[nodiscard]] bool itemVisible(int index) const;
+	void repaintItem(int index);
 
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const not_null<Main::Session*> _session;
@@ -440,7 +446,10 @@ private:
 	base::flat_map<
 		not_null<DocumentData*>,
 		std::unique_ptr<Ui::Text::CustomEmoji>> _customEmoji;
-	bool _repaintScheduled = false;
+	base::flat_set<not_null<DocumentData*>> _customEmojiRepaintsScheduled;
+	base::flat_set<not_null<DocumentData*>> _repaintDocuments;
+	bool _repaintAllItems = false;
+	bool _repaintLottieItems = false;
 
 	StickersPack _pack;
 	base::flat_map<EmojiPtr, StickersPack> _emoji;
@@ -1074,7 +1083,7 @@ StickerSetBox::Inner::Inner(
 	st::windowBgOver,
 	[=] { repaintItems(); }))
 , _premiumMark(_session, st::stickersPremiumLock)
-, _updateItemsTimer([=] { updateItems(); })
+, _updateItemsTimer([=] { scheduleItemsUpdate(); })
 , _input(set)
 , _padding((type == Data::StickersType::Emoji)
 	? st::emojiSetPadding
@@ -1946,7 +1955,7 @@ not_null<Lottie::MultiPlayer*> StickerSetBox::Inner::getLottiePlayer() {
 			Lottie::MakeFrameRenderer());
 		_lottiePlayer->updates(
 		) | rpl::on_next([=] {
-			updateItems();
+			updateLottieItems();
 		}, lifetime());
 	}
 	return _lottiePlayer.get();
@@ -1967,8 +1976,7 @@ int32 StickerSetBox::Inner::stickerFromGlobalPos(const QPoint &p) const {
 void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
-	_repaintScheduled = false;
-
+	_customEmojiRepaintsScheduled.clear();
 	p.fillRect(e->rect(), st::boxBg);
 	if (_elements.empty()) {
 		return;
@@ -2152,7 +2160,7 @@ void StickerSetBox::Inner::clipCallback(
 	case Notification::Repaint: break;
 	}
 
-	updateItems();
+	updateItem(document);
 }
 
 void StickerSetBox::Inner::setupEmoji(int index) {
@@ -2168,7 +2176,7 @@ not_null<Ui::Text::CustomEmoji*> StickerSetBox::Inner::resolveCustomEmoji(
 	}
 	auto emoji = document->session().data().customEmojiManager().create(
 		document,
-		[=] { customEmojiRepaint(); },
+		[=] { customEmojiRepaint(document); },
 		Data::CustomEmojiManager::SizeTag::Large);
 	return _customEmoji.emplace(
 		document,
@@ -2176,12 +2184,21 @@ not_null<Ui::Text::CustomEmoji*> StickerSetBox::Inner::resolveCustomEmoji(
 	).first->second.get();
 }
 
-void StickerSetBox::Inner::customEmojiRepaint() {
-	if (_repaintScheduled) {
+void StickerSetBox::Inner::customEmojiRepaint(
+		not_null<DocumentData*> document) {
+	if (!_customEmojiRepaintsScheduled.emplace(document).second) {
+		return;
+	} else if (_dragging.enabled) {
+		update();
 		return;
 	}
-	_repaintScheduled = true;
-	update();
+	for (auto index = 0, count = int(_elements.size());
+			index != count;
+			++index) {
+		if (itemVisible(index) && _elements[index].document == document) {
+			repaintItem(index);
+		}
+	}
 }
 
 void StickerSetBox::Inner::shakeTransform(
@@ -2421,22 +2438,83 @@ void StickerSetBox::Inner::archiveStickers() {
 }
 
 void StickerSetBox::Inner::updateItems() {
+	_repaintAllItems = true;
+	scheduleItemsUpdate();
+}
+
+void StickerSetBox::Inner::updateLottieItems() {
+	_repaintLottieItems = true;
+	scheduleItemsUpdate();
+}
+
+void StickerSetBox::Inner::updateItem(
+		not_null<DocumentData*> document) {
+	_repaintDocuments.emplace(document);
+	scheduleItemsUpdate();
+}
+
+void StickerSetBox::Inner::scheduleItemsUpdate() {
 	const auto now = crl::now();
 
 	const auto delay = std::max(
 		_lastScrolledAt + kMinAfterScrollDelay - now,
 		_lastUpdatedAt + kMinRepaintDelay - now);
 	if (delay <= 0) {
-		repaintItems(now);
+		repaintPendingItems(now);
 	} else if (!_updateItemsTimer.isActive()
 		|| _updateItemsTimer.remainingTime() > kMinRepaintDelay) {
 		_updateItemsTimer.callOnce(std::max(delay, kMinRepaintDelay));
 	}
 }
 
+void StickerSetBox::Inner::repaintPendingItems(crl::time now) {
+	if (!_repaintAllItems
+		&& !_repaintLottieItems
+		&& _repaintDocuments.empty()) {
+		return;
+	}
+	if (_repaintAllItems || _dragging.enabled) {
+		repaintItems(now);
+		return;
+	}
+	const auto repaintLottie = base::take(_repaintLottieItems);
+	const auto documents = base::take(_repaintDocuments);
+	for (auto index = 0, count = int(_elements.size());
+			index != count;
+			++index) {
+		const auto &element = _elements[index];
+		if (itemVisible(index)
+			&& ((repaintLottie && element.lottie)
+				|| documents.contains(element.document))) {
+			repaintItem(index);
+		}
+	}
+	_lastUpdatedAt = now ? now : crl::now();
+}
+
 void StickerSetBox::Inner::repaintItems(crl::time now) {
+	_repaintAllItems = false;
+	_repaintLottieItems = false;
+	_repaintDocuments.clear();
 	_lastUpdatedAt = now ? now : crl::now();
 	update();
+}
+
+bool StickerSetBox::Inner::itemVisible(int index) const {
+	const auto top = _padding.top()
+		+ (index / _perRow) * _singleSize.height();
+	return (_visibleTop < top + _singleSize.height())
+		&& (_visibleBottom > top);
+}
+
+void StickerSetBox::Inner::repaintItem(int index) {
+	const auto row = index / _perRow;
+	const auto top = _padding.top() + row * _singleSize.height();
+	if (rtl()) {
+		update(0, top, width(), _singleSize.height());
+	} else {
+		update(QRect(posFromIndex(index), _singleSize));
+	}
 }
 
 bool StickerSetBox::Inner::hasAddCell() const {
