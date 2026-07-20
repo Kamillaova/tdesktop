@@ -163,6 +163,7 @@ std::optional<Data::WallPaper> ThemeDocument::ParamsFromUrl(
 }
 
 QSize ThemeDocument::countOptimalSize() {
+	clearRadialAnimationRepaintRect();
 	if (_serviceWidth > 0) {
 		return { _serviceWidth, _serviceWidth };
 	}
@@ -190,6 +191,7 @@ QSize ThemeDocument::countOptimalSize() {
 }
 
 QSize ThemeDocument::countCurrentSize(int newWidth) {
+	clearRadialAnimationRepaintRect();
 	if (_serviceWidth) {
 		_pixw = _pixh = _serviceWidth;
 		return { _serviceWidth, _serviceWidth };
@@ -258,6 +260,13 @@ void ThemeDocument::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (_data) {
+		const auto innerSize = st::msgFileLayout.thumbSize;
+		const auto inner = QRect(
+			rthumb.x() + (rthumb.width() - innerSize) / 2,
+			rthumb.y() + (rthumb.height() - innerSize) / 2,
+			innerSize,
+			innerSize);
+		recordRadialAnimationRepaintRect(p, context, inner);
 		if (!_serviceWidth) {
 			auto statusX = paintx + st::msgDateImgDelta + st::msgDateImgPadding.x();
 			auto statusY = painty + st::msgDateImgDelta + st::msgDateImgPadding.y();
@@ -272,8 +281,6 @@ void ThemeDocument::draw(Painter &p, const PaintContext &context) const {
 			const auto radialOpacity = (radial && loaded && !_data->uploading())
 				? _animation->radial.opacity() :
 				1.;
-			const auto innerSize = st::msgFileLayout.thumbSize;
-			QRect inner(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
 			p.setPen(Qt::NoPen);
 			if (context.selected()) {
 				p.setBrush(st->msgDateImgBgSelected());
@@ -472,6 +479,7 @@ bool ThemeDocument::hasHeavyPart() const {
 }
 
 void ThemeDocument::unloadHeavyPart() {
+	clearRadialAnimationRepaintRect();
 	_dataMedia = nullptr;
 }
 
