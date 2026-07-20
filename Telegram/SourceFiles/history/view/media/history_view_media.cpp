@@ -550,7 +550,9 @@ void Media::repaint() const {
 	_parent->repaint();
 }
 
-Ui::Text::String Media::createCaption(not_null<HistoryItem*> item) const {
+Ui::Text::String Media::createCaption(
+		not_null<HistoryItem*> item,
+		Fn<void()> repaint) const {
 	if (item->emptyText()) {
 		return {};
 	}
@@ -560,7 +562,7 @@ Ui::Text::String Media::createCaption(not_null<HistoryItem*> item) const {
 	auto result = Ui::Text::String(minResizeWidth);
 	const auto context = Core::TextContext({
 		.session = &history()->session(),
-		.repaint = [=] { _parent->customEmojiRepaint(); },
+		.repaint = std::move(repaint),
 	});
 	result.setMarkedText(
 		st::messageTextStyle,

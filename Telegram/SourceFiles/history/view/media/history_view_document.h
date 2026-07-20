@@ -123,7 +123,7 @@ private:
 		LayoutMode mode) const;
 	void ensureDataMediaCreated() const;
 
-	[[nodiscard]] Ui::Text::String createCaption() const;
+	[[nodiscard]] Ui::Text::String createCaption(uint64 generation) const;
 
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -160,6 +160,12 @@ private:
 		const PaintContext &context,
 		QRect rect) const;
 	void clearVoiceProgressAnimationRepaintRect() const;
+	void repaintCaption(uint64 generation) const;
+	void recordCaptionRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const;
+	void invalidateCaptionRepaintRect() const;
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,
 		StateRequest request,
@@ -191,6 +197,10 @@ private:
 	TtlPaintCallback _drawTtl;
 
 	mutable float64 _voiceHoverProgress = -1;
+	uint64 _captionGeneration = 0;
+	mutable QRect _captionRepaintRect;
+	mutable QRect _captionStaleRepaintRect;
+	mutable bool _captionRepaintPending = false;
 
 	bool _transcribedRound = false;
 

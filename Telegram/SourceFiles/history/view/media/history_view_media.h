@@ -423,7 +423,8 @@ public:
 protected:
 	[[nodiscard]] QSize countCurrentSize(int newWidth) override;
 	[[nodiscard]] Ui::Text::String createCaption(
-		not_null<HistoryItem*> item) const;
+		not_null<HistoryItem*> item,
+		Fn<void()> repaint) const;
 
 	virtual void playAnimation(bool autoplay) {
 	}

@@ -56,6 +56,15 @@ constexpr auto kVoiceBlobMinorScale = 0.88;
 constexpr auto kVoiceBlobMajorScale = 0.85;
 constexpr auto kVoiceBlobIdleLevel = 0.45;
 
+[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
 [[nodiscard]] std::vector<Ui::Paint::Blobs::BlobData> VoicePlaybackBlobs() {
 	return {
 		{
@@ -493,6 +502,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 QSize Document::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateCaptionRepaintRect();
 	auto hasTranscribe = false;
 	const auto voice = Get<HistoryDocumentVoice>();
 	if (voice) {
@@ -649,6 +659,7 @@ QSize Document::countOptimalSize() {
 QSize Document::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateCaptionRepaintRect();
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
@@ -740,6 +751,7 @@ QRect Document::draw(
 		LayoutMode mode,
 		Ui::BubbleRounding outsideRounding) const {
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordCaptionRepaintRect(p, context, QRectF());
 		return QRect();
 	}
 
@@ -1102,6 +1114,20 @@ QRect Document::draw(
 		selection = HistoryView::UnshiftItemSelection(selection, voice->transcribeText);
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
+		const auto captionHeight = captioned->caption.countHeight(captionw);
+		auto captionRect = QRectF(
+			st::msgPadding.left(),
+			captiontop,
+			captionw,
+			captionHeight);
+		if (captioned->caption.hasCustomEmoji()) {
+			captionRect = captionRect.marginsAdded(
+				QMarginsF(CustomEmojiRepaintMargins()));
+		}
+		recordCaptionRepaintRect(
+			p,
+			context,
+			captionRect);
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 
@@ -1123,6 +1149,8 @@ QRect Document::draw(
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
 		});
+	} else {
+		recordCaptionRepaintRect(p, context, QRectF());
 	}
 	return playbackBlobs;
 }
@@ -1763,6 +1791,7 @@ QMargins Document::bubbleMargins() const {
 }
 
 void Document::refreshCaption(bool last) {
+	invalidateCaptionRepaintRect();
 	const auto applySkipBlock = [&](Ui::Text::String &caption) {
 		const auto skip = last ? _parent->skipBlockWidth() : 0;
 		if (skip) {
@@ -1777,7 +1806,7 @@ void Document::refreshCaption(bool last) {
 		applySkipBlock(now->caption);
 		return;
 	}
-	auto caption = createCaption();
+	auto caption = createCaption(++_captionGeneration);
 	if (caption.isEmpty()) {
 		return;
 	}
@@ -1809,6 +1838,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -1824,6 +1854,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -2001,6 +2032,49 @@ void Document::clearVoiceProgressAnimationRepaintRect() const {
 	}
 }
 
+void Document::repaintCaption(uint64 generation) const {
+	if (_captionGeneration != generation || _captionRepaintPending) {
+		return;
+	}
+	_captionRepaintPending = true;
+	if (_captionRepaintRect.isEmpty()) {
+		_parent->customEmojiRepaint();
+	} else {
+		_parent->repaint(_captionRepaintRect);
+	}
+}
+
+void Document::recordCaptionRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const {
+	if (!context.hasElementPainter(p)) {
+		if (_captionRepaintRect.isEmpty()) {
+			_captionRepaintPending = false;
+		}
+		return;
+	}
+	_captionRepaintPending = false;
+	const auto current = rect.isEmpty()
+		? QRect()
+		: context.mapToElement(p, rect).value_or(QRect());
+	const auto stale = base::take(_captionStaleRepaintRect);
+	const auto previous = stale.united(base::take(_captionRepaintRect));
+	_captionRepaintRect = current;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == current)) {
+		return;
+	}
+	_captionRepaintPending = true;
+	_parent->repaint(previous.united(current));
+}
+
+void Document::invalidateCaptionRepaintRect() const {
+	_captionStaleRepaintRect = _captionStaleRepaintRect.united(
+		base::take(_captionRepaintRect));
+	_captionRepaintPending = false;
+}
+
 bool Document::voiceProgressAnimationCallback(crl::time now) {
 	if (anim::Disabled()) {
 		now += (2 * kAudioVoiceMsgUpdateView);
@@ -2081,6 +2155,8 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 void Document::parentTextUpdated() {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateCaptionRepaintRect();
+	++_captionGeneration;
 	RemoveComponents(HistoryDocumentCaptioned::Bit());
 }
 
@@ -2090,8 +2166,13 @@ void Document::hideSpoilers() {
 	}
 }
 
-Ui::Text::String Document::createCaption() const {
-	return File::createCaption(_realParent);
+Ui::Text::String Document::createCaption(uint64 generation) const {
+	const auto weak = base::make_weak(this);
+	return File::createCaption(_realParent, [weak, generation] {
+		if (const auto strong = weak.get()) {
+			strong->repaintCaption(generation);
+		}
+	});
 }
 
 int Document::contributedMaxMonospaceWidth() const {
