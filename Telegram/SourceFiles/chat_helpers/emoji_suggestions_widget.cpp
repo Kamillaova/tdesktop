@@ -7,31 +7,34 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "chat_helpers/emoji_suggestions_widget.h"
 
-#include "chat_helpers/emoji_keywords.h"
-#include "core/core_settings.h"
-#include "core/application.h"
-#include "emoji_suggestions_helper.h"
-#include "ui/effects/ripple_animation.h"
-#include "ui/widgets/shadow.h"
-#include "ui/widgets/inner_dropdown.h"
-#include "ui/widgets/fields/input_field.h"
-#include "ui/emoji_config.h"
-#include "ui/ui_utility.h"
-#include "ui/cached_round_corners.h"
-#include "ui/round_rect.h"
-#include "platform/platform_specific.h"
-#include "core/application.h"
 #include "base/event_filter.h"
+#include "base/flat_set.h"
 #include "base/integration.h"
-#include "main/main_session.h"
-#include "data/data_session.h"
-#include "data/data_document.h"
+#include "chat_helpers/emoji_keywords.h"
+#include "core/application.h"
+#include "core/core_settings.h"
 #include "data/stickers/data_custom_emoji.h"
 #include "data/stickers/data_stickers.h"
+#include "data/data_document.h"
+#include "data/data_session.h"
+#include "emoji_suggestions_helper.h"
+#include "main/main_session.h"
+#include "platform/platform_specific.h"
+#include "ui/effects/ripple_animation.h"
+#include "ui/text/text_custom_emoji.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/inner_dropdown.h"
+#include "ui/widgets/shadow.h"
+#include "ui/cached_round_corners.h"
+#include "ui/emoji_config.h"
+#include "ui/round_rect.h"
+#include "ui/ui_utility.h"
+
 #include "styles/style_chat_helpers.h"
 
-#include <QtWidgets/QApplication>
+#include <QtGui/QRegion>
 #include <QtGui/QTextBlock>
+#include <QtWidgets/QApplication>
 
 namespace Ui {
 namespace Emoji {
@@ -65,10 +68,20 @@ public:
 	[[nodiscard]] rpl::producer<Chosen> triggered() const;
 
 private:
+	struct CustomEmojiState {
+		std::unique_ptr<Ui::Text::CustomEmoji> object;
+		QRect innerGeometry;
+		QRect paintedGeometry;
+		QRect repaintGeometry;
+		uint64 geometryGeneration = 0;
+		int rowIndex = -1;
+		bool repaintScheduled = false;
+		bool repaintAwaitingGeometry = false;
+	};
 	struct Row {
 		Row(not_null<EmojiPtr> emoji, const QString &replacement);
 
-		Ui::Text::CustomEmoji *custom = nullptr;
+		CustomEmojiState *custom = nullptr;
 		DocumentData *document = nullptr;
 		not_null<EmojiPtr> emoji;
 		QString replacement;
@@ -119,9 +132,20 @@ private:
 	void scrollTo(int value, anim::type animated = anim::type::instant);
 	void stopAnimations();
 
-	[[nodiscard]] not_null<Ui::Text::CustomEmoji*> resolveCustomEmoji(
+	[[nodiscard]] not_null<CustomEmojiState*> resolveCustomEmoji(
 		not_null<DocumentData*> document);
-	void customEmojiRepaint();
+	void rebuildCustomEmojiGeometry();
+	[[nodiscard]] QPoint customEmojiPosition(int index) const;
+	[[nodiscard]] std::optional<QRect> customEmojiCurrentRect(
+		const CustomEmojiState &custom) const;
+	[[nodiscard]] bool customEmojiRepaintCovered(
+		QRect geometry,
+		const QRegion &repaintRegion) const;
+	void prepareCustomEmojiPaint(
+		CustomEmojiState &custom,
+		QRect geometry,
+		const QRegion &repaintRegion);
+	void customEmojiRepaint(not_null<CustomEmojiState*> custom);
 
 	const style::EmojiSuggestions &_st;
 	const not_null<Main::Session*> _session;
@@ -134,8 +158,10 @@ private:
 
 	base::flat_map<
 		not_null<DocumentData*>,
-		std::unique_ptr<Ui::Text::CustomEmoji>> _customEmoji;
-	bool _repaintScheduled = false;
+		std::unique_ptr<CustomEmojiState>> _customEmoji;
+	base::flat_set<CustomEmojiState*> _customEmojiPaintOwners;
+	uint64 _customEmojiGeometryGeneration = 0;
+	bool _customEmojiGeometryValid = false;
 
 	std::optional<QPoint> _lastMousePosition;
 	bool _mouseSelection = false;
@@ -191,6 +217,7 @@ void SuggestionsWidget::showWithQuery(SuggestionsQuery query, bool force) {
 	if (!force && (_query == query)) {
 		return;
 	}
+	_customEmojiGeometryValid = false;
 	_query = query;
 	auto rows = [&] {
 		if (const auto emoji = std::get_if<EmojiPtr>(&query)) {
@@ -207,6 +234,7 @@ void SuggestionsWidget::showWithQuery(SuggestionsQuery query, bool force) {
 	setPressed(-1);
 	_rows = std::move(rows);
 	resizeToRows();
+	rebuildCustomEmojiGeometry();
 	update();
 
 	Ui::PostponeCall(this, [=] {
@@ -236,6 +264,7 @@ auto SuggestionsWidget::lookupCustom(const std::vector<Row> &rows) const
 		return {};
 	}
 	auto custom = base::flat_multi_map<int, Custom>();
+	auto added = base::flat_set<not_null<DocumentData*>>();
 	const auto premium = _session->premium();
 	const auto stickers = &_session->data().stickers();
 	for (const auto setId : stickers->emojiSetsOrder()) {
@@ -259,7 +288,7 @@ auto SuggestionsWidget::lookupCustom(const std::vector<Row> &rows) const
 						[&](const Row &row) {
 							return row.emoji->original() == original;
 						});
-					if (j != end(rows)) {
+					if (j != end(rows) && added.emplace(document).second) {
 						custom.emplace(int(j - begin(rows)), Custom{
 							.document = document,
 							.emoji = emoji,
@@ -286,28 +315,157 @@ auto SuggestionsWidget::appendCustom(
 	return rows;
 }
 
-not_null<Ui::Text::CustomEmoji*> SuggestionsWidget::resolveCustomEmoji(
-		not_null<DocumentData*> document) {
+auto SuggestionsWidget::resolveCustomEmoji(
+		not_null<DocumentData*> document)
+-> not_null<CustomEmojiState*> {
 	const auto i = _customEmoji.find(document);
 	if (i != end(_customEmoji)) {
 		return i->second.get();
 	}
-	auto emoji = document->session().data().customEmojiManager().create(
+	auto custom = std::make_unique<CustomEmojiState>();
+	const auto raw = custom.get();
+	_customEmoji.emplace(document, std::move(custom));
+	raw->object = document->session().data().customEmojiManager().create(
 		document,
-		[=] { customEmojiRepaint(); },
+		[=] { customEmojiRepaint(raw); },
 		Data::CustomEmojiManager::SizeTag::Large);
-	return _customEmoji.emplace(
-		document,
-		std::move(emoji)
-	).first->second.get();
+	return raw;
 }
 
-void SuggestionsWidget::customEmojiRepaint() {
-	if (_repaintScheduled) {
+void SuggestionsWidget::rebuildCustomEmojiGeometry() {
+	const auto generation = ++_customEmojiGeometryGeneration;
+	_customEmojiPaintOwners.clear();
+	for (auto index = 0, count = int(_rows.size()); index != count; ++index) {
+		const auto custom = _rows[index].custom;
+		if (!custom) {
+			continue;
+		}
+		custom->geometryGeneration = generation;
+		custom->rowIndex = index;
+		custom->innerGeometry = QRect(
+			index * _oneWidth,
+			0,
+			_oneWidth,
+			_oneWidth);
+		custom->paintedGeometry = QRect();
+		custom->repaintGeometry = QRect();
+		custom->repaintScheduled = false;
+		custom->repaintAwaitingGeometry = false;
+	}
+	_customEmojiGeometryValid = true;
+}
+
+QPoint SuggestionsWidget::customEmojiPosition(int index) const {
+	const auto emojiSize = Ui::Emoji::GetSizeLarge()
+		/ style::DevicePixelRatio();
+	return QPoint(
+		index * _oneWidth + (_oneWidth - emojiSize) / 2,
+		(_oneWidth - emojiSize) / 2);
+}
+
+std::optional<QRect> SuggestionsWidget::customEmojiCurrentRect(
+		const CustomEmojiState &custom) const {
+	if (!_customEmojiGeometryValid
+		|| custom.geometryGeneration != _customEmojiGeometryGeneration) {
+		return std::nullopt;
+	}
+	return custom.innerGeometry
+		.translated(-innerShift())
+		.intersected(rect());
+}
+
+bool SuggestionsWidget::customEmojiRepaintCovered(
+		QRect geometry,
+		const QRegion &repaintRegion) const {
+	if (geometry.isEmpty() || repaintRegion.contains(geometry)) {
+		return true;
+	}
+	const auto uncovered = QRegion(geometry).subtracted(repaintRegion);
+	return uncovered.intersected(visibleRegion()).isEmpty();
+}
+
+void SuggestionsWidget::prepareCustomEmojiPaint(
+		CustomEmojiState &custom,
+		QRect geometry,
+		const QRegion &repaintRegion) {
+	geometry = geometry.intersected(rect());
+	if (custom.repaintAwaitingGeometry) {
+		custom.repaintAwaitingGeometry = false;
+		custom.repaintScheduled = true;
+		custom.repaintGeometry = custom.paintedGeometry
+			.united(geometry)
+			.intersected(rect());
+	}
+	if (custom.repaintScheduled) {
+		if (custom.repaintGeometry.isEmpty()
+			|| customEmojiRepaintCovered(
+				custom.repaintGeometry,
+				repaintRegion)) {
+			custom.repaintScheduled = false;
+			custom.repaintGeometry = QRect();
+		} else {
+			update(custom.repaintGeometry);
+			_customEmojiPaintOwners.emplace(&custom);
+		}
+	}
+	if (custom.paintedGeometry.isEmpty()
+		|| custom.paintedGeometry == geometry) {
+		custom.paintedGeometry = geometry;
 		return;
 	}
-	_repaintScheduled = true;
-	update();
+	const auto combined = custom.paintedGeometry.united(geometry);
+	const auto covered = customEmojiRepaintCovered(
+		combined,
+		repaintRegion);
+	custom.paintedGeometry = covered ? geometry : combined;
+	if (!covered) {
+		const auto repaint = custom.repaintScheduled
+			? custom.repaintGeometry.united(combined)
+			: combined;
+		if (!custom.repaintScheduled
+			|| repaint != custom.repaintGeometry) {
+			custom.repaintScheduled = true;
+			custom.repaintGeometry = repaint;
+			_customEmojiPaintOwners.emplace(&custom);
+			update(repaint);
+		}
+	}
+}
+
+void SuggestionsWidget::customEmojiRepaint(
+		not_null<CustomEmojiState*> custom) {
+	const auto current = customEmojiCurrentRect(*custom);
+	if (!current) {
+		_customEmojiPaintOwners.erase(custom.get());
+		if (!_customEmojiGeometryValid) {
+			custom->repaintAwaitingGeometry = true;
+		} else {
+			custom->repaintAwaitingGeometry = false;
+			custom->repaintScheduled = false;
+			custom->repaintGeometry = QRect();
+		}
+		return;
+	}
+	const auto damage = custom->paintedGeometry
+		.united(*current)
+		.intersected(rect());
+	if (damage.isEmpty()) {
+		_customEmojiPaintOwners.erase(custom.get());
+		custom->repaintScheduled = false;
+		custom->repaintGeometry = QRect();
+		return;
+	} else if (custom->repaintAwaitingGeometry) {
+		return;
+	}
+	const auto repaint = custom->repaintScheduled
+		? custom->repaintGeometry.united(damage)
+		: damage;
+	if (!custom->repaintScheduled || repaint != custom->repaintGeometry) {
+		custom->repaintScheduled = true;
+		custom->repaintGeometry = repaint;
+		_customEmojiPaintOwners.emplace(custom.get());
+		update(repaint);
+	}
 }
 
 SuggestionsWidget::Row::Row(
@@ -400,9 +558,8 @@ void SuggestionsWidget::scrollByWheelEvent(not_null<QWheelEvent*> e) {
 void SuggestionsWidget::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
-	_repaintScheduled = false;
-
 	const auto clip = e->rect();
+	const auto repaintRegion = e->region();
 	p.fillRect(clip, _st.bg);
 
 	const auto shift = innerShift();
@@ -426,18 +583,83 @@ void SuggestionsWidget::paintEvent(QPaintEvent *e) {
 		.textColor = _st.textFg->c,
 		.now = crl::now(),
 	};
-	for (auto i = from; i != till; ++i) {
+	const auto paintRow = [&](int i) {
 		const auto &row = _rows[i];
 		const auto emoji = row.emoji;
 		const auto esize = Ui::Emoji::GetSizeLarge();
-		const auto size = esize / style::DevicePixelRatio();
-		const auto x = i * _oneWidth + (_oneWidth - size) / 2;
-		const auto y = (_oneWidth - size) / 2;
+		const auto position = customEmojiPosition(i);
 		if (row.custom) {
-			context.position = { x, y };
-			row.custom->paint(p, context);
+			context.position = position;
+			const auto painted = row.custom->object->paint(p, context);
+			if (!painted.isEmpty()) {
+				row.custom->innerGeometry = painted.toAlignedRect();
+			}
+			const auto mapped = p.transform().map(
+				QPolygonF(QRectF(row.custom->innerGeometry))
+			).boundingRect().toAlignedRect();
+			prepareCustomEmojiPaint(
+				*row.custom,
+				mapped,
+				repaintRegion);
 		} else {
-			Ui::Emoji::Draw(p, emoji, esize, x, y);
+			Ui::Emoji::Draw(
+				p,
+				emoji,
+				esize,
+				position.x(),
+				position.y());
+		}
+	};
+	auto extraPaintRows = base::flat_set<int>();
+	for (auto i = _customEmojiPaintOwners.begin();
+			i != _customEmojiPaintOwners.end();) {
+		const auto custom = *i;
+		const auto index = custom->rowIndex;
+		const auto stale = (custom->geometryGeneration
+				!= _customEmojiGeometryGeneration)
+			|| (index < 0)
+			|| (index >= int(_rows.size()))
+			|| (_rows[index].custom != custom);
+		if (stale
+			|| (!custom->repaintScheduled
+				&& !custom->repaintAwaitingGeometry)) {
+			i = _customEmojiPaintOwners.erase(i);
+			continue;
+		}
+		const auto damage = custom->repaintGeometry.isEmpty()
+			? custom->paintedGeometry
+			: custom->repaintGeometry;
+		if (!damage.isEmpty()
+			&& repaintRegion.intersects(damage)
+			&& (index < from || index >= till)) {
+			extraPaintRows.emplace(index);
+		}
+		++i;
+	}
+	if (extraPaintRows.empty()) {
+		for (auto i = from; i != till; ++i) {
+			paintRow(i);
+		}
+	} else {
+		auto normal = from;
+		for (const auto extra : extraPaintRows) {
+			while (normal < till && normal < extra) {
+				paintRow(normal++);
+			}
+			paintRow(extra);
+		}
+		while (normal < till) {
+			paintRow(normal++);
+		}
+	}
+	for (auto i = _customEmojiPaintOwners.begin();
+			i != _customEmojiPaintOwners.end();) {
+		const auto custom = *i;
+		if (!custom->repaintScheduled
+			&& !custom->repaintAwaitingGeometry) {
+			i = _customEmojiPaintOwners.erase(i);
+		} else {
+			++i;
 		}
 	}
 	paintFadings(p);
