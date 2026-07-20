@@ -969,13 +969,15 @@ int PeerListRow::paintNameIconGetLeadingWidth(
 		|| !_savedMessagesStatus.isEmpty()
 		|| _isRepliesMessagesChat
 		|| _isVerifyCodesChat) {
+		static_cast<void>(_badge.ready(nullptr));
 		return 0;
 	}
 	const auto info = peer()->botVerifyDetails();
+	const auto badgeReady = _badge.ready(info);
 	if (!info) {
 		return 0;
 	}
-	if (!_badge.ready(info)) {
+	if (!badgeReady) {
 		_badge.set(
 			info,
 			peer()->owner().customEmojiManager().factory(

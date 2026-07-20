@@ -1900,8 +1900,10 @@ void InnerWidget::paintPeerSearchResult(
 			Ui::NameTextOptions());
 	}
 
-	if (const auto info = peer->botVerifyDetails()) {
-		if (!result->badge.ready(info)) {
+	const auto info = peer->botVerifyDetails();
+	const auto badgeReady = result->badge.ready(info);
+	if (info) {
+		if (!badgeReady) {
 			result->badge.set(
 				info,
 				peer->owner().customEmojiManager().factory(

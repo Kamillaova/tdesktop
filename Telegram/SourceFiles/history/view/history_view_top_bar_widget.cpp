@@ -650,6 +650,7 @@ void TopBarWidget::paintEvent(QPaintEvent *e) {
 
 void TopBarWidget::paintTopBar(Painter &p) {
 	if (!_activeChat.key || _narrowRatio == 1.) {
+		static_cast<void>(_titleBadge.ready(nullptr));
 		return;
 	}
 	auto nameleft = _leftTaken;
@@ -663,6 +664,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 	auto statuswidth = namewidth;
 
 	if (_chooseForReportReason) {
+		static_cast<void>(_titleBadge.ready(nullptr));
 		const auto text = _chooseForReportReason->optionText;
 		p.setPen(st::dialogsNameFg);
 		p.setFont(st::semiboldFont);
@@ -686,6 +688,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 	const auto topic = _activeChat.key.topic();
 	const auto namePeer = titleNamePeer();
 	if (topic && _activeChat.section == Section::Replies) {
+		static_cast<void>(_titleBadge.ready(nullptr));
 		p.setPen(st::dialogsNameFg);
 		topic->chatListNameText().drawElided(
 			p,
@@ -718,6 +721,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 		|| (_activeChat.section == Section::Scheduled)
 		|| (_activeChat.section == Section::Pinned)
 		|| communityChatsListBar()) {
+		static_cast<void>(_titleBadge.ready(nullptr));
 		auto text = (_activeChat.section == Section::Scheduled)
 			? ((peer && peer->isSelf())
 				? tr::lng_reminder_messages(tr::now)
@@ -750,6 +754,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			p.setOpacity(1.);
 		}
 	} else if (_activeChat.section == Section::Replies) {
+		static_cast<void>(_titleBadge.ready(nullptr));
 		p.setPen(st::dialogsNameFg);
 		p.setFont(st::semiboldFont);
 		p.drawTextLeft(
@@ -783,8 +788,10 @@ void TopBarWidget::paintTopBar(Painter &p) {
 				TopBarNameText(namePeer, _activeChat),
 				Ui::NameTextOptions());
 		}
-		if (const auto info = namePeer->botVerifyDetails()) {
-			if (!_titleBadge.ready(info)) {
+		const auto info = namePeer->botVerifyDetails();
+		const auto badgeReady = _titleBadge.ready(info);
+		if (info) {
+			if (!badgeReady) {
 				_titleBadge.set(
 					info,
 					namePeer->owner().customEmojiManager().factory(
@@ -842,6 +849,8 @@ void TopBarWidget::paintTopBar(Painter &p) {
 				now)) {
 			paintStatus(p, statusleft, statustop, statuswidth, width());
 		}
+	} else {
+		static_cast<void>(_titleBadge.ready(nullptr));
 	}
 }
 

@@ -553,6 +553,7 @@ void PaintRow(
 		PaintExpandedTopicsBar(p, context.topicsExpanded);
 	}
 	if (context.narrow) {
+		static_cast<void>(rowBadge.ready(nullptr));
 		if (!draft && item && !item->isEmpty()) {
 			PaintNarrowCounter(p, context, badgesState);
 		}
@@ -573,6 +574,7 @@ void PaintRow(
 			|| (!(flags & Flag::SavedMessages) && !(flags & Flag::MyNotes))))
 		? from->botVerifyDetails()
 		: nullptr;
+	const auto badgeReady = rowBadge.ready(promoted ? nullptr : verifyInfo);
 	if (promoted) {
 		const auto type = history->topPromotionType();
 		const auto custom = type.isEmpty()
@@ -585,7 +587,7 @@ void PaintRow(
 			: custom;
 		PaintRowTopRight(p, text, rectForName, context);
 	} else if (verifyInfo) {
-		if (!rowBadge.ready(verifyInfo)) {
+		if (!badgeReady) {
 			rowBadge.set(
 				verifyInfo,
 				from->owner().customEmojiManager().factory(
