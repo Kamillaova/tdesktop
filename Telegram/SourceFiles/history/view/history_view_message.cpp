@@ -4135,6 +4135,7 @@ bool Message::getStateFromName(
 			}
 		}();
 
+		const auto statusId = from ? from->emojiStatusId() : EmojiStatusId();
 		const auto statusWidth = (from && _fromNameStatus)
 			? st::dialogsPremiumIcon.icon.width()
 			: 0;
@@ -4142,9 +4143,9 @@ bool Message::getStateFromName(
 			const auto x = availableLeft + std::min(
 				availableWidth - statusWidth,
 				nameText->maxWidth()
-			) - (_fromNameStatus->custom ? (2 * _fromNameStatus->skip) : 0);
-			const auto checkWidth = _fromNameStatus->custom
-				? (st::emojiSize - 2 * _fromNameStatus->skip)
+			) - (statusId ? (2 * _fromNameStatus->skip) : 0);
+			const auto checkWidth = statusId
+				? Ui::Text::AdjustCustomEmojiSize(st::emojiSize)
 				: statusWidth;
 			if (point.x() >= x && point.x() < x + checkWidth) {
 				ensureFromNameStatusLink(from);

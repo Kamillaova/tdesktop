@@ -240,6 +240,7 @@ int PeerBadge::drawGetWidth(Painter &p, Descriptor &&descriptor) {
 	const auto peer = descriptor.peer;
 	if ((descriptor.scam && (peer->isScam() || peer->isFake()))
 		|| (descriptor.direct && peer->isMonoforum())) {
+		_emojiStatus = nullptr;
 		return drawTextBadge(p, descriptor);
 	}
 	const auto verifyCheck = descriptor.verified && peer->isVerified();
@@ -259,6 +260,9 @@ int PeerBadge::drawGetWidth(Painter &p, Descriptor &&descriptor) {
 	const auto paintEmoji = emojiStatus
 		&& (!paintVerify || descriptor.bothVerifyAndStatus);
 	const auto paintStar = premiumStar && !paintVerify;
+	if (!paintEmoji) {
+		_emojiStatus = nullptr;
+	}
 
 	auto result = 0;
 	if (paintEmoji) {
@@ -339,16 +343,17 @@ int PeerBadge::drawPremiumEmojiStatus(
 	const auto peer = descriptor.peer;
 	const auto id = peer->emojiStatusId();
 	const auto rectForName = descriptor.rectForName;
-	const auto iconw = descriptor.premium->width();
-	const auto iconx = rectForName.x()
-		+ qMin(descriptor.nameWidth, rectForName.width() - iconw);
-	const auto icony = rectForName.y();
 	if (!_emojiStatus) {
 		_emojiStatus = std::make_unique<EmojiStatus>();
 		const auto size = st::emojiSize;
 		const auto emoji = Ui::Text::AdjustCustomEmojiSize(size);
 		_emojiStatus->skip = (size - emoji) / 2;
 	}
+	const auto emojiSize = Ui::Text::AdjustCustomEmojiSize(st::emojiSize);
+	const auto width = emojiSize - 2 * _emojiStatus->skip;
+	const auto iconx = rectForName.x()
+		+ qMin(descriptor.nameWidth, rectForName.width() - width);
+	const auto icony = rectForName.y();
 	if (_emojiStatus->id != id) {
 		using namespace Ui::Text;
 		auto &manager = peer->session().data().customEmojiManager();
@@ -372,7 +377,7 @@ int PeerBadge::drawPremiumEmojiStatus(
 		.position = _emojiStatus->lastPosition,
 		.paused = descriptor.paused || On(PowerSaving::kEmojiStatus),
 	});
-	return iconw - 4 * _emojiStatus->skip;
+	return width;
 }
 
 int PeerBadge::drawPremiumStar(Painter &p, const Descriptor &descriptor) {
@@ -392,7 +397,7 @@ QRect PeerBadge::emojiStatusRect() const {
 	}
 	return QRect(
 		_emojiStatus->lastPosition,
-		Size(st::emojiSize - 2 * _emojiStatus->skip));
+		Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
 }
 
 void PeerBadge::paintEmojiStatusFrame(
