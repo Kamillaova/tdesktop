@@ -680,6 +680,10 @@ struct Poll::SendingAnimation {
 
 	QByteArray option;
 	Ui::InfiniteRadialAnimation animation;
+	QRegion repaintRegion;
+	QRegion collectedRepaintRegion;
+	bool repaintPending = false;
+	bool collectingRepaintRegion = false;
 };
 
 struct Poll::Answer {
@@ -1826,6 +1830,16 @@ struct Poll::Options : public Poll::Part {
 		int innerWidth) const;
 	void resetAnswersAnimation() const;
 	void radialAnimationCallback() const;
+	void beginSendingAnimationPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	void recordSendingAnimationRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const;
+	void finishSendingAnimationPaint() const;
+	void repaintSendingAnimationRegion(const QRegion &region) const;
+	void resetSendingAnimation() const;
 	int paintAnswer(
 		Painter &p,
 		const Answer &answer,
@@ -1920,6 +1934,7 @@ void Poll::Options::draw(
 	if (progress == 1.) {
 		resetAnswersAnimation();
 	}
+	beginSendingAnimationPaint(p, context);
 
 	auto tshift = 0;
 	auto &&answers = ranges::views::zip(
@@ -1949,6 +1964,7 @@ void Poll::Options::draw(
 			context);
 		tshift += height;
 	}
+	finishSendingAnimationPaint();
 }
 
 TextState Poll::Options::textState(
@@ -3273,7 +3289,7 @@ void Poll::Options::checkSendingAnimation() const {
 	}
 	if (!sendingRadial) {
 		if (!_answersAnimation) {
-			_sendingAnimation = nullptr;
+			resetSendingAnimation();
 		}
 		return;
 	}
@@ -3419,14 +3435,89 @@ void Poll::Options::resetAnswersAnimation() const {
 	_answersAnimation = nullptr;
 	if (_owner->_poll->sendingVotes.size() != 1
 		|| (_owner->_flags & PollData::Flag::MultiChoice)) {
-		_sendingAnimation = nullptr;
+		resetSendingAnimation();
 	}
 }
 
 void Poll::Options::radialAnimationCallback() const {
-	if (!anim::Disabled()) {
-		_owner->repaint();
+	if (anim::Disabled() || !_sendingAnimation) {
+		return;
 	}
+	auto &sending = *_sendingAnimation;
+	if (sending.repaintPending) {
+		return;
+	}
+	sending.repaintPending = true;
+	if (sending.repaintRegion.isEmpty()) {
+		_owner->repaint();
+	} else {
+		repaintSendingAnimationRegion(sending.repaintRegion);
+	}
+}
+
+void Poll::Options::beginSendingAnimationPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	if (!_sendingAnimation) {
+		return;
+	}
+	auto &sending = *_sendingAnimation;
+	if (context.hasElementPainter(p)) {
+		sending.repaintPending = false;
+		sending.collectedRepaintRegion = QRegion();
+		sending.collectingRepaintRegion = true;
+	} else {
+		if (sending.repaintRegion.isEmpty()) {
+			sending.repaintPending = false;
+		}
+		sending.collectingRepaintRegion = false;
+	}
+}
+
+void Poll::Options::recordSendingAnimationRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const {
+	if (!_sendingAnimation
+		|| !_sendingAnimation->collectingRepaintRegion) {
+		return;
+	}
+	if (const auto mapped = context.mapToElement(p, rect)) {
+		_sendingAnimation->collectedRepaintRegion += *mapped;
+	}
+}
+
+void Poll::Options::finishSendingAnimationPaint() const {
+	if (!_sendingAnimation
+		|| !_sendingAnimation->collectingRepaintRegion) {
+		return;
+	}
+	auto &sending = *_sendingAnimation;
+	sending.collectingRepaintRegion = false;
+	const auto previous = base::take(sending.repaintRegion);
+	sending.repaintRegion = base::take(sending.collectedRepaintRegion);
+	if (previous == sending.repaintRegion || previous.isEmpty()) {
+		return;
+	}
+	sending.repaintPending = true;
+	repaintSendingAnimationRegion(previous.united(sending.repaintRegion));
+}
+
+void Poll::Options::repaintSendingAnimationRegion(
+		const QRegion &region) const {
+	for (const auto &rect : region) {
+		_owner->_parent->repaint(rect);
+	}
+}
+
+void Poll::Options::resetSendingAnimation() const {
+	if (!_sendingAnimation) {
+		return;
+	}
+	const auto sending = base::take(_sendingAnimation);
+	const auto repaintRegion = sending->repaintRegion.united(
+		sending->collectedRepaintRegion);
+	repaintSendingAnimationRegion(repaintRegion);
 }
 
 void Poll::Header::paintRecentVoters(
@@ -3966,6 +4057,11 @@ void Poll::Options::paintRadio(
 		- Margins(radio.thickness / 2.);
 	const auto radius = st::historyPollCheckboxRadius;
 	if (_sendingAnimation && _sendingAnimation->option == answer.option) {
+		recordSendingAnimationRect(
+			p,
+			context,
+			QRectF(left, top, radio.diameter, radio.diameter)
+				.marginsAdded(Margins(st::lineWidth)));
 		const auto &active = stm->msgServiceFg;
 		if (anim::Disabled()) {
 			anim::DrawStaticLoading(p, rect, radio.thickness, active);
