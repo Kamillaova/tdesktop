@@ -1013,6 +1013,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 	const auto r = e->rect();
 	auto dialogsClip = r;
 	const auto ms = crl::now();
+	clearExpiredQuickActions(ms);
 	const auto childListShown = _childListShown.current();
 	auto context = Ui::PaintContext{
 		.st = _st,
@@ -1053,18 +1054,9 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 					== history->peer->id.value)) {
 				context.quickActionContext = _activeQuickAction.get();
 			} else if (!_inactiveQuickActions.empty()) {
-				auto it = _inactiveQuickActions.begin();
-				while (it != _inactiveQuickActions.end()) {
-					const auto raw = it->get();
-					if (raw->finishedAt
-						&& (ms - raw->finishedAt
-							> st::defaultRippleAnimation.hideDuration)) {
-						it = _inactiveQuickActions.erase(it);
-					} else {
-						if (raw->data.msgBareId == history->peer->id.value) {
-							context.quickActionContext = raw;
-						}
-						++it;
+				for (const auto &inactive : _inactiveQuickActions) {
+					if (inactive->data.msgBareId == history->peer->id.value) {
+						context.quickActionContext = inactive.get();
 					}
 				}
 			}
@@ -6346,7 +6338,14 @@ void InnerWidget::setSwipeContextData(
 		return;
 	}
 	if (!data) {
-		_activeQuickAction = nullptr;
+		auto keys = base::flat_set<int64>{ key };
+		if (_activeQuickAction) {
+			keys.emplace(_activeQuickAction->data.msgBareId);
+			_activeQuickAction = nullptr;
+		}
+		for (const auto repaintKey : keys) {
+			repaintQuickAction(repaintKey);
+		}
 		return;
 	}
 	const auto context = ensureQuickAction(key);
@@ -6363,17 +6362,65 @@ void InnerWidget::setSwipeContextData(
 				&& !context->icon->frameIndex()
 				&& !context->icon->animating()) {
 				context->icon->animate(
-					[=] { update(); },
+					[=] { repaintQuickAction(key); },
 					0,
 					context->icon->framesCount());
 			}
 		} else if (context->data.ratio < kResetAnimateThreshold) {
 			if (context->icon
 				&& context->icon->frameIndex()) {
-				context->icon->jumpTo(0, [=] { update(); });
+				context->icon->jumpTo(0, [=] {
+					repaintQuickAction(key);
+				});
 			}
 		}
-		update();
+		repaintQuickAction(key);
+	}
+}
+
+void InnerWidget::repaintQuickAction(int64 key) {
+	if (!key) {
+		return;
+	}
+	const auto history = session().data().historyLoaded(PeerId(key));
+	if (!history) {
+		return;
+	}
+	updateDialogRow(
+		{ history, FullMsgId() },
+		QRect(),
+		UpdateRowSection::Default | UpdateRowSection::Filtered);
+	if (_state == WidgetState::Default && communityModeShown()) {
+		for (auto index = 0; index != _communityViewable.size(); ++index) {
+			const auto row = _communityViewable.rowAt(index);
+			if (row->history() == history) {
+				rtlupdate(
+					0,
+					communityRowAbsoluteTop(index),
+					width(),
+					row->height());
+				break;
+			}
+		}
+	}
+}
+
+void InnerWidget::clearExpiredQuickActions(crl::time now) {
+	auto keys = base::flat_set<int64>();
+	for (auto i = _inactiveQuickActions.begin();
+			i != _inactiveQuickActions.end();) {
+		const auto context = i->get();
+		if (context->finishedAt
+			&& (now - context->finishedAt
+				>= st::defaultRippleAnimation.hideDuration)) {
+			keys.emplace(context->data.msgBareId);
+			i = _inactiveQuickActions.erase(i);
+		} else {
+			++i;
+		}
+	}
+	for (const auto key : keys) {
+		repaintQuickAction(key);
 	}
 }
 
@@ -6430,14 +6477,27 @@ void InnerWidget::prepareQuickAction(
 }
 
 void InnerWidget::clearQuickActions() {
+	auto keys = base::flat_set<int64>();
+	for (const auto &context : _inactiveQuickActions) {
+		keys.emplace(context->data.msgBareId);
+	}
 	_inactiveQuickActions.clear();
+	for (const auto key : keys) {
+		repaintQuickAction(key);
+	}
 }
 
 void InnerWidget::deactivateQuickAction() {
 	if (_activeQuickAction) {
+		const auto key = _activeQuickAction->data.msgBareId;
 		_activeQuickAction->finishedAt = crl::now();
 		_inactiveQuickActions.push_back(
 			QuickActionPtr{ _activeQuickAction.release() });
+		repaintQuickAction(key);
+		base::call_delayed(
+			st::defaultRippleAnimation.hideDuration,
+			this,
+			[=] { clearExpiredQuickActions(crl::now()); });
 	}
 }
 

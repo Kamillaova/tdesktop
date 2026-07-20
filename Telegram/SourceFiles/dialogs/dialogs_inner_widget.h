@@ -610,6 +610,8 @@ private:
 	void saveChatsFilterScrollState(FilterId filterId);
 	void restoreChatsFilterScrollState(FilterId filterId);
 
+	void repaintQuickAction(int64 key);
+	void clearExpiredQuickActions(crl::time now);
 	[[nodiscard]] not_null<Ui::QuickActionContext*> ensureQuickAction(
 		int64 key);
 	void deactivateQuickAction();

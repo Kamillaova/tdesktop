@@ -849,7 +849,6 @@ void Widget::setupSwipeBack() {
 			}
 			if (_inner) {
 				_inner->setSwipeContextData(data.msgBareId, std::nullopt);
-				_inner->update();
 			}
 		}
 	};
