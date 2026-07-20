@@ -44,6 +44,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtGui/QRegion>
 #include <QtWidgets/QApplication>
 
 namespace ChatHelpers {
@@ -109,7 +110,7 @@ GifsListWidget::GifsListWidget(
 , _show(std::move(descriptor.show))
 , _api(&session().mtp())
 , _section(Section::Gifs)
-, _updateInlineItems([=] { updateInlineItems(); })
+, _updateInlineItems([=] { repaintPendingItems(); })
 , _mosaic(st::emojiPanWidth - st::inlineResultsLeft)
 , _previewTimer([=] { showPreview(); }) {
 	setMouseTracking(true);
@@ -791,7 +792,7 @@ void GifsListWidget::inlineItemLayoutChanged(const InlineBots::Layout::ItemBase 
 
 void GifsListWidget::inlineItemRepaint(
 		const InlineBots::Layout::ItemBase *layout) {
-	updateInlineItems();
+	updateInlineItems(layout);
 }
 
 bool GifsListWidget::inlineItemVisible(
@@ -1018,22 +1019,96 @@ void GifsListWidget::showPreview() {
 	}
 }
 
-void GifsListWidget::updateInlineItems() {
+void GifsListWidget::updateInlineItems(const LayoutItem *layout) {
+	if (!_repaintAllPending) {
+		if (layout) {
+			const auto result = layout->getResult();
+			const auto document = layout->getDocument();
+			if (!result && !document) {
+				_pendingRepaintItems.clear();
+				_repaintAllPending = true;
+			} else {
+				const auto already = ranges::find_if(
+					_pendingRepaintItems,
+					[&](const PendingRepaintItem &item) {
+						return (item.result == result)
+							&& (item.document == document);
+					});
+				if (already == end(_pendingRepaintItems)) {
+					_pendingRepaintItems.push_back({ result, document });
+				}
+			}
+		} else {
+			_pendingRepaintItems.clear();
+			_repaintAllPending = true;
+		}
+	}
+
 	const auto now = crl::now();
 
 	const auto delay = std::max(
 		_lastScrolledAt + kMinAfterScrollDelay - now,
 		_lastUpdatedAt + kMinRepaintDelay - now);
 	if (delay <= 0) {
-		repaintItems(now);
+		repaintPendingItems();
 	} else if (!_updateInlineItems.isActive()
 		|| _updateInlineItems.remainingTime() > kMinRepaintDelay) {
 		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
 	}
 }
 
+void GifsListWidget::repaintPendingItems() {
+	const auto now = crl::now();
+	const auto delay = std::max(
+		_lastScrolledAt + kMinAfterScrollDelay - now,
+		_lastUpdatedAt + kMinRepaintDelay - now);
+	if (delay > 0) {
+		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
+		return;
+	}
+	if (_repaintAllPending) {
+		repaintItems(now);
+		return;
+	}
+
+	_lastUpdatedAt = now;
+	_updateInlineItems.cancel();
+	const auto pending = std::move(_pendingRepaintItems);
+	_pendingRepaintItems.clear();
+	const auto visible = QRect(
+		0,
+		getVisibleTop(),
+		width(),
+		getVisibleBottom() - getVisibleTop());
+	auto damage = QRegion();
+	_mosaic.forEach([&](not_null<const LayoutItem*> item) {
+		const auto result = item->getResult();
+		const auto document = item->getDocument();
+		const auto found = ranges::find_if(
+			pending,
+			[&](const PendingRepaintItem &entry) {
+				return (entry.result == result)
+					&& (entry.document == document);
+			});
+		if (found == end(pending)) {
+			return;
+		}
+		const auto rect = _mosaic.findRect(item->position());
+		const auto updateRect = rtl()
+			? QRect(0, rect.y(), width(), rect.height())
+			: rect;
+		damage += updateRect.intersected(visible);
+	});
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}
+
 void GifsListWidget::repaintItems(crl::time now) {
 	_lastUpdatedAt = now ? now : crl::now();
+	_updateInlineItems.cancel();
+	_pendingRepaintItems.clear();
+	_repaintAllPending = false;
 	update();
 }
 

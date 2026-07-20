@@ -134,6 +134,11 @@ private:
 	using InlineResults = std::vector<std::shared_ptr<InlineResult>>;
 	using LayoutItem = InlineBots::Layout::ItemBase;
 
+	struct PendingRepaintItem {
+		std::shared_ptr<InlineResult> result;
+		DocumentData *document = nullptr;
+	};
+
 	struct InlineCacheEntry {
 		QString nextOffset;
 		InlineResults results;
@@ -156,7 +161,8 @@ private:
 	void refreshIcons();
 	[[nodiscard]] std::vector<StickerIcon> fillIcons();
 
-	void updateInlineItems();
+	void updateInlineItems(const LayoutItem *layout = nullptr);
+	void repaintPendingItems();
 	void repaintItems(crl::time now = 0);
 	void showPreview();
 
@@ -185,6 +191,8 @@ private:
 	crl::time _lastScrolledAt = 0;
 	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
+	std::vector<PendingRepaintItem> _pendingRepaintItems;
+	bool _repaintAllPending = false;
 	bool _inlineWithThumb = false;
 
 	std::map<
