@@ -583,6 +583,7 @@ int Service::marginBottom() const {
 void Service::draw(Painter &p, const PaintContext &context) const {
 	auto g = countGeometry();
 	if (g.width() < 1) {
+		recordTextRepaintRect(p, context, QRectF());
 		return;
 	}
 
@@ -613,6 +614,7 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (isHidden()) {
+		recordTextRepaintRect(p, context, QRectF());
 		return;
 	}
 
@@ -665,6 +667,10 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 		const auto mediaSkip = mediaDisplayed ? (st::msgServiceMargin.top() + media->height()) : 0;
 		const auto trect = QRect(g.left(), g.top(), g.width(), g.height() - mediaSkip)
 			- st::msgServicePadding;
+		recordTextRepaintRect(
+			p,
+			context,
+			text().isEmpty() ? QRectF() : QRectF(trect));
 
 		p.translate(0, g.top() - st::msgServiceMargin.top());
 		ServiceMessagePainter::PaintComplexBubble(
@@ -692,6 +698,8 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 			.fullWidthSelection = false,
 			.selection = context.selection,
 		});
+	} else {
+		recordTextRepaintRect(p, context, QRectF());
 	}
 	if (mediaDisplayed) {
 		const auto left = g.left() + (g.width() - media->width()) / 2;

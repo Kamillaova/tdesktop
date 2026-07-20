@@ -441,6 +441,8 @@ public:
 		MediaOverriden           = 0x0800,
 		HeavyCustomEmoji         = 0x1000,
 		SummaryShown             = 0x2000,
+		TextRepaintPending       = 0x4000,
+		TextRepaintGeometryKnown = 0x8000,
 	};
 	using Flags = base::flags<Flag>;
 	friend inline constexpr auto is_flag_type(Flag) { return true; }
@@ -774,6 +776,10 @@ protected:
 	[[nodiscard]] int richPageWidthFor(int textWidth) const;
 	[[nodiscard]] int textHeightFor(int textWidth) const;
 	[[nodiscard]] int textRealWidth() const { return _textRealWidth; }
+	void recordTextRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const;
 	void validateText();
 	void invalidateTextSizeCache();
 	void validateTextSkipBlock(bool has, int width, int height);
@@ -817,6 +823,8 @@ private:
 	void setTextWithLinks(
 		const TextWithEntities &text,
 		const std::vector<ClickHandlerPtr> &links = {});
+	void repaintText(uint64 generation);
+	void invalidateTextRepaintRect();
 	void setReactions(std::unique_ptr<Reactions::InlineList> list);
 
 	struct TextWithLinks {
@@ -834,6 +842,9 @@ private:
 
 	HistoryItem *_textItem = nullptr;
 	mutable Ui::Text::String _text;
+	uint64 _textGeneration = 0;
+	mutable QRect _textRepaintRect;
+	mutable QRect _textStaleRepaintRect;
 	mutable uint32 _textWidth : 16 = 0;
 	mutable uint32 _textRealWidth : 16 = 0;
 	mutable int _textHeight = 0;

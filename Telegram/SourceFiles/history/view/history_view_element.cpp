@@ -51,6 +51,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
 #include "ui/toast/toast.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
@@ -94,6 +95,15 @@ namespace {
 // A new message from the same sender is attached to previous within 15 minutes.
 constexpr int kAttachMessageToPreviousSecondsDelta = 900;
 constexpr auto kMaxShownLine = 1024 * 1024;
+
+[[nodiscard]] QMargins CustomEmojiTextRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
 
 Element *HoveredElement/* = nullptr*/;
 Element *PressedElement/* = nullptr*/;
@@ -1350,6 +1360,69 @@ void Element::customEmojiRepaint() {
 	}
 }
 
+void Element::repaintText(uint64 generation) {
+	if (_textGeneration != generation
+		|| richpage()
+		|| (_flags & Flag::TextRepaintPending)) {
+		return;
+	} else if ((_flags & Flag::TextRepaintGeometryKnown)
+		&& _textRepaintRect.isEmpty()) {
+		return;
+	}
+	_flags |= Flag::TextRepaintPending;
+	if (_textRepaintRect.isEmpty()) {
+		customEmojiRepaint();
+	} else {
+		repaint(_textRepaintRect);
+	}
+}
+
+void Element::recordTextRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const {
+	if (!context.hasElementPainter(p)) {
+		if (_textRepaintRect.isEmpty()) {
+			_flags &= ~Flag::TextRepaintPending;
+		}
+		return;
+	}
+	_flags &= ~Flag::TextRepaintPending;
+	auto current = QRect();
+	auto geometryKnown = rect.isEmpty();
+	if (!rect.isEmpty()) {
+		if (_text.hasCustomEmoji()) {
+			rect = rect.marginsAdded(
+				QMarginsF(CustomEmojiTextRepaintMargins()));
+		}
+		if (const auto mapped = context.mapToElement(p, rect)) {
+			current = *mapped;
+			geometryKnown = !current.isEmpty();
+		}
+	}
+	if (geometryKnown) {
+		_flags |= Flag::TextRepaintGeometryKnown;
+	} else {
+		_flags &= ~Flag::TextRepaintGeometryKnown;
+	}
+	const auto stale = base::take(_textStaleRepaintRect);
+	const auto previous = stale.united(base::take(_textRepaintRect));
+	_textRepaintRect = current;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == current)) {
+		return;
+	}
+	_flags |= Flag::TextRepaintPending;
+	repaint(previous.united(current));
+}
+
+void Element::invalidateTextRepaintRect() {
+	_textStaleRepaintRect = _textStaleRepaintRect.united(
+		base::take(_textRepaintRect));
+	_flags &= ~Flag::TextRepaintPending;
+	_flags &= ~Flag::TextRepaintGeometryKnown;
+}
+
 void Element::clearCustomEmojiRepaint() const {
 	_flags &= ~Flag::CustomEmojiRepainting;
 	data()->_flags &= ~MessageFlag::CustomEmojiRepainting;
@@ -1504,6 +1577,8 @@ bool Element::isHidden() const {
 void Element::overrideMedia(std::unique_ptr<Media> media) {
 	Expects(!history()->owner().groups().find(data()));
 
+	invalidateTextRepaintRect();
+	++_textGeneration;
 	_text = Ui::Text::String(st::msgMinWidth);
 	invalidateTextSizeCache();
 
@@ -2105,9 +2180,16 @@ void Element::validateText() {
 void Element::setTextWithLinks(
 		const TextWithEntities &text,
 		const std::vector<ClickHandlerPtr> &links) {
+	invalidateTextRepaintRect();
+	const auto generation = ++_textGeneration;
+	const auto weak = base::make_weak(this);
 	const auto context = Core::TextContext({
 		.session = &history()->session(),
-		.repaint = [=] { customEmojiRepaint(); },
+		.repaint = [weak, generation] {
+			if (const auto strong = weak.get()) {
+				strong->repaintText(generation);
+			}
+		},
 	});
 	if (_flags & Flag::ServiceMessage) {
 		const auto &options = Ui::ItemTextServiceOptions();
@@ -2423,11 +2505,13 @@ void Element::recountDisplayDateInBlocks() {
 }
 
 QSize Element::countOptimalSize() {
+	invalidateTextRepaintRect();
 	_flags &= ~Flag::NeedsResize;
 	return performCountOptimalSize();
 }
 
 QSize Element::countCurrentSize(int newWidth) {
+	invalidateTextRepaintRect();
 	if (_flags & Flag::NeedsResize) {
 		initDimensions();
 	}
@@ -2812,6 +2896,8 @@ void Element::itemTextUpdated() {
 	}
 	_flags &= ~Flag::SummaryShown;
 	clearSpecialOnlyEmoji();
+	invalidateTextRepaintRect();
+	++_textGeneration;
 	_text = Ui::Text::String(st::msgMinWidth);
 	invalidateTextSizeCache();
 	if (_media && !data()->media()) {
@@ -2825,6 +2911,7 @@ void Element::blockquoteExpandChanged() {
 }
 
 void Element::invalidateTextSizeCache() {
+	invalidateTextRepaintRect();
 	_textWidth = 0;
 	_textHeight = 0;
 	_textRealWidth = 0;
@@ -3258,6 +3345,7 @@ QPoint Element::mediaTopLeft() const {
 }
 
 Element::~Element() {
+	++_textGeneration;
 	setReactions(nullptr);
 
 	// Delete media while owner still exists.

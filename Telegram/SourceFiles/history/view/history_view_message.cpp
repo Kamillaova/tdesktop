@@ -1688,6 +1688,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	}
 	auto g = countGeometry();
 	if (g.width() < 1) {
+		recordTextRepaintRect(p, context, QRectF());
 		return;
 	}
 	const auto initialTransform = p.transform();
@@ -1737,6 +1738,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (isHidden()) {
+		recordTextRepaintRect(p, context, QRectF());
 		return;
 	}
 
@@ -2129,6 +2131,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			media->paintBubbleFireworks(p, g, context.now);
 		}
 	} else if (media && media->isDisplayed()) {
+		recordTextRepaintRect(p, context, QRectF());
 		p.translate(g.topLeft());
 		media->draw(p, context.translated(
 			-g.topLeft()
@@ -2141,6 +2144,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 		p.translate(-g.topLeft());
+	} else {
+		recordTextRepaintRect(p, context, QRectF());
 	}
 
 	p.restoreTextPalette();
@@ -2946,6 +2951,7 @@ void Message::paintText(
 		QRect &trect,
 		const PaintContext &context) const {
 	if (!hasVisibleText()) {
+		recordTextRepaintRect(p, context, QRectF());
 		return;
 	}
 	const auto stm = context.messageStyle();
@@ -2961,9 +2967,28 @@ void Message::paintText(
 		trect.setY(trect.y() + botTop->height);
 	}
 	if (const auto rich = const_cast<Message*>(this)->richpage()) {
+		recordTextRepaintRect(p, context, QRectF());
 	    paintRichText(p, rich, richPageRect(trect), context);
 		return;
 	}
+	const auto appearing = Get<TextAppearing>();
+	const auto appearingClip = appearing && appearing->use;
+	const auto textHeight = textHeightFor(trect.width());
+	const auto textWidth = std::max(textRealWidth(), trect.width());
+	auto repaintRect = QRectF(
+		trect.x(),
+		trect.y(),
+		textWidth,
+		textHeight);
+	if (appearingClip) {
+		const auto shown = appearing->shownLine;
+		const auto bottom = (shown >= 0
+			&& shown < int(appearing->lines.size()))
+			? appearing->lines[shown].bottom
+			: 0;
+		repaintRect.setHeight(std::min(repaintRect.height(), qreal(bottom)));
+	}
+	recordTextRepaintRect(p, context, repaintRect);
 
 	if (!context.clip.intersects(trect)
 		&& context.skipDrawingParts == PaintContext::SkipDrawingParts::None
@@ -3005,8 +3030,6 @@ void Message::paintText(
 		.outPath = &ripplePath,
 	};
 
-	const auto appearing = Get<TextAppearing>();
-	const auto appearingClip = appearing && appearing->use;
 	auto linePostprocess = std::optional<Ui::Text::LinePostprocess>();
 	if (appearingClip) {
 		const auto shown = appearing->shownLine;
