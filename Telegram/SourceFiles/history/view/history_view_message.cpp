@@ -5302,10 +5302,14 @@ bool Message::embedReactionsInBubble() const {
 }
 
 void Message::validateFromNameText(PeerData *from) const {
-	if (!from) {
+	const auto clearStatus = [&] {
 		if (_fromNameStatus) {
 			_fromNameStatus = nullptr;
+			const_cast<Message*>(this)->checkHeavyPart();
 		}
+	};
+	if (!from) {
+		clearStatus();
 		return;
 	}
 	const auto version = from->nameVersion();
@@ -5326,8 +5330,8 @@ void Message::validateFromNameText(PeerData *from) const {
 			const auto emoji = Ui::Text::AdjustCustomEmojiSize(size);
 			_fromNameStatus->skip = (size - emoji) / 2;
 		}
-	} else if (_fromNameStatus) {
-		_fromNameStatus = nullptr;
+	} else {
+		clearStatus();
 	}
 }
 
