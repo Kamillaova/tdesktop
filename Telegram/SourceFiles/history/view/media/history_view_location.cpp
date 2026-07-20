@@ -77,6 +77,23 @@ constexpr auto kLiveElapsedPartOpacity = 0.2;
 	return std::clamp(period - elapsed, 0, period) / float64(period);
 }
 
+[[nodiscard]] QRect LiveRemainingRect(QRect bottom) {
+	const auto size = st::liveLocationRemainingSize;
+	const auto skip = (bottom.height() - size) / 2;
+	return {
+		bottom.x() + bottom.width() - size - skip,
+		bottom.y() + skip,
+		size,
+		size,
+	};
+}
+
+[[nodiscard]] QRectF LiveRemainingRepaintRect(QRect bottom) {
+	const auto margin = style::ConvertScaleExact(2.) / 2.;
+	return QRectF(LiveRemainingRect(bottom)).marginsAdded(
+		QMarginsF(margin, margin, margin, margin));
+}
+
 } // namespace
 
 struct Location::Live {
@@ -113,12 +130,26 @@ Location::Location(
 			st::webPageTitleStyle,
 			tr::lng_live_location(tr::now),
 			Ui::WebpageTextTitleOptions());
-		_live->updateStatusTimer.setCallback([=] {
-			updateLiveStatus();
-			checkLiveFinish();
+		const auto weak = base::make_weak(this);
+		_live->updateStatusTimer.setCallback([weak] {
+			const auto strong = weak.get();
+			if (!strong || !strong->_live) {
+				return;
+			}
+			strong->updateLiveStatus();
+			if (!strong->checkLiveFinish()) {
+				strong->requestAnimationRepaint(
+					strong->_statusRepaint);
+			}
 		});
-		_live->updateRemainingTimer.setCallback([=] {
-			checkLiveFinish();
+		_live->updateRemainingTimer.setCallback([weak] {
+			const auto strong = weak.get();
+			if (strong
+				&& strong->_live
+				&& !strong->checkLiveFinish()) {
+				strong->requestAnimationRepaint(
+					strong->_remainingRepaint);
+			}
 		});
 		updateLiveStatus();
 		if (const auto media = replacing ? replacing->media() : nullptr) {
@@ -164,7 +195,7 @@ Location::~Location() {
 	}
 }
 
-void Location::checkLiveFinish() {
+bool Location::checkLiveFinish() {
 	Expects(_live != nullptr);
 
 	const auto now = base::unixtime::now();
@@ -178,10 +209,13 @@ void Location::checkLiveFinish() {
 		if (had && !hasHeavyPart()) {
 			_parent->checkHeavyPart();
 		}
+		invalidateAnimationRepaint(_crossfadeRepaint);
+		invalidateAnimationRepaint(_remainingRepaint);
+		invalidateAnimationRepaint(_statusRepaint);
 		item->history()->owner().requestViewResize(_parent);
-	} else {
-		_parent->repaint();
+		return true;
 	}
+	return false;
 }
 
 std::unique_ptr<Location::Live> Location::CreateLiveTracker(
@@ -258,6 +292,7 @@ QImage Location::locationTakeImage() {
 void Location::unloadHeavyPart() {
 	_media = nullptr;
 	if (_userpic) {
+		++_userpicGeneration;
 		_userpic->subscribeToUpdates(nullptr);
 		_userpic = nullptr;
 	}
@@ -287,8 +322,13 @@ void Location::ensureUserpicCreated() const {
 	}
 	const auto peer = _parent->data()->from();
 	_userpic = Ui::MakeUserpicThumbnail(peer, true);
-	_userpic->subscribeToUpdates([parent = _parent] {
-		parent->repaint();
+	const auto generation = ++_userpicGeneration;
+	const auto weak = base::make_weak(this);
+	_userpic->subscribeToUpdates([weak, generation] {
+		const auto strong = weak.get();
+		if (strong && strong->_userpicGeneration == generation) {
+			strong->requestAnimationRepaint(strong->_userpicRepaint);
+		}
 	});
 	history()->owner().registerHeavyViewPart(_parent);
 }
@@ -351,6 +391,7 @@ QSize Location::countCurrentSize(int newWidth) {
 			std::min(newWidth, st::maxMediaSize));
 	accumulate_max(newWidth, minWidth);
 	accumulate_max(newHeight, st::minPhotoSize);
+	const auto thumbnailChanged = (_thumbnailHeight != newHeight);
 	_thumbnailHeight = newHeight;
 	if (_live) {
 		_live->thumbnailHeight = newHeight;
@@ -369,7 +410,12 @@ QSize Location::countCurrentSize(int newWidth) {
 			}
 		}
 	}
-	return { newWidth, newHeight };
+	const auto result = QSize(newWidth, newHeight);
+	if (_animationLayoutSize != result || thumbnailChanged) {
+		_animationLayoutSize = result;
+		invalidateAnimationRepaints();
+	}
+	return result;
 }
 
 TextSelection Location::toDescriptionSelection(
@@ -382,8 +428,92 @@ TextSelection Location::fromDescriptionSelection(
 	return ShiftItemSelection(selection, _title);
 }
 
+void Location::requestAnimationRepaint(AnimationRepaint &repaint) const {
+	if (repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		_parent->repaint();
+	} else {
+		repaintAnimationRegion(repaint.current);
+	}
+}
+
+void Location::recordAnimationRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		AnimationRepaint &repaint,
+		QRectF rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	repaint.pending = false;
+	auto current = QRegion();
+	auto geometryKnown = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, rect);
+		if (!mapped || mapped->isEmpty()) {
+			geometryKnown = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.current = std::move(current);
+	repaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintAnimationRegion(previous.united(repaint.current));
+}
+
+void Location::invalidateAnimationRepaint(
+		AnimationRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void Location::invalidateAnimationRepaints() const {
+	invalidateAnimationRepaint(_crossfadeRepaint);
+	invalidateAnimationRepaint(_userpicRepaint);
+	invalidateAnimationRepaint(_remainingRepaint);
+	invalidateAnimationRepaint(_statusRepaint);
+}
+
+void Location::repaintAnimationRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
 void Location::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordAnimationRepaint(
+			p,
+			context,
+			_crossfadeRepaint,
+			QRectF());
+		recordAnimationRepaint(
+			p,
+			context,
+			_userpicRepaint,
+			QRectF());
+		recordAnimationRepaint(
+			p,
+			context,
+			_remainingRepaint,
+			QRectF());
+		recordAnimationRepaint(
+			p,
+			context,
+			_statusRepaint,
+			QRectF());
 		return;
 	}
 	auto paintx = 0, painty = 0, paintw = width(), painth = height();
@@ -399,6 +529,11 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		: adjustedBubbleRounding(square);
 	const auto paintText = [&] {
 		if (!hasText && !_live) {
+			recordAnimationRepaint(
+				p,
+				context,
+				_statusRepaint,
+				QRectF());
 			return;
 		}
 		painty += st::mediaInBubbleSkip;
@@ -413,9 +548,33 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		if (!_description.isEmpty()) {
 			if (_live) {
 				p.setPen(stm->msgDateFg);
+				const auto statusHeight = std::min(
+					3 * st::webPageDescriptionFont->height,
+					std::max(height() - painty, 0));
+				recordAnimationRepaint(
+					p,
+					context,
+					_statusRepaint,
+					QRectF(
+						paintx + st::msgPadding.left(),
+						painty,
+						textw,
+						statusHeight));
+			} else {
+				recordAnimationRepaint(
+					p,
+					context,
+					_statusRepaint,
+					QRectF());
 			}
 			_description.drawLeftElided(p, paintx + st::msgPadding.left(), painty, textw, width(), 3, style::al_left, 0, -1, 0, false, toDescriptionSelection(context.selection));
 			painty += qMin(_description.countHeight(textw), 3 * st::webPageDescriptionFont->height);
+		} else {
+			recordAnimationRepaint(
+				p,
+				context,
+				_statusRepaint,
+				QRectF());
 		}
 	};
 	const auto thumbh = _thumbnailHeight;
@@ -424,6 +583,13 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		fillImageShadow(p, rthumb, rounding, context);
 	}
 
+	recordAnimationRepaint(
+		p,
+		context,
+		_crossfadeRepaint,
+		(_live && !_live->previous.isNull())
+			? QRectF(rthumb)
+			: QRectF());
 	ensureMediaCreated();
 	validateImageCache(rthumb.size(), rounding);
 	const auto paintPrevious = _live && !_live->previous.isNull();
@@ -457,8 +623,6 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 			});
 	}
 	if (_liveLocation) {
-		ensureUserpicCreated();
-
 		const auto pinRadius = st::historyMapPinRadius;
 		const auto userpicSize = st::historyMapPinUserpicSize;
 		const auto tailHeight = st::historyMapPinTailHeight;
@@ -473,6 +637,17 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		const auto attachAngle = std::asin(w / r) * 180.0 / M_PI;
 
 		const auto circleRect = QRectF(cx - r, circleY - r, 2.0 * r, 2.0 * r);
+		const auto userpicRect = QRectF(
+			cx - userpicSize / 2.0,
+			circleY - userpicSize / 2.0,
+			userpicSize,
+			userpicSize);
+		recordAnimationRepaint(
+			p,
+			context,
+			_userpicRepaint,
+			userpicRect);
+		ensureUserpicCreated();
 
 		auto pin = QPainterPath();
 		pin.arcMoveTo(circleRect, 270.0 - attachAngle);
@@ -512,14 +687,13 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 		p.drawPath(pin);
 
 		const auto userpicImage = _userpic->image(userpicSize);
-		p.drawImage(
-			QRectF(
-				cx - userpicSize / 2.0,
-				circleY - userpicSize / 2.0,
-				userpicSize,
-				userpicSize),
-			userpicImage);
+		p.drawImage(userpicRect, userpicImage);
 	} else {
+		recordAnimationRepaint(
+			p,
+			context,
+			_userpicRepaint,
+			QRectF());
 		const auto paintMarker = [&](const style::icon &icon) {
 			icon.paint(
 				p,
@@ -536,7 +710,19 @@ void Location::draw(Painter &p, const PaintContext &context) const {
 	painty += thumbh;
 	if (_live) {
 		painth -= thumbh;
-		paintLiveRemaining(p, context, { paintx, painty, paintw, painth });
+		const auto bottom = QRect(paintx, painty, paintw, painth);
+		recordAnimationRepaint(
+			p,
+			context,
+			_remainingRepaint,
+			LiveRemainingRepaintRect(bottom));
+		paintLiveRemaining(p, context, bottom);
+	} else {
+		recordAnimationRepaint(
+			p,
+			context,
+			_remainingRepaint,
+			QRectF());
 	}
 	paintText();
 	if (!_live && !hasText && _parent->media() == this) {
@@ -563,13 +749,7 @@ void Location::paintLiveRemaining(
 		QPainter &p,
 		const PaintContext &context,
 		QRect bottom) const {
-	const auto size = st::liveLocationRemainingSize;
-	const auto skip = (bottom.height() - size) / 2;
-	const auto rect = QRect(
-		bottom.x() + bottom.width() - size - skip,
-		bottom.y() + skip,
-		size,
-		size);
+	const auto rect = LiveRemainingRect(bottom);
 	auto hq = PainterHighQualityEnabler(p);
 	const auto stm = context.messageStyle();
 	const auto color = stm->msgServiceFg->c;
@@ -640,12 +820,17 @@ void Location::checkLiveCrossfadeStart() const {
 		|| _live->crossfade.animating()) {
 		return;
 	}
-	_live->crossfade.start([=] {
-		if (!_live->crossfade.animating()) {
-			_live->previous = QImage();
-			_live->previousCache = QImage();
+	const auto weak = base::make_weak(this);
+	_live->crossfade.start([weak] {
+		const auto strong = weak.get();
+		if (!strong || !strong->_live) {
+			return;
 		}
-		_parent->repaint();
+		if (!strong->_live->crossfade.animating()) {
+			strong->_live->previous = QImage();
+			strong->_live->previousCache = QImage();
+		}
+		strong->requestAnimationRepaint(strong->_crossfadeRepaint);
 	}, 0., 1., st::fadeWrapDuration);
 }
 

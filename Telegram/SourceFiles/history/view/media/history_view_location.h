@@ -79,6 +79,13 @@ public:
 
 private:
 	struct Live;
+	struct AnimationRepaint {
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
 	[[nodiscard]] static std::unique_ptr<Live> CreateLiveTracker(
 		not_null<Element*> parent,
 		TimeId period);
@@ -111,10 +118,19 @@ private:
 
 	[[nodiscard]] int fullWidth() const;
 	[[nodiscard]] int fullHeight() const;
+	void requestAnimationRepaint(AnimationRepaint &repaint) const;
+	void recordAnimationRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		AnimationRepaint &repaint,
+		QRectF rect) const;
+	void invalidateAnimationRepaint(AnimationRepaint &repaint) const;
+	void invalidateAnimationRepaints() const;
+	void repaintAnimationRegion(const QRegion &region) const;
 
 	void checkLiveCrossfadeStart() const;
 	void updateLiveStatus();
-	void checkLiveFinish();
+	[[nodiscard]] bool checkLiveFinish();
 
 	const not_null<Data::CloudImage*> _data;
 	mutable std::unique_ptr<Live> _live;
@@ -129,6 +145,12 @@ private:
 	int _thumbnailHeight = 0;
 	mutable QImage _imageCache;
 	mutable Ui::BubbleRounding _imageCacheRounding;
+	mutable AnimationRepaint _crossfadeRepaint;
+	mutable AnimationRepaint _userpicRepaint;
+	mutable AnimationRepaint _remainingRepaint;
+	mutable AnimationRepaint _statusRepaint;
+	mutable uint64 _userpicGeneration = 0;
+	QSize _animationLayoutSize;
 
 };
 
