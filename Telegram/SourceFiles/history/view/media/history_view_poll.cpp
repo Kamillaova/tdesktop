@@ -693,10 +693,6 @@ struct Poll::SendingAnimation {
 struct Poll::Answer {
 	Answer();
 
-	void fillData(
-		not_null<PollData*> poll,
-		const PollAnswer &original,
-		Ui::Text::MarkedContext context);
 	void fillMedia(
 		not_null<PollData*> poll,
 		const PollAnswer &original,
@@ -724,6 +720,7 @@ struct Poll::Answer {
 	bool thumbnailIsVideo = false;
 	PollThumbnailKind thumbnailKind = PollThumbnailKind::None;
 	uint64 thumbnailId = 0;
+	uint64 textGeneration = 0;
 	mutable std::unique_ptr<Ui::RippleAnimation> ripple;
 	std::vector<UserpicInRow> recentVoters;
 	mutable QImage recentVotersImage;
@@ -1802,6 +1799,16 @@ uint16 Poll::Header::selectionLength() const {
 struct Poll::Options : public Poll::Part {
 	using Part::Part;
 
+	struct TextRepaint {
+		QByteArray option;
+		uint64 generation = 0;
+		QRegion repaintRegion;
+		QRegion collectedRepaintRegion;
+		QRegion staleRepaintRegion;
+		bool repaintPending = false;
+		bool collectingRepaintRegion = false;
+	};
+
 	struct ThumbnailRepaint {
 		QByteArray option;
 		const Ui::DynamicImage *image = nullptr;
@@ -1864,6 +1871,24 @@ struct Poll::Options : public Poll::Part {
 	void finishSendingAnimationPaint() const;
 	void repaintSendingAnimationRegion(const QRegion &region) const;
 	void resetSendingAnimation() const;
+	void fillAnswerData(
+		Answer &answer,
+		const PollAnswer &original);
+	void answerTextUpdated(
+		const QByteArray &option,
+		uint64 generation) const;
+	void invalidateAnswerTextRepaints();
+	void syncAnswerTextRepaints();
+	void beginAnswerTextPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	void recordAnswerTextRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		QRect rect) const;
+	void finishAnswerTextPaint() const;
+	void repaintAnswerTextRegion(const QRegion &region) const;
 	void subscribeToThumbnailUpdates(
 		not_null<Ui::DynamicImage*> image,
 		PollThumbnailKind kind,
@@ -1942,11 +1967,13 @@ struct Poll::Options : public Poll::Part {
 		int maxVotes,
 		bool showPercent);
 
+	mutable std::vector<TextRepaint> _textRepaints;
 	mutable std::vector<ThumbnailRepaint> _thumbnailRepaints;
 	std::vector<Answer> _answers;
 	mutable std::unique_ptr<AnswersAnimation> _answersAnimation;
 	mutable std::unique_ptr<SendingAnimation> _sendingAnimation;
 	mutable QImage _fillingIconCache;
+	uint64 _textGeneration = 0;
 	bool _anyAnswerHasMedia = false;
 	bool _hasSelected = false;
 	bool _votedFromHere = false;
@@ -1992,6 +2019,7 @@ void Poll::Options::draw(
 				st::lineWidth,
 				choiceOverhang + 2 * st::lineWidth)));
 	beginSendingAnimationPaint(p, context);
+	beginAnswerTextPaint(p, context);
 	beginAnimatedThumbnailPaint(p, context);
 
 	auto tshift = 0;
@@ -2023,6 +2051,7 @@ void Poll::Options::draw(
 		tshift += height;
 	}
 	finishAnimatedThumbnailPaint();
+	finishAnswerTextPaint();
 	finishSendingAnimationPaint();
 	finishAnswersAnimationPaint();
 }
@@ -2129,6 +2158,7 @@ bool Poll::Options::hasHeavyPart() const {
 
 void Poll::Options::unloadHeavyPart() {
 	for (auto &answer : _answers) {
+		answer.text.unloadPersistentAnimation();
 		for (auto &recent : answer.recentVoters) {
 			recent.view = {};
 		}
@@ -2149,20 +2179,30 @@ Poll::SendingAnimation::SendingAnimation(
 Poll::Answer::Answer() : text(st::msgMinWidth / 2) {
 }
 
-void Poll::Answer::fillData(
-		not_null<PollData*> poll,
-		const PollAnswer &original,
-		Ui::Text::MarkedContext context) {
-	chosen = original.chosen;
-	correct = poll->quiz() ? original.correct : chosen;
-	if (!text.isEmpty() && text.toTextWithEntities() == original.text) {
+void Poll::Options::fillAnswerData(
+		Answer &answer,
+		const PollAnswer &original) {
+	const auto poll = _owner->_poll;
+	answer.chosen = original.chosen;
+	answer.correct = poll->quiz() ? original.correct : answer.chosen;
+	if (!answer.text.isEmpty()
+		&& answer.text.toTextWithEntities() == original.text) {
 		return;
 	}
-	text.setMarkedText(
+	const auto option = answer.option;
+	const auto generation = ++_textGeneration;
+	answer.textGeneration = generation;
+	answer.text.setMarkedText(
 		st::historyPollAnswerStyle,
 		original.text,
 		Ui::WebpageTextTitleOptions(),
-		context);
+		Core::TextContext({
+			.session = &poll->session(),
+			.repaint = [=] {
+				answerTextUpdated(option, generation);
+			},
+			.customEmojiLoopLimit = 2,
+		}));
 }
 
 void Poll::Answer::fillMedia(
@@ -2517,6 +2557,7 @@ int Poll::Options::countAnswerHeight(
 }
 
 QSize Poll::countCurrentSize(int newWidth) {
+	_optionsPart->invalidateAnswerTextRepaints();
 	_optionsPart->invalidateAnimatedThumbnailRepaints();
 	accumulate_min(newWidth, maxWidth());
 	const auto innerWidth = newWidth
@@ -3083,16 +3124,8 @@ void Poll::Header::updateRecentVoters() {
 }
 
 void Poll::Options::updateAnswers() {
+	invalidateAnswerTextRepaints();
 	invalidateAnimatedThumbnailRepaints();
-	const auto context = Core::TextContext({
-		.session = &_owner->_poll->session(),
-		.repaint = [=] {
-			if (!_owner->_parent->delegate()->elementAnimationsPaused()) {
-				_owner->repaint();
-			}
-		},
-		.customEmojiLoopLimit = 2,
-	});
 	const auto paused = [=] {
 		return _owner->_parent->delegate()->elementAnimationsPaused();
 	};
@@ -3128,7 +3161,7 @@ void Poll::Options::updateAnswers() {
 				answer.option,
 				&PollAnswer::option);
 			Assert(i != end(_owner->_poll->answers));
-			answer.fillData(_owner->_poll, *i, context);
+			fillAnswerData(answer, *i);
 			answer.fillMedia(
 				_owner->_poll,
 				*i,
@@ -3139,6 +3172,7 @@ void Poll::Options::updateAnswers() {
 		_anyAnswerHasMedia = ranges::any_of(_answers, [](const Answer &a) {
 			return a.thumbnail != nullptr;
 		});
+		syncAnswerTextRepaints();
 		syncAnimatedThumbnailRepaints();
 		return;
 	}
@@ -3151,7 +3185,7 @@ void Poll::Options::updateAnswers() {
 			option,
 			&PollAnswer::option);
 		Assert(i != end(_owner->_poll->answers));
-		result.fillData(_owner->_poll, *i, context);
+		fillAnswerData(result, *i);
 		result.fillMedia(
 			_owner->_poll,
 			*i,
@@ -3177,6 +3211,7 @@ void Poll::Options::updateAnswers() {
 	_anyAnswerHasMedia = ranges::any_of(_answers, [](const Answer &a) {
 		return a.thumbnail != nullptr;
 	});
+	syncAnswerTextRepaints();
 	syncAnimatedThumbnailRepaints();
 
 	resetAnswersAnimation();
@@ -3659,6 +3694,160 @@ void Poll::Options::resetSendingAnimation() const {
 	repaintSendingAnimationRegion(repaintRegion);
 }
 
+void Poll::Options::answerTextUpdated(
+		const QByteArray &option,
+		uint64 generation) const {
+	if (_owner->_parent->delegate()->elementAnimationsPaused()) {
+		return;
+	}
+	const auto answer = ranges::find(
+		_answers,
+		option,
+		&Answer::option);
+	if (answer == end(_answers)
+		|| answer->textGeneration != generation
+		|| !answer->text.hasCustomEmoji()) {
+		return;
+	}
+	const auto repaint = ranges::find(
+		_textRepaints,
+		option,
+		&TextRepaint::option);
+	if (repaint == end(_textRepaints)
+		|| repaint->generation != generation) {
+		_owner->repaint();
+		return;
+	}
+	if (repaint->repaintPending) {
+		return;
+	}
+	repaint->repaintPending = true;
+	if (repaint->repaintRegion.isEmpty()) {
+		_owner->repaint();
+	} else {
+		repaintAnswerTextRegion(repaint->repaintRegion);
+	}
+}
+
+void Poll::Options::invalidateAnswerTextRepaints() {
+	for (auto &repaint : _textRepaints) {
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+}
+
+void Poll::Options::syncAnswerTextRepaints() {
+	for (auto &repaint : _textRepaints) {
+		const auto answer = ranges::find(
+			_answers,
+			repaint.option,
+			&Answer::option);
+		const auto generation = (answer != end(_answers)
+			&& answer->text.hasCustomEmoji())
+			? answer->textGeneration
+			: 0;
+		if (repaint.generation == generation) {
+			continue;
+		}
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.generation = generation;
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+	for (const auto &answer : _answers) {
+		if (!answer.text.hasCustomEmoji()) {
+			continue;
+		}
+		const auto repaint = ranges::find(
+			_textRepaints,
+			answer.option,
+			&TextRepaint::option);
+		if (repaint == end(_textRepaints)) {
+			_textRepaints.push_back({
+				.option = answer.option,
+				.generation = answer.textGeneration,
+			});
+		}
+	}
+}
+
+void Poll::Options::beginAnswerTextPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	const auto collect = context.hasElementPainter(p);
+	for (auto &repaint : _textRepaints) {
+		if (collect) {
+			repaint.repaintPending = false;
+			repaint.collectedRepaintRegion = QRegion();
+			repaint.collectingRepaintRegion = true;
+		} else {
+			if (repaint.repaintRegion.isEmpty()) {
+				repaint.repaintPending = false;
+			}
+			repaint.collectingRepaintRegion = false;
+		}
+	}
+}
+
+void Poll::Options::recordAnswerTextRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		QRect rect) const {
+	if (!answer.text.hasCustomEmoji()) {
+		return;
+	}
+	const auto repaint = ranges::find(
+		_textRepaints,
+		answer.option,
+		&TextRepaint::option);
+	if (repaint == end(_textRepaints)
+		|| repaint->generation != answer.textGeneration
+		|| !repaint->collectingRepaintRegion) {
+		return;
+	}
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	if (mapped) {
+		repaint->collectedRepaintRegion += *mapped;
+	}
+}
+
+void Poll::Options::finishAnswerTextPaint() const {
+	auto repaintRegion = QRegion();
+	for (auto i = begin(_textRepaints); i != end(_textRepaints);) {
+		if (!i->collectingRepaintRegion) {
+			++i;
+			continue;
+		}
+		i->collectingRepaintRegion = false;
+		const auto previous = base::take(i->staleRepaintRegion).united(
+			base::take(i->repaintRegion));
+		i->repaintRegion = base::take(i->collectedRepaintRegion);
+		if (previous != i->repaintRegion && !previous.isEmpty()) {
+			i->repaintPending = true;
+			repaintRegion += previous.united(i->repaintRegion);
+		}
+		if (!i->generation && i->repaintRegion.isEmpty()) {
+			i = _textRepaints.erase(i);
+		} else {
+			++i;
+		}
+	}
+	repaintAnswerTextRegion(repaintRegion);
+}
+
+void Poll::Options::repaintAnswerTextRegion(
+		const QRegion &region) const {
+	for (const auto &rect : region) {
+		_owner->_parent->repaint(rect);
+	}
+}
+
 void Poll::Options::subscribeToThumbnailUpdates(
 		not_null<Ui::DynamicImage*> image,
 		PollThumbnailKind kind,
@@ -4031,6 +4220,12 @@ int Poll::Options::paintAnswer(
 		int outerWidth,
 		const PaintContext &context) const {
 	const auto height = countAnswerHeight(answer, width);
+	recordAnswerTextRect(
+		p,
+		context,
+		answer,
+		QRect(left, top, width, height).marginsAdded(
+			Margins(st::lineWidth)));
 	if (!context.highlight.pollOption.isEmpty()
 		&& context.highlight.pollOption == answer.option
 		&& context.highlight.collapsion > 0.) {
@@ -4318,6 +4513,7 @@ int Poll::Options::paintAnswer(
 		}
 	}
 	p.setPen(stm->historyTextFg);
+	_owner->_parent->prepareCustomEmojiPaint(p, context, answer.text);
 	answer.text.draw(p, {
 		.position = { aleft, top },
 		.outerWidth = outerWidth,
