@@ -287,7 +287,14 @@ void CustomEmoji::paintCustom(
 	auto &textst = context.st->messageStyle(false, false);
 	const auto paused = context.paused || On(PowerSaving::kEmojiChat);
 	const auto rect = QRect(x, y, _singleSize, _singleSize);
-	recordCustomFrame(p, context, index, rect);
+	if (context.hasElementPainter(p)
+		&& _customRepaintRects[index].isEmpty()) {
+		if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+			_customRepaintRects[index] = *mapped;
+			_customRepaintPending[index] = 0;
+		}
+	}
+	auto painted = QRectF();
 	if (context.selected()) {
 		const auto factor = style::DevicePixelRatio();
 		const auto size = QSize(_singleSize, _singleSize) * factor;
@@ -299,25 +306,34 @@ void CustomEmoji::paintCustom(
 		}
 		_selectedFrame.fill(Qt::transparent);
 		auto q = QPainter(&_selectedFrame);
-		emoji->paint(q, {
+		painted = emoji->paint(q, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.paused = paused,
 		});
 		q.end();
+		painted = painted.intersected(QRectF(
+			QPointF(),
+			_selectedFrame.deviceIndependentSize()));
 
 		_selectedFrame = Images::Colored(
 			std::move(_selectedFrame),
 			context.st->msgStickerOverlay()->c);
 		p.drawImage(rect.topLeft(), _selectedFrame);
+		painted.translate(rect.topLeft());
 	} else {
-		emoji->paint(p, {
+		painted = emoji->paint(p, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.position = rect.topLeft(),
 			.paused = paused,
 		});
 	}
+	recordCustomFrame(
+		p,
+		context,
+		index,
+		painted.isEmpty() ? QRectF(rect) : painted);
 }
 
 void CustomEmoji::repaintCustom(int index) {
@@ -338,15 +354,19 @@ void CustomEmoji::recordCustomFrame(
 		const Painter &p,
 		const PaintContext &context,
 		int index,
-		QRect rect) {
+		QRectF rect) {
 	Expects(index >= 0 && index < int(_customRepaintRects.size()));
 
 	if (context.hasElementPainter(p)) {
+		const auto mapped = context.mapToElement(p, rect);
+		const auto previous = _customRepaintRects[index];
+		const auto current = mapped ? *mapped : QRect();
 		_customRepaintPending[index] = 0;
-		const auto mapped = context.mapToElement(p, QRectF(rect));
-		_customRepaintRects[index] = mapped ? *mapped : QRect();
-	} else if (_customRepaintRects[index].isEmpty()) {
-		_customRepaintPending[index] = 0;
+		_customRepaintRects[index] = current;
+		if (!previous.isEmpty() && previous != current) {
+			_customRepaintPending[index] = 1;
+			_parent->repaint(previous.united(current));
+		}
 	}
 }
 

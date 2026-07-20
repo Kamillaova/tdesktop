@@ -2092,7 +2092,7 @@ int Message::marginBottom() const {
 }
 
 void Message::draw(Painter &p, const PaintContext &context) const {
-	if (_fromNameStatus) {
+	if (_fromNameStatus && context.hasElementPainter(p)) {
 		_fromNameStatus->lastPaintedRect = QRect();
 	}
 	auto g = countGeometry();
@@ -2898,15 +2898,24 @@ void Message::paintFromName(
 		const auto position = QPoint(
 			x - 2 * _fromNameStatus->skip,
 			y + _fromNameStatus->skip);
+		const auto recordStatusRect = [&](QRectF rect) {
+			if (!context.hasElementPainter(p)) {
+				return;
+			}
+			auto invertible = false;
+			const auto inverted = initialTransform.inverted(&invertible);
+			_fromNameStatus->lastPaintedRect = invertible
+				? inverted
+					.map(p.transform().map(QPolygonF(rect)))
+					.boundingRect()
+					.toAlignedRect()
+				: QRect();
+		};
+		const auto fallback = QRectF(
+			position,
+			Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
 		if (id) {
-			const auto rect = QRect(
-				position,
-				Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
-			_fromNameStatus->lastPaintedRect = initialTransform
-				.inverted()
-				.map(p.transform().map(QPolygonF(QRectF(rect))))
-				.boundingRect()
-				.toAlignedRect();
+			recordStatusRect(fallback);
 		}
 		if (_fromNameStatus->id != id) {
 			const auto that = const_cast<Message*>(this);
@@ -2925,14 +2934,19 @@ void Message::paintFromName(
 			_fromNameStatus->id = id;
 		}
 		if (_fromNameStatus->custom) {
-			_fromNameStatus->custom->paint(p, {
+			const auto painted = _fromNameStatus->custom->paint(p, {
 				.textColor = color,
 				.now = context.now,
 				.position = position,
 				.paused = context.paused || On(PowerSaving::kEmojiStatus),
 			});
+			if (!painted.isEmpty()) {
+				recordStatusRect(painted);
+			}
 		} else {
-			_fromNameStatus->lastPaintedRect = QRect();
+			if (context.hasElementPainter(p)) {
+				_fromNameStatus->lastPaintedRect = QRect();
+			}
 			st::dialogsPremiumIcon.icon.paint(p, x, y, width(), color);
 		}
 	}

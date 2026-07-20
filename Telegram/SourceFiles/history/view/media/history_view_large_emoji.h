@@ -61,7 +61,7 @@ private:
 		const QPainter &p,
 		const PaintContext &context,
 		int index,
-		QRect rect);
+		QRectF rect);
 	void resetCustomRepaints();
 
 	const not_null<Element*> _parent;

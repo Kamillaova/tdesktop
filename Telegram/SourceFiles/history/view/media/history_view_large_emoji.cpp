@@ -139,7 +139,6 @@ void LargeEmoji::paintCustom(
 	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
 	const auto skip = (inner - outer) / 2;
 	const auto rect = QRect(x + skip, y + skip, outer, outer);
-	recordCustomFrame(p, context, index, rect);
 	//const auto preview = context.imageStyle()->msgServiceBg->c;
 	auto &textst = context.st->messageStyle(false, false);
 	if (context.selected()) {
@@ -153,7 +152,7 @@ void LargeEmoji::paintCustom(
 		}
 		_selectedFrame.fill(Qt::transparent);
 		auto q = QPainter(&_selectedFrame);
-		emoji->paint(q, {
+		const auto painted = emoji->paint(q, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.paused = context.paused,
@@ -164,13 +163,25 @@ void LargeEmoji::paintCustom(
 			std::move(_selectedFrame),
 			context.st->msgStickerOverlay()->c);
 		p.drawImage(rect.topLeft(), _selectedFrame);
+		recordCustomFrame(
+			p,
+			context,
+			index,
+			painted.isEmpty()
+				? QRectF(rect)
+				: painted.translated(rect.topLeft()));
 	} else {
-		emoji->paint(p, {
+		const auto painted = emoji->paint(p, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.position = rect.topLeft(),
 			.paused = context.paused,
 		});
+		recordCustomFrame(
+			p,
+			context,
+			index,
+			painted.isEmpty() ? QRectF(rect) : painted);
 	}
 }
 
@@ -192,13 +203,20 @@ void LargeEmoji::recordCustomFrame(
 		const QPainter &p,
 		const PaintContext &context,
 		int index,
-		QRect rect) {
+		QRectF rect) {
 	Expects(index >= 0 && index < int(_customRepaintRects.size()));
 
 	if (context.hasElementPainter(p)) {
-		_customRepaintPending[index] = false;
-		const auto mapped = context.mapToElement(p, QRectF(rect));
-		_customRepaintRects[index] = mapped ? *mapped : QRect();
+		const auto mapped = context.mapToElement(p, rect);
+		const auto current = mapped ? *mapped : QRect();
+		const auto previous = _customRepaintRects[index];
+		_customRepaintRects[index] = current;
+		if (!previous.isEmpty() && previous != current) {
+			_customRepaintPending[index] = true;
+			_parent->repaint(previous.united(current));
+		} else {
+			_customRepaintPending[index] = false;
+		}
 	} else if (_customRepaintRects[index].isEmpty()) {
 		_customRepaintPending[index] = false;
 	}

@@ -84,7 +84,7 @@ private:
 		const Painter &p,
 		const PaintContext &context,
 		int index,
-		QRect rect);
+		QRectF rect);
 	void resetCustomRepaints();
 
 	[[nodiscard]] not_null<Data::CustomEmojiManager::Listener*> listener() {
