@@ -73,6 +73,76 @@ TextForMimeData MediaGenericPart::selectedText(
 	return {};
 }
 
+void MediaGenericPart::requestAnimationRepaint(
+		not_null<Element*> parent,
+		AnimationRepaint &repaint) const {
+	if (repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = 1;
+	if (!repaint.known) {
+		parent->repaint();
+		return;
+	}
+	for (const auto &rect : repaint.current) {
+		parent->repaint(rect);
+	}
+}
+
+void MediaGenericPart::recordAnimationRepaint(
+		not_null<Element*> parent,
+		const Painter &p,
+		const PaintContext &context,
+		AnimationRepaint &repaint,
+		QRectF rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, rect);
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = 0;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known ? 1 : 0;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = 1;
+			parent->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = 1;
+	for (const auto &area : previous.united(repaint.current)) {
+		parent->repaint(area);
+	}
+}
+
+void MediaGenericPart::invalidateAnimationRepaint(
+		AnimationRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = 0;
+	repaint.known = 0;
+}
+
+void MediaGenericPart::resetAnimationRepaint(
+		AnimationRepaint &repaint) const {
+	repaint = {};
+}
+
 MediaGeneric::MediaGeneric(
 	not_null<Element*> parent,
 	Fn<void(
@@ -677,19 +747,38 @@ DynamicImagePart::DynamicImagePart(
 
 DynamicImagePart::~DynamicImagePart() = default;
 
+void DynamicImagePart::repaintImage(uint64 generation) const {
+	if (generation == _imageGeneration) {
+		requestAnimationRepaint(_parent, _imageRepaint);
+	}
+}
+
 void DynamicImagePart::draw(
 		Painter &p,
 		not_null<const MediaGeneric*> owner,
 		const PaintContext &context,
 		int outerWidth) const {
-	if (!_subscribed) {
-		_subscribed = true;
-		const auto raw = _parent;
-		_image->subscribeToUpdates([raw] { raw->repaint(); });
-		raw->history()->owner().registerHeavyViewPart(raw);
-	}
 	const auto left = (outerWidth - _size) / 2;
 	const auto top = _margins.top();
+	const auto imageRect = QRect(left, top, _size, _size);
+	recordAnimationRepaint(
+		_parent,
+		p,
+		context,
+		_imageRepaint,
+		imageRect);
+	if (!_subscribed) {
+		_subscribed = 1;
+		const auto generation = ++_imageGeneration;
+		const auto weak = base::make_weak(this);
+		_image->subscribeToUpdates([weak, generation] {
+			const auto strong = weak.get();
+			if (strong) {
+				strong->repaintImage(generation);
+			}
+		});
+		_parent->history()->owner().registerHeavyViewPart(_parent);
+	}
 	if (_communityEffect) {
 		if (!_communityCache) {
 			_communityCache = std::make_unique<Ui::CommunityUserpicEffect>();
@@ -723,10 +812,12 @@ bool DynamicImagePart::hasHeavyPart() {
 
 void DynamicImagePart::unloadHeavyPart() {
 	if (_subscribed) {
-		_subscribed = false;
+		_subscribed = 0;
+		++_imageGeneration;
 		_image->subscribeToUpdates(nullptr);
 	}
 	_communityCache = nullptr;
+	resetAnimationRepaint(_imageRepaint);
 }
 
 QSize DynamicImagePart::countOptimalSize() {
@@ -737,6 +828,10 @@ QSize DynamicImagePart::countOptimalSize() {
 }
 
 QSize DynamicImagePart::countCurrentSize(int newWidth) {
+	if (_repaintWidth != newWidth) {
+		_repaintWidth = newWidth;
+		invalidateAnimationRepaint(_imageRepaint);
+	}
 	return { newWidth, minHeight() };
 }
 
@@ -914,6 +1009,59 @@ PeerBubbleListPart::PeerBubbleListPart(
 
 PeerBubbleListPart::~PeerBubbleListPart() = default;
 
+Fn<void()> PeerBubbleListPart::peerRepaintCallback(
+		int index,
+		uint64 generation,
+		RepaintSource source) const {
+	const auto weak = base::make_weak(this);
+	return [weak, index, generation, source] {
+		const auto strong = weak.get();
+		if (strong) {
+			strong->repaintPeer(index, generation, source);
+		}
+	};
+}
+
+void PeerBubbleListPart::repaintPeer(
+		int index,
+		uint64 generation,
+		RepaintSource source) const {
+	if (generation != _peersGeneration
+		|| index < 0
+		|| index >= int(_peers.size())) {
+		return;
+	}
+	const auto &peer = _peers[index];
+	auto &repaint = (source == RepaintSource::Content)
+		? peer.contentRepaint
+		: peer.rippleRepaint;
+	requestAnimationRepaint(_parent, repaint);
+}
+
+void PeerBubbleListPart::recordPeerRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		RepaintSource source,
+		QRect rect) const {
+	Assert(index >= 0 && index < int(_peers.size()));
+	const auto &peer = _peers[index];
+	auto &repaint = (source == RepaintSource::Content)
+		? peer.contentRepaint
+		: peer.rippleRepaint;
+	recordAnimationRepaint(_parent, p, context, repaint, rect);
+}
+
+void PeerBubbleListPart::invalidatePeerRepaints(Peer &peer) const {
+	invalidateAnimationRepaint(peer.contentRepaint);
+	invalidateAnimationRepaint(peer.rippleRepaint);
+}
+
+void PeerBubbleListPart::resetPeerRepaints(Peer &peer) const {
+	resetAnimationRepaint(peer.contentRepaint);
+	resetAnimationRepaint(peer.rippleRepaint);
+}
+
 void PeerBubbleListPart::draw(
 		Painter &p,
 		not_null<const MediaGeneric*> owner,
@@ -928,12 +1076,37 @@ void PeerBubbleListPart::draw(
 	const auto stm = context.messageStyle();
 	const auto selected = context.selected();
 	const auto padding = st::chatGiveawayPeerPadding;
-	for (const auto &peer : _peers) {
+	const auto count = int(_peers.size());
+	for (auto i = 0; i != count; ++i) {
+		const auto &geometry = _peers[i].geometry;
+		recordPeerRepaint(
+			p,
+			context,
+			i,
+			RepaintSource::Content,
+			QRect(geometry.topLeft(), QSize(size, size)));
+		recordPeerRepaint(
+			p,
+			context,
+			i,
+			RepaintSource::Ripple,
+			style::rtlrect(geometry, width()));
+	}
+	if (!_subscribed) {
+		_subscribed = 1;
+		const auto generation = ++_peersGeneration;
+		for (auto i = 0; i != count; ++i) {
+			_peers[i].thumbnail->subscribeToUpdates(peerRepaintCallback(
+				i,
+				generation,
+				RepaintSource::Content));
+		}
+		_parent->history()->owner().registerHeavyViewPart(_parent);
+	}
+	for (auto i = 0; i != count; ++i) {
+		const auto &peer = _peers[i];
 		const auto &thumbnail = peer.thumbnail;
 		const auto &geometry = peer.geometry;
-		if (!_subscribed) {
-			thumbnail->subscribeToUpdates([=] { _parent->repaint(); });
-		}
 
 		const auto colorIndex = peer.colorIndex;
 		const auto cache = context.outbg
@@ -975,10 +1148,14 @@ void PeerBubbleListPart::draw(
 			.elisionBreakEverywhere = true,
 		});
 	}
-	_subscribed = true;
 }
 
 int PeerBubbleListPart::layout(int x, int y, int available) {
+	auto previous = std::vector<QRect>();
+	previous.reserve(_peers.size());
+	for (const auto &peer : _peers) {
+		previous.push_back(peer.geometry);
+	}
 	const auto size = st::chatGiveawayPeerSize;
 	const auto skip = st::chatGiveawayPeerSkip;
 	const auto padding = st::chatGiveawayPeerPadding;
@@ -1008,6 +1185,16 @@ int PeerBubbleListPart::layout(int x, int y, int available) {
 		left -= width + skip;
 	}
 	shiftRow(count, y, (left + skip) / 2);
+	for (auto i = 0; i != count; ++i) {
+		auto &peer = _peers[i];
+		if (peer.geometry == previous[i]) {
+			continue;
+		}
+		invalidatePeerRepaints(peer);
+		if (peer.geometry.size() != previous[i].size()) {
+			peer.ripple = nullptr;
+		}
+	}
 	return y + size + skip;
 }
 
@@ -1029,18 +1216,22 @@ TextState PeerBubbleListPart::textState(
 void PeerBubbleListPart::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
-	for (auto &peer : _peers) {
+	for (auto i = 0; i != int(_peers.size()); ++i) {
+		auto &peer = _peers[i];
 		if (peer.link != p) {
 			continue;
 		}
 		if (pressed) {
 			if (!peer.ripple) {
 				peer.ripple = std::make_unique<Ui::RippleAnimation>(
-				st::defaultRippleAnimation,
-				Ui::RippleAnimation::RoundRectMask(
-					peer.geometry.size(),
-					peer.geometry.height() / 2),
-					[=] { _parent->repaint(); });
+					st::defaultRippleAnimation,
+					Ui::RippleAnimation::RoundRectMask(
+						peer.geometry.size(),
+						peer.geometry.height() / 2),
+					peerRepaintCallback(
+						i,
+						_peersGeneration,
+						RepaintSource::Ripple));
 			}
 			peer.ripple->add(_lastPoint - peer.geometry.topLeft());
 		} else if (peer.ripple) {
@@ -1055,11 +1246,16 @@ bool PeerBubbleListPart::hasHeavyPart() {
 }
 
 void PeerBubbleListPart::unloadHeavyPart() {
+	++_peersGeneration;
 	if (_subscribed) {
-		_subscribed = false;
+		_subscribed = 0;
 		for (const auto &peer : _peers) {
 			peer.thumbnail->subscribeToUpdates(nullptr);
 		}
+	}
+	for (auto &peer : _peers) {
+		peer.ripple = nullptr;
+		resetPeerRepaints(peer);
 	}
 }
 

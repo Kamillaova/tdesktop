@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/weak_ptr.h"
 #include "history/view/media/history_view_media.h"
 #include "history/view/media/history_view_sticker.h"
 
@@ -28,7 +29,7 @@ namespace HistoryView {
 
 class MediaGeneric;
 
-class MediaGenericPart : public Object {
+class MediaGenericPart : public Object, public base::has_weak_ptr {
 public:
 	using PaintBg = Fn<void(
 		Painter&,
@@ -63,6 +64,27 @@ public:
 		TextSelectType type) const;
 	[[nodiscard]] virtual TextForMimeData selectedText(
 		TextSelection selection) const;
+
+protected:
+	struct AnimationRepaint {
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
+	void requestAnimationRepaint(
+		not_null<Element*> parent,
+		AnimationRepaint &repaint) const;
+	void recordAnimationRepaint(
+		not_null<Element*> parent,
+		const Painter &p,
+		const PaintContext &context,
+		AnimationRepaint &repaint,
+		QRectF rect) const;
+	void invalidateAnimationRepaint(AnimationRepaint &repaint) const;
+	void resetAnimationRepaint(AnimationRepaint &repaint) const;
+
 };
 
 struct MediaGenericDescriptor {
@@ -331,6 +353,8 @@ public:
 	QSize countCurrentSize(int newWidth) override;
 
 private:
+	void repaintImage(uint64 generation) const;
+
 	const not_null<Element*> _parent;
 	const std::shared_ptr<Ui::DynamicImage> _image;
 	const ClickHandlerPtr _link;
@@ -338,7 +362,10 @@ private:
 	const int _size = 0;
 	const bool _communityEffect = false;
 	mutable std::unique_ptr<Ui::CommunityUserpicEffect> _communityCache;
-	mutable bool _subscribed = false;
+	mutable AnimationRepaint _imageRepaint;
+	mutable uint64 _imageGeneration = 0;
+	int _repaintWidth = 0;
+	mutable uint32 _subscribed : 1 = 0;
 
 };
 
@@ -414,7 +441,10 @@ public:
 	QSize countCurrentSize(int newWidth) override;
 
 private:
-	int layout(int x, int y, int available);
+	enum class RepaintSource {
+		Content,
+		Ripple,
+	};
 
 	struct Peer {
 		Ui::Text::String name;
@@ -424,13 +454,34 @@ private:
 		mutable std::unique_ptr<Ui::RippleAnimation> ripple;
 		mutable std::array<QImage, 4> corners;
 		mutable QColor bg;
+		mutable AnimationRepaint contentRepaint;
+		mutable AnimationRepaint rippleRepaint;
 		uint8 colorIndex = 0;
 	};
+
+	int layout(int x, int y, int available);
+	[[nodiscard]] Fn<void()> peerRepaintCallback(
+		int index,
+		uint64 generation,
+		RepaintSource source) const;
+	void repaintPeer(
+		int index,
+		uint64 generation,
+		RepaintSource source) const;
+	void recordPeerRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		RepaintSource source,
+		QRect rect) const;
+	void invalidatePeerRepaints(Peer &peer) const;
+	void resetPeerRepaints(Peer &peer) const;
 
 	const not_null<Element*> _parent;
 	std::vector<Peer> _peers;
 	mutable QPoint _lastPoint;
-	mutable bool _subscribed = false;
+	mutable uint64 _peersGeneration = 0;
+	mutable uint32 _subscribed : 1 = 0;
 
 };
 
