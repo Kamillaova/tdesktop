@@ -177,7 +177,7 @@ void CustomEmoji::interactionLinkClicked() {
 }
 
 CustomEmoji::~CustomEmoji() {
-	if (_hasHeavyPart) {
+	if (hasHeavyPart()) {
 		unloadHeavyPart();
 		_parent->checkHeavyPart();
 	}
@@ -360,12 +360,24 @@ bool CustomEmoji::alwaysShowOutTimestamp() {
 }
 
 bool CustomEmoji::hasHeavyPart() const {
-	return _hasHeavyPart;
+	if (_hasHeavyPart) {
+		return true;
+	}
+	for (const auto &line : _lines) {
+		for (const auto &element : line) {
+			if (const auto sticker = std::get_if<StickerPtr>(&element)) {
+				if ((*sticker)->hasHeavyPart()) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
 }
 
 void CustomEmoji::unloadHeavyPart() {
 	resetCustomRepaints();
-	if (!_hasHeavyPart) {
+	if (!hasHeavyPart()) {
 		return;
 	}
 	const auto unload = [&](const LargeCustomEmoji &element) {
