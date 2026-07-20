@@ -470,6 +470,7 @@ struct Message::FromNameStatus {
 	EmojiStatusId id;
 	std::unique_ptr<Ui::Text::CustomEmoji> custom;
 	ClickHandlerPtr link;
+	QRect lastPaintedRect;
 	int skip = 0;
 };
 
@@ -1682,10 +1683,14 @@ int Message::marginBottom() const {
 }
 
 void Message::draw(Painter &p, const PaintContext &context) const {
+	if (_fromNameStatus) {
+		_fromNameStatus->lastPaintedRect = QRect();
+	}
 	auto g = countGeometry();
 	if (g.width() < 1) {
 		return;
 	}
+	const auto initialTransform = p.transform();
 
 	const auto item = data();
 	const auto media = this->media();
@@ -1933,7 +1938,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (mediaOnTop) {
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
-			paintFromName(p, trect, context);
+			paintFromName(p, trect, context, initialTransform);
 			paintEphemeralBadge(p, trect, context);
 			paintTopicButton(p, trect, context);
 			paintForwardedInfo(p, trect, context);
@@ -2427,7 +2432,8 @@ void Message::paintCommentsButton(
 void Message::paintFromName(
 		Painter &p,
 		QRect &trect,
-		const PaintContext &context) const {
+		const PaintContext &context,
+		const QTransform &initialTransform) const {
 	const auto item = data();
 	if (!displayFromName()) {
 		return;
@@ -2467,13 +2473,26 @@ void Message::paintFromName(
 		auto color = nameFg;
 		color.setAlpha(115);
 		const auto id = from ? from->emojiStatusId() : EmojiStatusId();
+		const auto position = QPoint(
+			x - 2 * _fromNameStatus->skip,
+			y + _fromNameStatus->skip);
+		if (id) {
+			const auto rect = QRect(
+				position,
+				Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
+			_fromNameStatus->lastPaintedRect = initialTransform
+				.inverted()
+				.map(p.transform().map(QPolygonF(QRectF(rect))))
+				.boundingRect()
+				.toAlignedRect();
+		}
 		if (_fromNameStatus->id != id) {
 			const auto that = const_cast<Message*>(this);
 			_fromNameStatus->custom = id
 				? MakeWrappedEmoji<Ui::Text::LimitedLoopsEmoji>(
 					history()->owner().customEmojiManager().create(
 						Data::EmojiStatusCustomId(id),
-						[=] { that->customEmojiRepaint(); }),
+						[=] { that->repaintFromNameStatus(); }),
 					kPlayStatusLimit)
 				: nullptr;
 			if (id && !_fromNameStatus->id) {
@@ -2484,16 +2503,14 @@ void Message::paintFromName(
 			_fromNameStatus->id = id;
 		}
 		if (_fromNameStatus->custom) {
-			clearCustomEmojiRepaint();
 			_fromNameStatus->custom->paint(p, {
 				.textColor = color,
 				.now = context.now,
-				.position = QPoint(
-					x - 2 * _fromNameStatus->skip,
-					y + _fromNameStatus->skip),
+				.position = position,
 				.paused = context.paused || On(PowerSaving::kEmojiStatus),
 			});
 		} else {
+			_fromNameStatus->lastPaintedRect = QRect();
 			st::dialogsPremiumIcon.icon.paint(p, x, y, width(), color);
 		}
 	}
@@ -3714,6 +3731,7 @@ void Message::unloadHeavyPart() {
 	if (_fromNameStatus) {
 		_fromNameStatus->custom = nullptr;
 		_fromNameStatus->id = EmojiStatusId();
+		_fromNameStatus->lastPaintedRect = QRect();
 	}
 	if (const auto summaryHeader = Get<SummaryHeader>()) {
 		summaryHeader->unloadHeavyPart();
@@ -4279,6 +4297,12 @@ void Message::ensureFromNameStatusLink(not_null<PeerData*> peer) const {
 			Settings::ShowEmojiStatusPremium(controller, peer);
 		}
 	});
+}
+
+void Message::repaintFromNameStatus() const {
+	if (_fromNameStatus && !_fromNameStatus->lastPaintedRect.isEmpty()) {
+		repaint(_fromNameStatus->lastPaintedRect);
+	}
 }
 
 bool Message::getStateTopicButton(

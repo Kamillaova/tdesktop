@@ -13,6 +13,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 
 class HistoryItem;
+class QTransform;
 struct HistoryMessageEdited;
 struct HistoryMessageForwarded;
 struct HistoryMessageReplyMarkup;
@@ -356,7 +357,8 @@ private:
 	void paintFromName(
 		Painter &p,
 		QRect &trect,
-		const PaintContext &context) const;
+		const PaintContext &context,
+		const QTransform &initialTransform) const;
 	void paintEphemeralBadge(
 		Painter &p,
 		QRect &trect,
@@ -506,6 +508,7 @@ private:
 	void refreshRightBadge();
 	[[nodiscard]] int rightBadgeWidth() const;
 	void validateFromNameText(PeerData *from) const;
+	void repaintFromNameStatus() const;
 	void ensureFromNameStatusLink(not_null<PeerData*> peer) const;
 
 	mutable std::unique_ptr<RightAction> _rightAction;
