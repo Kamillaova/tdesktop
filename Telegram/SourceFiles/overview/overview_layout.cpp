@@ -206,7 +206,7 @@ QDateTime ItemBase::dateTime() const {
 void ItemBase::clickHandlerActiveChanged(
 		const ClickHandlerPtr &action,
 		bool active) {
-	_parent->history()->session().data().requestItemRepaint(_parent);
+	_delegate->repaintItem(this);
 	if (_check) {
 		_check->setActive(active);
 	}
@@ -215,7 +215,7 @@ void ItemBase::clickHandlerActiveChanged(
 void ItemBase::clickHandlerPressedChanged(
 		const ClickHandlerPtr &action,
 		bool pressed) {
-	_parent->history()->session().data().requestItemRepaint(_parent);
+	_delegate->repaintItem(this);
 	if (_check) {
 		_check->setPressed(pressed);
 	}
@@ -249,7 +249,7 @@ void ItemBase::ensureCheckboxCreated() {
 		return;
 	}
 	const auto repaint = [=] {
-		_parent->history()->session().data().requestItemRepaint(_parent);
+		_delegate->repaintItem(this);
 	};
 	_check = std::make_unique<Checkbox>(repaint, checkboxStyle());
 }
@@ -280,8 +280,7 @@ void RadialProgressItem::clickHandlerActiveChanged(
 	if (action == _openl || action == _savel || action == _cancell) {
 		if (iconAnimated()) {
 			const auto repaint = [=] {
-				parent()->history()->session().data().requestItemRepaint(
-					parent());
+				delegate()->repaintItem(this);
 			};
 			_a_iconOver.start(
 				repaint,
@@ -306,7 +305,7 @@ void RadialProgressItem::radialAnimationCallback(crl::time now) const {
 		return _radial->update(dataProgress(), dataFinished(), now);
 	}();
 	if (!anim::Disabled() || updated) {
-		parent()->history()->session().data().requestItemRepaint(parent());
+		delegate()->repaintItem(this);
 	}
 	if (!_radial->animating()) {
 		checkRadialFinished();
