@@ -162,6 +162,8 @@ protected:
 	int countDesiredHeight(int newWidth) override;
 
 private:
+	struct SetAnimationIdentity;
+	struct StickerAnimationIdentity;
 	struct Sticker;
 	struct Set;
 
@@ -324,11 +326,14 @@ private:
 	void ensureLottiePlayer(Set &set);
 	void setupLottie(Set &set, int section, int index);
 	void setupWebm(Set &set, int section, int index);
+	[[nodiscard]] bool resolveSetAnimationIdentity(
+		const std::shared_ptr<SetAnimationIdentity> &identity,
+		SectionInfo &info) const;
 	void clipCallback(
 		Media::Clip::Notification notification,
-		uint64 setId,
-		not_null<DocumentData*> document,
-		int indexHint);
+		std::weak_ptr<SetAnimationIdentity> setIdentity,
+		std::weak_ptr<StickerAnimationIdentity> stickerIdentity,
+		not_null<DocumentData*> document);
 	[[nodiscard]] bool itemVisible(const SectionInfo &info, int index) const;
 	void markLottieFrameShown(Set &set);
 	void checkVisibleLottie();
@@ -340,11 +345,19 @@ private:
 	void clearHeavyData();
 	void updateItems();
 	void updateSets();
+	void updatePathGradient();
+	void repaintPathGradient();
+	void refreshVisibleSetAnimationIdentities();
+	void refreshVisibleSearchShortcutAnimationIdentities();
 	void repaintItems(crl::time now = 0);
+	void updateSticker(
+		const SectionInfo &info,
+		std::shared_ptr<StickerAnimationIdentity> identity);
 	void updateSet(const SectionInfo &info);
 	void repaintItems(
 		const SectionInfo &info,
 		crl::time now);
+	void clearPendingSetRepaints();
 
 	[[nodiscard]] int stickersRight() const;
 	[[nodiscard]] bool featuredHasAddButton(int index) const;
@@ -376,6 +389,9 @@ private:
 
 	int stickersLeft() const;
 	QRect stickerRect(int section, int sel);
+	[[nodiscard]] QRect stickerRect(
+		const SectionInfo &info,
+		int index) const;
 
 	void removeRecentSticker(int section, int index);
 	void removeFavedSticker(int section, int index);
@@ -471,7 +487,14 @@ private:
 
 	base::Timer _updateItemsTimer;
 	base::Timer _updateSetsTimer;
-	base::flat_set<uint64> _repaintSetsIds;
+	base::Timer _updatePathGradientTimer;
+	std::vector<std::shared_ptr<SetAnimationIdentity>> _repaintSets;
+	std::vector<std::weak_ptr<SetAnimationIdentity>>
+		_visibleSetAnimationIdentities;
+	std::vector<std::weak_ptr<SetAnimationIdentity>>
+		_visibleSearchShortcutAnimationIdentities;
+	crl::time _lastPathGradientUpdate = 0;
+	uint64 _stickerGeometryGeneration = 0;
 
 	StickersListFooter *_footer = nullptr;
 	int _rowsLeft = 0;

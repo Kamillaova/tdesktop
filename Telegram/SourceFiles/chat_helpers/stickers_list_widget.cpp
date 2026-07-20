@@ -100,6 +100,20 @@ base::options::toggle OptionUnlimitedRecentStickers({
 
 const char kOptionUnlimitedRecentStickers[] = "unlimited-recent-stickers";
 
+struct StickersListWidget::SetAnimationIdentity {
+	Section owner = Section::Stickers;
+	SectionInfo info;
+	uint64 geometryGeneration = 0;
+	int searchShortcutIndex = -1;
+	bool repaintPending = false;
+};
+
+struct StickersListWidget::StickerAnimationIdentity {
+	DocumentData *document = nullptr;
+	int index = 0;
+	bool repaintPending = false;
+};
+
 struct StickersListWidget::Sticker {
 	not_null<DocumentData*> document;
 	std::shared_ptr<Data::DocumentMedia> documentMedia;
@@ -108,6 +122,13 @@ struct StickersListWidget::Sticker {
 	QImage savedFrame;
 	QSize savedFrameFor;
 	QImage premiumLock;
+	std::shared_ptr<StickerAnimationIdentity> animationIdentity;
+	QRect animationRepaintRect;
+	QRect pathGradientRepaintRect;
+	uint64 animationRepaintGeneration = 0;
+	uint64 pathGradientRepaintGeneration = 0;
+	bool animationFramePainted = false;
+	bool pathGradientPainted = false;
 
 	void ensureMediaCreated();
 };
@@ -138,9 +159,13 @@ struct StickersListWidget::Set {
 
 	std::unique_ptr<Lottie::MultiPlayer> lottiePlayer;
 	rpl::lifetime lottieLifetime;
+	std::shared_ptr<SetAnimationIdentity> animationIdentity
+		= std::make_shared<SetAnimationIdentity>();
+	std::vector<std::shared_ptr<StickerAnimationIdentity>> repaintStickers;
 
 	int count = 0;
 	bool externalLayout = false;
+	bool repaintLottie = false;
 };
 
 auto StickersListWidget::PrepareStickers(
@@ -220,6 +245,7 @@ StickersListWidget::StickersListWidget(
 , _excludeSetId(descriptor.excludeSetId)
 , _updateItemsTimer([=] { updateItems(); })
 , _updateSetsTimer([=] { updateSets(); })
+, _updatePathGradientTimer([=] { repaintPathGradient(); })
 , _trendingAddBgOver(
 	ImageRoundRadius::Large,
 	st::stickersTrendingAdd.textBgOver)
@@ -236,7 +262,7 @@ StickersListWidget::StickersListWidget(
 , _pathGradient(std::make_unique<Ui::PathShiftGradient>(
 	st().pathBg,
 	st().pathFg,
-	[=] { update(); }))
+	[=] { updatePathGradient(); }))
 , _megagroupSetAbout(st::columnMinimalWidthThird
 	- st::emojiScroll.width
 	- st().headerLeft)
@@ -371,9 +397,10 @@ void StickersListWidget::visibleTopBottomUpdated(
 	Inner::visibleTopBottomUpdated(visibleTop, visibleBottom);
 	if (top != getVisibleTop()) {
 		_lastScrolledAt = crl::now();
-		_repaintSetsIds.clear();
+		clearPendingSetRepaints();
 		update();
 	}
+	refreshVisibleSetAnimationIdentities();
 	if (_section == Section::Featured) {
 		checkVisibleFeatured(visibleTop, visibleBottom);
 	} else {
@@ -534,6 +561,11 @@ bool StickersListWidget::enumerateSections(Callback callback) const {
 			info.rowsBottom = info.rowsTop
 				+ info.rowsCount * _singleSize.height();
 		}
+		set.animationIdentity->owner = _section;
+		set.animationIdentity->info = info;
+		set.animationIdentity->geometryGeneration
+			= _stickerGeometryGeneration;
+		set.animationIdentity->searchShortcutIndex = -1;
 		if (!callback(info)) {
 			return false;
 		}
@@ -579,6 +611,7 @@ int StickersListWidget::countDesiredHeight(int newWidth) {
 	if (newWidth < 2 * minSize) {
 		return 0;
 	}
+	++_stickerGeometryGeneration;
 	auto availableWidth = newWidth
 		- (st::stickerPanPadding - st().margin.left());
 	auto columnCount = availableWidth / minSize;
@@ -609,6 +642,7 @@ int StickersListWidget::countDesiredHeight(int newWidth) {
 		? minimalHeight
 		: 0;
 	const auto result = qMax(minimalHeight, countResult(minimalLastHeight));
+	refreshVisibleSetAnimationIdentities();
 	return result ? (result + st::stickerPanPadding) : 0;
 }
 
@@ -787,6 +821,7 @@ void StickersListWidget::refreshSearchRows(
 					set.ripple = std::move(wasShortcuts[i->second].ripple);
 				}
 			}
+			refreshVisibleSetAnimationIdentities();
 		}
 	});
 
@@ -1024,6 +1059,7 @@ void StickersListWidget::refreshSearchShortcutsScroll(int newWidth) {
 		+ st().margin.right();
 	_searchShortcutsScrollMax = std::max(full - newWidth, 0);
 	scrollSearchShortcutsTo(_searchShortcutsScroll);
+	refreshVisibleSearchShortcutAnimationIdentities();
 }
 
 void StickersListWidget::scrollSearchShortcutsTo(int value) {
@@ -1035,6 +1071,7 @@ void StickersListWidget::scrollSearchShortcutsTo(int value) {
 		return;
 	}
 	_searchShortcutsScroll = scroll;
+	refreshVisibleSearchShortcutAnimationIdentities();
 	update(0, searchShortcutsTop(), width(), searchShortcutsHeight());
 }
 
@@ -1137,8 +1174,12 @@ void StickersListWidget::takeHeavyData(
 }
 
 void StickersListWidget::takeHeavyData(Set &to, Set &from) {
+	to.lastUpdateTime = from.lastUpdateTime;
 	to.lottiePlayer = std::move(from.lottiePlayer);
 	to.lottieLifetime = std::move(from.lottieLifetime);
+	to.animationIdentity = std::move(from.animationIdentity);
+	to.repaintStickers = std::move(from.repaintStickers);
+	to.repaintLottie = from.repaintLottie;
 	auto &toList = to.stickers;
 	auto &fromList = from.stickers;
 	const auto same = ranges::equal(
@@ -1170,6 +1211,11 @@ void StickersListWidget::takeHeavyData(Set &to, Set &from) {
 			}
 		}
 	}
+	for (auto i = 0, count = int(toList.size()); i != count; ++i) {
+		if (const auto identity = toList[i].animationIdentity) {
+			identity->index = i;
+		}
+	}
 }
 
 void StickersListWidget::takeHeavyData(Sticker &to, Sticker &from) {
@@ -1178,6 +1224,7 @@ void StickersListWidget::takeHeavyData(Sticker &to, Sticker &from) {
 	to.savedFrameFor = from.savedFrameFor;
 	to.lottie = base::take(from.lottie);
 	to.webm = base::take(from.webm);
+	to.animationIdentity = std::move(from.animationIdentity);
 }
 
 auto StickersListWidget::shownSets() const -> const std::vector<Set> & {
@@ -1347,12 +1394,16 @@ QRect StickersListWidget::stickerRect(int section, int sel) {
 	if (sel >= shownSets()[section].stickers.size()) {
 		sel -= shownSets()[section].stickers.size();
 	}
-	const auto countTillItem = (sel - (sel % _columnCount));
-	const auto rowsToSkip = (countTillItem / _columnCount)
-		+ ((countTillItem % _columnCount) ? 1 : 0);
+	return stickerRect(info, sel);
+}
+
+QRect StickersListWidget::stickerRect(
+		const SectionInfo &info,
+		int index) const {
 	const auto x = stickersLeft()
-		+ ((sel % _columnCount) * _singleSize.width());
-	const auto y = info.rowsTop + rowsToSkip * _singleSize.height();
+		+ ((index % _columnCount) * _singleSize.width());
+	const auto y = info.rowsTop
+		+ (index / _columnCount) * _singleSize.height();
 	return QRect(QPoint(x, y), _singleSize);
 }
 
@@ -1440,7 +1491,7 @@ void StickersListWidget::paintSearchShortcuts(Painter &p, QRect clip) {
 	for (auto i = 0, count = int(_searchShortcutSets.size()); i != count; ++i) {
 		auto &set = _searchShortcutSets[i];
 		const auto rect = searchShortcutRect(i);
-		if (!rect.intersects(clip)) {
+		if (!myrtlrect(rect).intersects(clip)) {
 			continue;
 		}
 		const auto selected = (set.id == _searchSelectedSetId)
@@ -1518,21 +1569,27 @@ void StickersListWidget::paintSearchShortcutIcon(
 
 	const auto size = ComputeStickerSize(document, rect.size());
 	if (size.isEmpty()) {
+		sticker.pathGradientPainted = false;
 		return;
 	}
 	const auto point = rect.topLeft() + QPoint(
 		(rect.width() - size.width()) / 2,
 		(rect.height() - size.height()) / 2);
+	const auto target = myrtlrect(QRect(point, size));
+	auto pathGradientPainted = false;
 	if (const auto image = media->getStickerSmall()) {
 		const auto pixmap = image->pixSingle(size, { .outer = size });
-		p.drawPixmapLeft(point, width(), pixmap);
+		p.drawPixmap(target.topLeft(), pixmap);
 	} else {
-		PaintStickerThumbnailPath(
+		pathGradientPainted = PaintStickerThumbnailPath(
 			p,
 			media,
-			QRect(point, size),
+			target,
 			_pathGradient.get());
 	}
+	sticker.pathGradientRepaintRect = target;
+	sticker.pathGradientRepaintGeneration = _stickerGeometryGeneration;
+	sticker.pathGradientPainted = pathGradientPainted;
 }
 
 void StickersListWidget::paintStickers(Painter &p, QRect clip) {
@@ -1885,6 +1942,11 @@ void StickersListWidget::checkVisibleLottie() {
 void StickersListWidget::clearHeavyIn(Set &set, bool clearSavedFrames) {
 	const auto player = base::take(set.lottiePlayer);
 	const auto lifetime = base::take(set.lottieLifetime);
+	set.repaintLottie = false;
+	for (const auto &identity : set.repaintStickers) {
+		identity->repaintPending = false;
+	}
+	set.repaintStickers.clear();
 	for (auto &sticker : set.stickers) {
 		if (clearSavedFrames) {
 			sticker.savedFrame = QImage();
@@ -1892,6 +1954,7 @@ void StickersListWidget::clearHeavyIn(Set &set, bool clearSavedFrames) {
 		}
 		sticker.webm = nullptr;
 		sticker.lottie = nullptr;
+		sticker.animationIdentity = nullptr;
 		sticker.documentMedia = nullptr;
 	}
 }
@@ -1981,18 +2044,45 @@ void StickersListWidget::ensureLottiePlayer(Set &set) {
 		Lottie::Quality::Default,
 		getLottieRenderer());
 	const auto raw = set.lottiePlayer.get();
+	const auto identity = std::weak_ptr<SetAnimationIdentity>(
+		set.animationIdentity);
 
 	raw->updates(
 	) | rpl::on_next([=] {
+		const auto strong = identity.lock();
+		if (!strong) {
+			return;
+		}
+		auto info = SectionInfo();
+		if (!resolveSetAnimationIdentity(strong, info)) {
+			return;
+		}
 		auto &sets = shownSets();
-		enumerateSections([&](const SectionInfo &info) {
-			if (sets[info.section].lottiePlayer.get() != raw) {
-				return true;
-			}
-			updateSet(info);
-			return false;
-		});
+		auto &current = sets[info.section];
+		if (current.lottiePlayer.get() != raw) {
+			return;
+		}
+		current.repaintLottie = true;
+		updateSet(info);
 	}, set.lottieLifetime);
+}
+
+bool StickersListWidget::resolveSetAnimationIdentity(
+		const std::shared_ptr<SetAnimationIdentity> &identity,
+		SectionInfo &info) const {
+	if (identity->owner != _section
+		|| identity->geometryGeneration != _stickerGeometryGeneration) {
+		return false;
+	}
+	const auto &sets = shownSets();
+	const auto section = identity->info.section;
+	if (section < 0
+		|| section >= int(sets.size())
+		|| sets[section].animationIdentity.get() != identity.get()) {
+		return false;
+	}
+	info = identity->info;
+	return true;
 }
 
 void StickersListWidget::setupLottie(Set &set, int section, int index) {
@@ -2013,10 +2103,22 @@ void StickersListWidget::setupWebm(Set &set, int section, int index) {
 
 	// Document should be loaded already for the animation to be set up.
 	Assert(sticker.documentMedia != nullptr);
-	const auto setId = set.id;
+	sticker.animationIdentity = std::make_shared<StickerAnimationIdentity>(
+		StickerAnimationIdentity{
+			.document = sticker.document.get(),
+			.index = index,
+		});
+	const auto setIdentity = std::weak_ptr<SetAnimationIdentity>(
+		set.animationIdentity);
+	const auto stickerIdentity = std::weak_ptr<StickerAnimationIdentity>(
+		sticker.animationIdentity);
 	const auto document = sticker.document;
 	auto callback = [=](Media::Clip::Notification notification) {
-		clipCallback(notification, setId, document, index);
+		clipCallback(
+			notification,
+			setIdentity,
+			stickerIdentity,
+			document);
 	};
 	sticker.webm = Media::Clip::MakeReader(
 		sticker.documentMedia->owner()->location(),
@@ -2026,47 +2128,51 @@ void StickersListWidget::setupWebm(Set &set, int section, int index) {
 
 void StickersListWidget::clipCallback(
 		Media::Clip::Notification notification,
-		uint64 setId,
-		not_null<DocumentData*> document,
-		int indexHint) {
-	Expects(indexHint >= 0);
-
+		std::weak_ptr<SetAnimationIdentity> setIdentity,
+		std::weak_ptr<StickerAnimationIdentity> stickerIdentity,
+		not_null<DocumentData*> document) {
+	const auto identity = setIdentity.lock();
+	const auto sticker = stickerIdentity.lock();
+	if (!identity || !sticker) {
+		return;
+	}
+	auto info = SectionInfo();
+	if (!resolveSetAnimationIdentity(identity, info)) {
+		return;
+	}
 	auto &sets = shownSets();
-	enumerateSections([&](const SectionInfo &info) {
-		auto &set = sets[info.section];
-		if (set.id != setId) {
-			return true;
+	auto &set = sets[info.section];
+	const auto index = sticker->index;
+	if (index < 0
+		|| index >= int(set.stickers.size())
+		|| set.stickers[index].animationIdentity.get() != sticker.get()
+		|| set.stickers[index].document != document
+		|| !set.stickers[index].webm) {
+		return;
+	}
+	auto &entry = set.stickers[index];
+	using namespace Media::Clip;
+	switch (notification) {
+	case Notification::Reinit: {
+		auto &webm = entry.webm;
+		if (webm->state() == State::Error) {
+			webm.setBad();
+			entry.animationIdentity = nullptr;
+		} else if (webm->ready() && !webm->started()) {
+			const auto size = ComputeStickerSize(
+				entry.document,
+				boundingBoxSize());
+			webm->start({ .frame = size, .keepAlpha = true });
+		} else if (webm->autoPausedGif() && !itemVisible(info, index)) {
+			webm = nullptr;
+			entry.animationIdentity = nullptr;
 		}
-		using namespace Media::Clip;
-		switch (notification) {
-		case Notification::Reinit: {
-			const auto j = (indexHint < set.stickers.size()
-				&& set.stickers[indexHint].document == document)
-				? (begin(set.stickers) + indexHint)
-				: ranges::find(set.stickers, document, &Sticker::document);
-			if (j == end(set.stickers) || !j->webm) {
-				break;
-			}
-			const auto index = j - begin(set.stickers);
-			auto &webm = j->webm;
-			if (webm->state() == State::Error) {
-				webm.setBad();
-			} else if (webm->ready() && !webm->started()) {
-				const auto size = ComputeStickerSize(
-					j->document,
-					boundingBoxSize());
-				webm->start({ .frame = size, .keepAlpha = true });
-			} else if (webm->autoPausedGif() && !itemVisible(info, index)) {
-				webm = nullptr;
-			}
-		} break;
+	} break;
 
-		case Notification::Repaint: break;
-		}
+	case Notification::Repaint: break;
+	}
 
-		updateSet(info);
-		return false;
-	});
+	updateSticker(info, sticker);
 }
 
 bool StickersListWidget::itemVisible(
@@ -2081,21 +2187,148 @@ bool StickersListWidget::itemVisible(
 }
 
 void StickersListWidget::updateSets() {
-	if (_repaintSetsIds.empty()) {
+	if (_repaintSets.empty()) {
 		return;
 	}
-	auto repaint = base::take(_repaintSetsIds);
-	auto &sets = shownSets();
-	enumerateSections([&](const SectionInfo &info) {
-		if (repaint.contains(sets[info.section].id)) {
+	for (const auto &identity : base::take(_repaintSets)) {
+		identity->repaintPending = false;
+		auto info = SectionInfo();
+		if (resolveSetAnimationIdentity(identity, info)) {
 			updateSet(info);
 		}
+	}
+}
+
+void StickersListWidget::updatePathGradient() {
+	const auto now = crl::now();
+	const auto delay = std::max(
+		_lastScrolledAt + kMinAfterScrollDelay - now,
+		_lastPathGradientUpdate + kMinRepaintDelay - now);
+	if (delay <= 0) {
+		repaintPathGradient();
+	} else if (!_updatePathGradientTimer.isActive()
+		|| _updatePathGradientTimer.remainingTime() > kMinRepaintDelay) {
+		_updatePathGradientTimer.callOnce(
+			std::max(delay, kMinRepaintDelay));
+	}
+}
+
+void StickersListWidget::repaintPathGradient() {
+	_lastPathGradientUpdate = crl::now();
+	for (const auto &weak : _visibleSetAnimationIdentities) {
+		const auto identity = weak.lock();
+		if (!identity) {
+			continue;
+		}
+		auto info = SectionInfo();
+		if (!resolveSetAnimationIdentity(identity, info)) {
+			continue;
+		}
+		const auto &set = shownSets()[info.section];
+		const auto count = std::min(
+			info.count,
+			info.rowsCount * _columnCount);
+		const auto fromRow = floorclamp(
+			getVisibleTop() - info.rowsTop,
+			_singleSize.height(),
+			0,
+			info.rowsCount);
+		const auto toRow = ceilclamp(
+			getVisibleBottom() - info.rowsTop,
+			_singleSize.height(),
+			0,
+			info.rowsCount);
+		const auto from = std::min(count, fromRow * _columnCount);
+		const auto till = std::min(count, toRow * _columnCount);
+		for (auto i = from; i != till; ++i) {
+			const auto &sticker = set.stickers[i];
+			if (sticker.pathGradientPainted
+				&& sticker.pathGradientRepaintGeneration
+					== _stickerGeometryGeneration) {
+				update(sticker.pathGradientRepaintRect);
+			}
+		}
+	}
+	for (const auto &weak : _visibleSearchShortcutAnimationIdentities) {
+		const auto identity = weak.lock();
+		if (!identity
+			|| identity->owner != Section::Search
+			|| identity->geometryGeneration != _stickerGeometryGeneration) {
+			continue;
+		}
+		const auto index = identity->searchShortcutIndex;
+		if (index < 0
+			|| index >= int(_searchShortcutSets.size())
+			|| _searchShortcutSets[index].animationIdentity.get()
+				!= identity.get()
+			|| _searchShortcutSets[index].stickers.empty()) {
+			continue;
+		}
+		const auto &sticker = _searchShortcutSets[index].stickers.front();
+		if (sticker.pathGradientPainted
+			&& sticker.pathGradientRepaintGeneration
+				== _stickerGeometryGeneration) {
+			update(sticker.pathGradientRepaintRect);
+		}
+	}
+}
+
+void StickersListWidget::refreshVisibleSetAnimationIdentities() {
+	_visibleSetAnimationIdentities.clear();
+	const auto top = getVisibleTop();
+	const auto bottom = getVisibleBottom();
+	const auto &sets = shownSets();
+	enumerateSections([&](const SectionInfo &info) {
+		if (info.rowsBottom <= top || info.rowsTop >= bottom) {
+			return true;
+		}
+		_visibleSetAnimationIdentities.push_back(
+			sets[info.section].animationIdentity);
 		return true;
 	});
+	refreshVisibleSearchShortcutAnimationIdentities();
+}
+
+void StickersListWidget::refreshVisibleSearchShortcutAnimationIdentities() {
+	_visibleSearchShortcutAnimationIdentities.clear();
+	if (!searchShortcutsShown()) {
+		return;
+	}
+	const auto visible = QRect(
+		0,
+		getVisibleTop(),
+		width(),
+		getVisibleBottom() - getVisibleTop());
+	for (auto i = 0, count = int(_searchShortcutSets.size());
+			i != count;
+			++i) {
+		if (!myrtlrect(searchShortcutRect(i)).intersects(visible)) {
+			continue;
+		}
+		auto &identity = _searchShortcutSets[i].animationIdentity;
+		identity->owner = Section::Search;
+		identity->geometryGeneration = _stickerGeometryGeneration;
+		identity->searchShortcutIndex = i;
+		_visibleSearchShortcutAnimationIdentities.push_back(identity);
+	}
+}
+
+void StickersListWidget::updateSticker(
+		const SectionInfo &info,
+		std::shared_ptr<StickerAnimationIdentity> identity) {
+	auto &set = shownSets()[info.section];
+	if (!identity->repaintPending) {
+		identity->repaintPending = true;
+		set.repaintStickers.push_back(std::move(identity));
+	}
+	updateSet(info);
 }
 
 void StickersListWidget::updateSet(const SectionInfo &info) {
 	auto &set = shownSets()[info.section];
+	if (!set.repaintLottie && set.repaintStickers.empty()) {
+		return;
+	}
 
 	const auto now = crl::now();
 	const auto delay = std::max(
@@ -2104,7 +2337,10 @@ void StickersListWidget::updateSet(const SectionInfo &info) {
 	if (delay <= 0) {
 		repaintItems(info, now);
 	} else {
-		_repaintSetsIds.emplace(set.id);
+		if (!set.animationIdentity->repaintPending) {
+			set.animationIdentity->repaintPending = true;
+			_repaintSets.push_back(set.animationIdentity);
+		}
 		if (!_updateSetsTimer.isActive()
 			|| _updateSetsTimer.remainingTime() > kMinRepaintDelay) {
 			_updateSetsTimer.callOnce(std::max(delay, kMinRepaintDelay));
@@ -2119,27 +2355,116 @@ void StickersListWidget::repaintItems(
 	const auto count = std::min(
 		info.count,
 		info.rowsCount * _columnCount);
-	auto repaintedRow = -1;
-	for (auto i = 0; i != count; ++i) {
-		const auto &sticker = set.stickers[i];
-		if (itemVisible(info, i)
-			&& (sticker.lottie || sticker.webm || sticker.webm.isBad())) {
-			if (rtl()) {
-				const auto row = i / _columnCount;
-				if (repaintedRow != row) {
-					repaintedRow = row;
-					update(
-						0,
-						info.rowsTop + row * _singleSize.height(),
-						width(),
-						_singleSize.height());
-				}
-			} else {
-				rtlupdate(stickerRect(info.section, i));
+	const auto fromRow = floorclamp(
+		getVisibleTop() - info.rowsTop,
+		_singleSize.height(),
+		0,
+		info.rowsCount);
+	const auto toRow = ceilclamp(
+		getVisibleBottom() - info.rowsTop,
+		_singleSize.height(),
+		0,
+		info.rowsCount);
+	const auto from = std::min(count, fromRow * _columnCount);
+	const auto till = std::min(count, toRow * _columnCount);
+	const auto repaintLottie = base::take(set.repaintLottie);
+	const auto repaintStickers = base::take(set.repaintStickers);
+	auto selected = std::vector<bool>(till - from, false);
+	if (repaintLottie) {
+		for (auto i = from; i != till; ++i) {
+			if (set.stickers[i].lottie) {
+				selected[i - from] = true;
+			}
+		}
+	}
+	for (const auto &identity : repaintStickers) {
+		identity->repaintPending = false;
+		auto index = identity->index;
+		if (index < from
+			|| index >= till
+			|| set.stickers[index].document != identity->document) {
+			const auto i = ranges::find(
+				begin(set.stickers) + from,
+				begin(set.stickers) + till,
+				identity->document,
+				&Sticker::document);
+			if (i == begin(set.stickers) + till) {
+				continue;
+			}
+			index = i - begin(set.stickers);
+		}
+		selected[index - from] = true;
+	}
+	auto indices = std::vector<int>();
+	indices.reserve(selected.size());
+	for (auto i = 0, size = int(selected.size()); i != size; ++i) {
+		if (selected[i]) {
+			indices.push_back(from + i);
+		}
+	}
+	const auto gridRect = [&](int rowFrom, int rowTill) {
+		const auto columns = (rowTill == rowFrom + 1)
+			? std::min(
+				_columnCount,
+				count - rowFrom * _columnCount)
+			: _columnCount;
+		return myrtlrect(QRect(
+			stickersLeft(),
+			info.rowsTop + rowFrom * _singleSize.height(),
+			columns * _singleSize.width(),
+			(rowTill - rowFrom) * _singleSize.height()));
+	};
+	const auto visibleCount = till - from;
+	if (visibleCount > 0
+		&& int(indices.size()) * 2 >= visibleCount) {
+		update(gridRect(fromRow, toRow));
+	} else {
+		for (auto i = begin(indices); i != end(indices);) {
+			const auto row = *i / _columnCount;
+			const auto rowBegin = i;
+			while (i != end(indices) && *i / _columnCount == row) {
+				++i;
+			}
+			const auto rowCount = std::min(
+				_columnCount,
+				count - row * _columnCount);
+			if (int(i - rowBegin) * 2 >= rowCount) {
+				update(gridRect(row, row + 1));
+				continue;
+			}
+			for (auto j = rowBegin; j != i; ++j) {
+				const auto index = *j;
+				const auto &sticker = set.stickers[index];
+				const auto framePaintedNow = (sticker.lottie
+						&& sticker.lottie->ready())
+					|| (sticker.webm && sticker.webm->started());
+				const auto exact = (sticker.animationRepaintGeneration
+						== _stickerGeometryGeneration)
+					&& (sticker.animationFramePainted == framePaintedNow)
+					&& !sticker.animationRepaintRect.isEmpty();
+				update(exact
+					? sticker.animationRepaintRect
+					: myrtlrect(stickerRect(info, index)));
 			}
 		}
 	}
 	set.lastUpdateTime = now;
+}
+
+void StickersListWidget::clearPendingSetRepaints() {
+	_updateSetsTimer.cancel();
+	_updatePathGradientTimer.cancel();
+	for (const auto &identity : _repaintSets) {
+		identity->repaintPending = false;
+	}
+	_repaintSets.clear();
+	for (auto &set : shownSets()) {
+		set.repaintLottie = false;
+		for (const auto &identity : set.repaintStickers) {
+			identity->repaintPending = false;
+		}
+		set.repaintStickers.clear();
+	}
 }
 
 void StickersListWidget::updateItems() {
@@ -2156,8 +2481,9 @@ void StickersListWidget::updateItems() {
 }
 
 void StickersListWidget::repaintItems(crl::time now) {
+	refreshVisibleSetAnimationIdentities();
 	update();
-	_repaintSetsIds.clear();
+	clearPendingSetRepaints();
 	if (!now) {
 		now = crl::now();
 	}
@@ -2222,15 +2548,23 @@ void StickersListWidget::paintSticker(
 	const auto ppos = pos + QPoint(
 		(_singleSize.width() - size.width()) / 2,
 		(_singleSize.height() - size.height()) / 2);
+	const auto target = myrtlrect(QRect(ppos, size));
 
 	auto lottieFrame = QImage();
+	auto animationRepaintRect = target;
+	auto animationFramePainted = false;
+	auto pathGradientPainted = false;
 	if (sticker.lottie && sticker.lottie->ready()) {
 		auto request = Lottie::FrameRequest();
 		request.box = boundingBoxSize() * style::DevicePixelRatio();
 		lottieFrame = sticker.lottie->frame(request);
+		animationRepaintRect = myrtlrect(QRect(
+			ppos,
+			lottieFrame.size() / style::DevicePixelRatio()));
 		p.drawImage(
-			QRect(ppos, lottieFrame.size() / style::DevicePixelRatio()),
+			animationRepaintRect,
 			lottieFrame);
+		animationFramePainted = true;
 		if (sticker.savedFrame.isNull()) {
 			sticker.savedFrame = lottieFrame;
 			sticker.savedFrame.setDevicePixelRatio(style::DevicePixelRatio());
@@ -2246,19 +2580,20 @@ void StickersListWidget::paintSticker(
 			sticker.savedFrame.setDevicePixelRatio(style::DevicePixelRatio());
 			sticker.savedFrameFor = _singleSize;
 		}
-		p.drawImage(ppos, frame);
+		p.drawImage(target, frame);
+		animationFramePainted = true;
 	} else {
 		const auto image = media->getStickerSmall();
 		const auto useSavedFrame = !sticker.savedFrame.isNull()
 			&& (sticker.savedFrameFor == _singleSize);
 		if (useSavedFrame) {
-			p.drawImage(ppos, sticker.savedFrame);
+			p.drawImage(target, sticker.savedFrame);
 			if (premium) {
 				lottieFrame = sticker.savedFrame;
 			}
 		} else if (image) {
 			const auto pixmap = image->pixSingle(size, { .outer = size });
-			p.drawPixmapLeft(ppos, width(), pixmap);
+			p.drawPixmap(target.topLeft(), pixmap);
 			if (sticker.savedFrame.isNull()) {
 				sticker.savedFrame = pixmap.toImage().convertToFormat(
 					QImage::Format_ARGB32_Premultiplied);
@@ -2270,13 +2605,25 @@ void StickersListWidget::paintSticker(
 			}
 		} else {
 			p.setOpacity(1.);
-			PaintStickerThumbnailPath(
+			pathGradientPainted = PaintStickerThumbnailPath(
 				p,
 				media.get(),
-				QRect(ppos, size),
+				target,
 				_pathGradient.get());
 		}
 	}
+	if (p.device() == this
+		&& !sticker.animationRepaintRect.isEmpty()
+		&& sticker.animationRepaintRect != animationRepaintRect) {
+		update(sticker.animationRepaintRect);
+		update(animationRepaintRect);
+	}
+	sticker.animationRepaintRect = animationRepaintRect;
+	sticker.animationRepaintGeneration = _stickerGeometryGeneration;
+	sticker.animationFramePainted = animationFramePainted;
+	sticker.pathGradientRepaintRect = target;
+	sticker.pathGradientRepaintGeneration = _stickerGeometryGeneration;
+	sticker.pathGradientPainted = pathGradientPainted;
 
 	if (selected && stickerHasDeleteButton(set, index)) {
 		const auto xPos = pos
