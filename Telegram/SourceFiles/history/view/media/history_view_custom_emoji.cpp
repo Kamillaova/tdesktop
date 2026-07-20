@@ -86,10 +86,13 @@ CustomEmoji::CustomEmoji(
 		_lines.emplace_back();
 		for (const auto &element : line) {
 			if (useCustomEmoji) {
+				const auto index = int(_customRepaintRects.size());
+				_customRepaintRects.emplace_back();
+				_customRepaintPending.push_back(0);
 				_lines.back().push_back(
 					manager->create(
 						element.entityData,
-						[=] { parent->customEmojiRepaint(); },
+						[=] { repaintCustom(index); },
 						tag));
 			} else {
 				const auto &data = element.entityData;
@@ -187,6 +190,7 @@ CustomEmoji::~CustomEmoji() {
 QSize CustomEmoji::countOptimalSize() {
 	Expects(!_lines.empty());
 
+	resetCustomRepaints();
 	const auto max = ranges::max_element(
 		_lines,
 		std::less<>(),
@@ -198,6 +202,7 @@ QSize CustomEmoji::countOptimalSize() {
 }
 
 QSize CustomEmoji::countCurrentSize(int newWidth) {
+	resetCustomRepaints();
 	const auto perRow = std::max(newWidth / _singleSize, 1);
 	auto width = 0;
 	auto height = 0;
@@ -217,6 +222,7 @@ void CustomEmoji::draw(
 
 	auto x = r.x();
 	auto y = r.y();
+	auto customIndex = 0;
 	const auto perRow = std::max(r.width() / _singleSize, 1);
 	for (auto &line : _lines) {
 		const auto count = int(line.size());
@@ -227,13 +233,20 @@ void CustomEmoji::draw(
 				if (index >= count) {
 					break;
 				}
-				paintElement(p, x, y, line[index], context);
+				paintElement(
+					p,
+					x,
+					y,
+					line[index],
+					customIndex,
+					context);
 				x += _singleSize;
 			}
 			x = r.x();
 			y += _singleSize;
 		}
 	}
+	Ensures(customIndex == int(_customRepaintRects.size()));
 }
 
 void CustomEmoji::paintElement(
@@ -241,11 +254,12 @@ void CustomEmoji::paintElement(
 		int x,
 		int y,
 		LargeCustomEmoji &element,
+		int &customIndex,
 		const PaintContext &context) {
 	if (const auto sticker = std::get_if<StickerPtr>(&element)) {
 		paintSticker(p, x, y, sticker->get(), context);
 	} else if (const auto custom = std::get_if<CustomPtr>(&element)) {
-		paintCustom(p, x, y, custom->get(), context);
+		paintCustom(p, x, y, customIndex++, custom->get(), context);
 	}
 }
 
@@ -262,6 +276,7 @@ void CustomEmoji::paintCustom(
 		Painter &p,
 		int x,
 		int y,
+		int index,
 		not_null<Ui::Text::CustomEmoji*> emoji,
 		const PaintContext &context) {
 	if (!_hasHeavyPart) {
@@ -271,6 +286,8 @@ void CustomEmoji::paintCustom(
 	//const auto preview = context.imageStyle()->msgServiceBg->c;
 	auto &textst = context.st->messageStyle(false, false);
 	const auto paused = context.paused || On(PowerSaving::kEmojiChat);
+	const auto rect = QRect(x, y, _singleSize, _singleSize);
+	recordCustomFrame(p, context, index, rect);
 	if (context.selected()) {
 		const auto factor = style::DevicePixelRatio();
 		const auto size = QSize(_singleSize, _singleSize) * factor;
@@ -292,15 +309,50 @@ void CustomEmoji::paintCustom(
 		_selectedFrame = Images::Colored(
 			std::move(_selectedFrame),
 			context.st->msgStickerOverlay()->c);
-		p.drawImage(x, y, _selectedFrame);
+		p.drawImage(rect.topLeft(), _selectedFrame);
 	} else {
 		emoji->paint(p, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
-			.position = { x, y },
+			.position = rect.topLeft(),
 			.paused = paused,
 		});
 	}
+}
+
+void CustomEmoji::repaintCustom(int index) {
+	Expects(index >= 0 && index < int(_customRepaintRects.size()));
+
+	if (_customRepaintPending[index]) {
+		return;
+	}
+	_customRepaintPending[index] = 1;
+	if (_customRepaintRects[index].isEmpty()) {
+		_parent->customEmojiRepaint();
+	} else {
+		_parent->repaint(_customRepaintRects[index]);
+	}
+}
+
+void CustomEmoji::recordCustomFrame(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		QRect rect) {
+	Expects(index >= 0 && index < int(_customRepaintRects.size()));
+
+	if (context.hasElementPainter(p)) {
+		_customRepaintPending[index] = 0;
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		_customRepaintRects[index] = mapped ? *mapped : QRect();
+	} else if (_customRepaintRects[index].isEmpty()) {
+		_customRepaintPending[index] = 0;
+	}
+}
+
+void CustomEmoji::resetCustomRepaints() {
+	ranges::fill(_customRepaintRects, QRect());
+	ranges::fill(_customRepaintPending, uint8(0));
 }
 
 bool CustomEmoji::alwaysShowOutTimestamp() {
@@ -312,6 +364,7 @@ bool CustomEmoji::hasHeavyPart() const {
 }
 
 void CustomEmoji::unloadHeavyPart() {
+	resetCustomRepaints();
 	if (!_hasHeavyPart) {
 		return;
 	}

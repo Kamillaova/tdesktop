@@ -64,6 +64,7 @@ private:
 		int x,
 		int y,
 		LargeCustomEmoji &element,
+		int &customIndex,
 		const PaintContext &context);
 	void paintSticker(
 		Painter &p,
@@ -75,8 +76,16 @@ private:
 		Painter &p,
 		int x,
 		int y,
+		int index,
 		not_null<Ui::Text::CustomEmoji*> emoji,
 		const PaintContext &context);
+	void repaintCustom(int index);
+	void recordCustomFrame(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		QRect rect);
+	void resetCustomRepaints();
 
 	[[nodiscard]] not_null<Data::CustomEmojiManager::Listener*> listener() {
 		return this;
@@ -91,6 +100,8 @@ private:
 
 	const not_null<Element*> _parent;
 	std::vector<std::vector<LargeCustomEmoji>> _lines;
+	std::vector<QRect> _customRepaintRects;
+	std::vector<uint8> _customRepaintPending;
 	ClickHandlerPtr _interactionLink;
 	QImage _selectedFrame;
 	int _singleSize = 0;
