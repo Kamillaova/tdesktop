@@ -133,7 +133,8 @@ private:
 	void refreshMosaicOffset();
 
 	void showPreview();
-	void updateInlineItems();
+	void updateInlineItems(const ItemBase *layout = nullptr);
+	void repaintPendingItems();
 	void repaintItems(crl::time now = 0);
 	void clearInlineRows(bool resultsDeleted);
 	ItemBase *layoutPrepareInlineResult(std::shared_ptr<Result> result);
@@ -158,6 +159,8 @@ private:
 	crl::time _lastScrolledAt = 0;
 	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
+	Results _pendingRepaintResults;
+	bool _repaintAllPending = false;
 	bool _inlineWithThumb = false;
 	bool _gallery = false;
 

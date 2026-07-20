@@ -37,6 +37,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtGui/QRegion>
 #include <QtWidgets/QApplication>
 
 namespace InlineBots {
@@ -57,7 +58,7 @@ Inner::Inner(
 	st::windowBgRipple,
 	st::windowBgOver,
 	[=] { repaintItems(); }))
-, _updateInlineItems([=] { updateInlineItems(); })
+, _updateInlineItems([=] { repaintPendingItems(); })
 , _mosaic(st::emojiPanWidth - st::emojiScroll.width - st::inlineResultsLeft)
 , _previewTimer([=] { showPreview(); }) {
 	resize(st::emojiPanWidth - st::emojiScroll.width - st::roundRadiusSmall, st::inlineResultsMinHeight);
@@ -619,7 +620,7 @@ void Inner::inlineItemLayoutChanged(const ItemBase *layout) {
 }
 
 void Inner::inlineItemRepaint(const ItemBase *layout) {
-	updateInlineItems();
+	updateInlineItems(layout);
 }
 
 bool Inner::inlineItemVisible(const ItemBase *layout) {
@@ -706,22 +707,82 @@ void Inner::showPreview() {
 	}
 }
 
-void Inner::updateInlineItems() {
+void Inner::updateInlineItems(const ItemBase *layout) {
+	if (!_repaintAllPending) {
+		if (layout) {
+			const auto result = layout->getResult();
+			if (!result) {
+				_pendingRepaintResults.clear();
+				_repaintAllPending = true;
+			} else if (ranges::find(
+					_pendingRepaintResults,
+					result) == end(_pendingRepaintResults)) {
+				_pendingRepaintResults.push_back(result);
+			}
+		} else {
+			_pendingRepaintResults.clear();
+			_repaintAllPending = true;
+		}
+	}
+
 	const auto now = crl::now();
 
 	const auto delay = std::max(
 		_lastScrolledAt + kMinAfterScrollDelay - now,
 		_lastUpdatedAt + kMinRepaintDelay - now);
 	if (delay <= 0) {
-		repaintItems();
+		repaintPendingItems();
 	} else if (!_updateInlineItems.isActive()
 		|| _updateInlineItems.remainingTime() > kMinRepaintDelay) {
 		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
 	}
 }
 
+void Inner::repaintPendingItems() {
+	const auto now = crl::now();
+	const auto delay = std::max(
+		_lastScrolledAt + kMinAfterScrollDelay - now,
+		_lastUpdatedAt + kMinRepaintDelay - now);
+	if (delay > 0) {
+		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
+		return;
+	}
+	if (_repaintAllPending) {
+		repaintItems(now);
+		return;
+	}
+
+	_lastUpdatedAt = now;
+	_updateInlineItems.cancel();
+	const auto pending = base::take(_pendingRepaintResults);
+	const auto visible = QRect(
+		0,
+		_visibleTop,
+		width(),
+		_visibleBottom - _visibleTop);
+	auto damage = QRegion();
+	_mosaic.forEach([&](not_null<const ItemBase*> item) {
+		if (ranges::find(
+				pending,
+				item->getResult()) == end(pending)) {
+			return;
+		}
+		const auto rect = _mosaic.findRect(item->position());
+		const auto updateRect = rtl()
+			? QRect(0, rect.y(), width(), rect.height())
+			: rect;
+		damage += updateRect.intersected(visible);
+	});
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}
+
 void Inner::repaintItems(crl::time now) {
 	_lastUpdatedAt = now ? now : crl::now();
+	_updateInlineItems.cancel();
+	_pendingRepaintResults.clear();
+	_repaintAllPending = false;
 	update();
 }
 
