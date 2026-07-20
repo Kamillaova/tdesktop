@@ -53,11 +53,21 @@ private:
 		QPainter &p,
 		int x,
 		int y,
+		int index,
 		not_null<Ui::Text::CustomEmoji*> emoji,
 		const PaintContext &context);
+	void repaintCustom(int index);
+	void recordCustomFrame(
+		const QPainter &p,
+		const PaintContext &context,
+		int index,
+		QRect rect);
+	void resetCustomRepaints();
 
 	const not_null<Element*> _parent;
 	const std::array<LargeEmojiMedia, Ui::Text::kIsolatedEmojiLimit> _images;
+	std::array<QRect, Ui::Text::kIsolatedEmojiLimit> _customRepaintRects;
+	std::array<bool, Ui::Text::kIsolatedEmojiLimit> _customRepaintPending = {};
 	QImage _selectedFrame;
 	QSize _size;
 	bool _hasHeavyPart = false;

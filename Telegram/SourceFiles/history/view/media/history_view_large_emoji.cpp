@@ -29,25 +29,25 @@ using CustomPtr = std::unique_ptr<Ui::Text::CustomEmoji>;
 
 auto ResolveImages(
 	not_null<Main::Session*> session,
-	Fn<void()> customEmojiRepaint,
+	Fn<void(int)> customEmojiRepaint,
 	const Ui::Text::IsolatedEmoji &emoji)
 -> std::array<LargeEmojiMedia, Ui::Text::kIsolatedEmojiLimit> {
-	const auto single = [&](Ui::Text::IsolatedEmoji::Item item)
+	const auto single = [&](Ui::Text::IsolatedEmoji::Item item, int index)
 	-> LargeEmojiMedia {
 		if (const auto regular = std::get_if<EmojiPtr>(&item)) {
 			return session->emojiStickersPack().image(*regular);
 		} else if (const auto custom = std::get_if<QString>(&item)) {
 			return session->data().customEmojiManager().create(
 				*custom,
-				customEmojiRepaint,
+				[=] { customEmojiRepaint(index); },
 				Data::CustomEmojiManager::SizeTag::Isolated);
 		}
 		return v::null;
 	};
 	return { {
-		single(emoji.items[0]),
-		single(emoji.items[1]),
-		single(emoji.items[2]) } };
+		single(emoji.items[0], 0),
+		single(emoji.items[1], 1),
+		single(emoji.items[2], 2) } };
 }
 
 } // namespace
@@ -58,7 +58,7 @@ LargeEmoji::LargeEmoji(
 : _parent(parent)
 , _images(ResolveImages(
 	&parent->history()->session(),
-	[=] { parent->customEmojiRepaint(); },
+	[=](int index) { repaintCustom(index); },
 	emoji)) {
 }
 
@@ -72,6 +72,7 @@ LargeEmoji::~LargeEmoji() {
 QSize LargeEmoji::countOptimalSize() {
 	using namespace rpl::mappers;
 
+	resetCustomRepaints();
 	const auto count = _images.size()
 		- ranges::count(_images, LargeEmojiMedia());
 
@@ -100,7 +101,8 @@ void LargeEmoji::draw(
 	if (!selected) {
 		_selectedFrame = QImage();
 	}
-	for (const auto &media : _images) {
+	for (auto index = 0; index != int(_images.size()); ++index) {
+		const auto &media = _images[index];
 		if (const auto image = std::get_if<ImagePtr>(&media)) {
 			if (const auto &prepared = (*image)->image) {
 				const auto colored = selected
@@ -114,7 +116,7 @@ void LargeEmoji::draw(
 				(*image)->load();
 			}
 		} else if (const auto custom = std::get_if<CustomPtr>(&media)) {
-			paintCustom(p, x, y, custom->get(), context);
+			paintCustom(p, x, y, index, custom->get(), context);
 		} else {
 			continue;
 		}
@@ -126,6 +128,7 @@ void LargeEmoji::paintCustom(
 		QPainter &p,
 		int x,
 		int y,
+		int index,
 		not_null<Ui::Text::CustomEmoji*> emoji,
 		const PaintContext &context) {
 	if (!_hasHeavyPart) {
@@ -135,6 +138,8 @@ void LargeEmoji::paintCustom(
 	const auto inner = st::largeEmojiSize + 2 * st::largeEmojiOutline;
 	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
 	const auto skip = (inner - outer) / 2;
+	const auto rect = QRect(x + skip, y + skip, outer, outer);
+	recordCustomFrame(p, context, index, rect);
 	//const auto preview = context.imageStyle()->msgServiceBg->c;
 	auto &textst = context.st->messageStyle(false, false);
 	if (context.selected()) {
@@ -158,15 +163,50 @@ void LargeEmoji::paintCustom(
 		_selectedFrame = Images::Colored(
 			std::move(_selectedFrame),
 			context.st->msgStickerOverlay()->c);
-		p.drawImage(x + skip, y + skip, _selectedFrame);
+		p.drawImage(rect.topLeft(), _selectedFrame);
 	} else {
 		emoji->paint(p, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
-			.position = { x + skip, y + skip },
+			.position = rect.topLeft(),
 			.paused = context.paused,
 		});
 	}
+}
+
+void LargeEmoji::repaintCustom(int index) {
+	Expects(index >= 0 && index < int(_customRepaintRects.size()));
+
+	if (_customRepaintPending[index]) {
+		return;
+	}
+	_customRepaintPending[index] = true;
+	if (_customRepaintRects[index].isEmpty()) {
+		_parent->customEmojiRepaint();
+	} else {
+		_parent->repaint(_customRepaintRects[index]);
+	}
+}
+
+void LargeEmoji::recordCustomFrame(
+		const QPainter &p,
+		const PaintContext &context,
+		int index,
+		QRect rect) {
+	Expects(index >= 0 && index < int(_customRepaintRects.size()));
+
+	if (context.hasElementPainter(p)) {
+		_customRepaintPending[index] = false;
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		_customRepaintRects[index] = mapped ? *mapped : QRect();
+	} else if (_customRepaintRects[index].isEmpty()) {
+		_customRepaintPending[index] = false;
+	}
+}
+
+void LargeEmoji::resetCustomRepaints() {
+	_customRepaintRects = {};
+	_customRepaintPending = {};
 }
 
 bool LargeEmoji::hasHeavyPart() const {
@@ -174,6 +214,7 @@ bool LargeEmoji::hasHeavyPart() const {
 }
 
 void LargeEmoji::unloadHeavyPart() {
+	resetCustomRepaints();
 	if (_hasHeavyPart) {
 		_hasHeavyPart = false;
 		for (auto &media : _images) {
