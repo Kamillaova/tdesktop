@@ -112,6 +112,11 @@ constexpr auto kVoteRestrictionToastDuration = 5 * crl::time(1000);
 	return st::historyPollPercentSkip * 2;
 }
 
+[[nodiscard]] bool HasPollAnswerTextAnimation(
+		const Ui::Text::String &text) {
+	return text.hasCustomEmoji() || text.hasSpoilers();
+}
+
 enum class PollThumbnailKind {
 	None,
 	Photo,
@@ -3706,7 +3711,7 @@ void Poll::Options::answerTextUpdated(
 		&Answer::option);
 	if (answer == end(_answers)
 		|| answer->textGeneration != generation
-		|| !answer->text.hasCustomEmoji()) {
+		|| !HasPollAnswerTextAnimation(answer->text)) {
 		return;
 	}
 	const auto repaint = ranges::find(
@@ -3746,7 +3751,7 @@ void Poll::Options::syncAnswerTextRepaints() {
 			repaint.option,
 			&Answer::option);
 		const auto generation = (answer != end(_answers)
-			&& answer->text.hasCustomEmoji())
+			&& HasPollAnswerTextAnimation(answer->text))
 			? answer->textGeneration
 			: 0;
 		if (repaint.generation == generation) {
@@ -3760,7 +3765,7 @@ void Poll::Options::syncAnswerTextRepaints() {
 		repaint.collectingRepaintRegion = false;
 	}
 	for (const auto &answer : _answers) {
-		if (!answer.text.hasCustomEmoji()) {
+		if (!HasPollAnswerTextAnimation(answer.text)) {
 			continue;
 		}
 		const auto repaint = ranges::find(
@@ -3799,7 +3804,7 @@ void Poll::Options::recordAnswerTextRect(
 		const PaintContext &context,
 		const Answer &answer,
 		QRect rect) const {
-	if (!answer.text.hasCustomEmoji()) {
+	if (!HasPollAnswerTextAnimation(answer.text)) {
 		return;
 	}
 	const auto repaint = ranges::find(
