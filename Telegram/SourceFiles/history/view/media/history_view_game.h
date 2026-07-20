@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/view/media/history_view_media.h"
 
+#include <QtGui/QRegion>
+
 class ReplyMarkupClickHandler;
 
 namespace Ui {
@@ -89,6 +91,14 @@ public:
 	~Game();
 
 private:
+	struct DescriptionRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
 	void playAnimation(bool autoplay) override;
 	[[nodiscard]] QSize countOptimalSize() override;
 	[[nodiscard]] QSize countCurrentSize(int newWidth) override;
@@ -100,6 +110,17 @@ private:
 	[[nodiscard]] QMargins inBubblePadding() const;
 	[[nodiscard]] QMargins innerMargin() const;
 	[[nodiscard]] int bottomInfoPadding() const;
+	void setDescription(const TextWithEntities &description);
+	[[nodiscard]] Fn<void()> descriptionRepaintCallback(uint64 generation);
+	void repaintDescription(uint64 generation) const;
+	void recordDescriptionRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect,
+		int visibleLines,
+		int removeFromEnd) const;
+	void invalidateDescriptionRepaint() const;
+	void repaintDescriptionRegion(const QRegion &region) const;
 
 	const style::QuoteStyle &_st;
 	const not_null<GameData*> _data;
@@ -114,6 +135,7 @@ private:
 
 	Ui::Text::String _title;
 	Ui::Text::String _description;
+	mutable DescriptionRepaint _descriptionRepaint;
 
 };
 

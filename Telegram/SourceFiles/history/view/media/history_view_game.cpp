@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
 #include "ui/item_text_options.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/cached_round_corners.h"
 #include "ui/chat/chat_style.h"
@@ -27,6 +28,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 
 namespace HistoryView {
+namespace {
+
+[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
+} // namespace
 
 Game::Game(
 	not_null<Element*> parent,
@@ -38,20 +51,13 @@ Game::Game(
 , _title(st::msgMinWidth - _st.padding.left() - _st.padding.right())
 , _description(st::msgMinWidth - _st.padding.left() - _st.padding.right()) {
 	if (!consumed.text.isEmpty()) {
-		const auto context = Core::TextContext({
-			.session = &history()->session(),
-			.repaint = [=] { _parent->customEmojiRepaint(); },
-		});
-		_description.setMarkedText(
-			st::webPageDescriptionStyle,
-			consumed,
-			Ui::ItemTextOptions(parent->data()),
-			context);
+		setDescription(consumed);
 	}
 	history()->owner().registerGameView(_data, _parent);
 }
 
 QSize Game::countOptimalSize() {
+	invalidateDescriptionRepaint();
 	auto lineHeight = UnitedLineHeight();
 
 	const auto item = _parent->data();
@@ -150,6 +156,7 @@ void Game::refreshParentId(not_null<HistoryItem*> realParent) {
 }
 
 QSize Game::countCurrentSize(int newWidth) {
+	invalidateDescriptionRepaint();
 	accumulate_min(newWidth, maxWidth());
 	const auto padding = inBubblePadding() + innerMargin();
 	auto innerWidth = newWidth - padding.left() - padding.right();
@@ -207,6 +214,7 @@ TextSelection Game::fromDescriptionSelection(
 
 void Game::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordDescriptionRepaintRect(p, context, QRect(), 0, 0);
 		return;
 	}
 
@@ -279,6 +287,16 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 		if (_description.hasSkipBlock()) {
 			endskip = _parent->skipBlockWidth();
 		}
+		recordDescriptionRepaintRect(
+			p,
+			context,
+			QRect(
+				inner.left(),
+				tshift,
+				paintw,
+				_descriptionLines * lineHeight),
+			_descriptionLines,
+			endskip);
 		_parent->prepareCustomEmojiPaint(p, context, _description);
 		_description.draw(p, {
 			.position = { inner.left(), tshift },
@@ -294,6 +312,8 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			.useFullWidth = true,
 		});
 		tshift += _descriptionLines * lineHeight;
+	} else {
+		recordDescriptionRepaintRect(p, context, QRect(), 0, 0);
 	}
 	if (_attach) {
 		auto attachAtTop = !_titleLines && !_descriptionLines;
@@ -509,23 +529,164 @@ int Game::bottomInfoPadding() const {
 
 void Game::parentTextUpdated() {
 	if (const auto media = _parent->data()->media()) {
-		const auto consumed = media->consumedMessageText();
-		if (!consumed.text.isEmpty()) {
-			const auto context = Core::TextContext({
-				.session = &history()->session(),
-				.repaint = [=] { _parent->customEmojiRepaint(); },
-			});
-			_description.setMarkedText(
-				st::webPageDescriptionStyle,
-				consumed,
-				Ui::ItemTextOptions(_parent->data()),
-				context);
-		} else {
-			_description = Ui::Text::String(st::msgMinWidth
-				- _st.padding.left()
-				- _st.padding.right());
-		}
+		setDescription(media->consumedMessageText());
 		history()->owner().requestViewResize(_parent);
+	}
+}
+
+void Game::setDescription(const TextWithEntities &description) {
+	invalidateDescriptionRepaint();
+	const auto generation = ++_descriptionRepaint.generation;
+	if (description.text.isEmpty()) {
+		_description = Ui::Text::String(st::msgMinWidth
+			- _st.padding.left()
+			- _st.padding.right());
+		return;
+	}
+	_description.setMarkedText(
+		st::webPageDescriptionStyle,
+		description,
+		Ui::ItemTextOptions(_parent->data()),
+		Core::TextContext({
+			.session = &history()->session(),
+			.repaint = descriptionRepaintCallback(generation),
+		}));
+}
+
+Fn<void()> Game::descriptionRepaintCallback(uint64 generation) {
+	const auto weak = base::make_weak(this);
+	return [weak, generation] {
+		if (const auto strong = weak.get()) {
+			strong->repaintDescription(generation);
+		}
+	};
+}
+
+void Game::repaintDescription(uint64 generation) const {
+	if (_descriptionRepaint.generation != generation
+		|| _descriptionRepaint.pending) {
+		return;
+	} else if (_descriptionRepaint.known
+		&& _descriptionRepaint.current.isEmpty()) {
+		return;
+	}
+	_descriptionRepaint.pending = true;
+	if (!_descriptionRepaint.known) {
+		_parent->customEmojiRepaint();
+	} else {
+		repaintDescriptionRegion(_descriptionRepaint.current);
+	}
+}
+
+void Game::recordDescriptionRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect,
+		int visibleLines,
+		int removeFromEnd) const {
+	if (!context.hasElementPainter(p)) {
+		if (!_descriptionRepaint.known) {
+			if (_descriptionRepaint.pending) {
+				_parent->clearCustomEmojiRepaint();
+			}
+			_descriptionRepaint.pending = false;
+		}
+		return;
+	}
+	if (_descriptionRepaint.pending && !_descriptionRepaint.known) {
+		_parent->clearCustomEmojiRepaint();
+	}
+	_descriptionRepaint.pending = false;
+	auto region = QRegion();
+	auto geometryKnown = true;
+	const auto customEmoji = _description.hasCustomEmoji();
+	const auto animated = customEmoji || _description.hasSpoilers();
+	if (animated && !rect.isEmpty() && visibleLines > 0) {
+		const auto lines = _description.countLinesGeometry(rect.width());
+		const auto count = std::min(visibleLines, int(lines.size()));
+		const auto conservativeLast = removeFromEnd > 0
+			|| int(lines.size()) > visibleLines;
+		const auto margins = customEmoji
+			? CustomEmojiRepaintMargins()
+			: QMargins();
+		auto lineTop = 0;
+		if (!count) {
+			geometryKnown = false;
+		}
+		for (auto i = 0; i != count; ++i) {
+			const auto lineBottom = std::clamp(
+				lines[i].bottom,
+				lineTop,
+				rect.height());
+			auto lineLeft = std::clamp(
+				lines[i].left,
+				0,
+				rect.width());
+			auto lineWidth = std::clamp(
+				lines[i].width,
+				0,
+				rect.width());
+			if ((i + 1 == count) && conservativeLast) {
+				lineLeft = 0;
+				lineWidth = rect.width();
+			} else if (lines[i].rtl) {
+				lineLeft = rect.width() - lineWidth;
+			} else {
+				lineWidth = std::min(
+					lineWidth,
+					rect.width() - lineLeft);
+			}
+			if (lineWidth > 0 && lineBottom > lineTop) {
+				auto lineRect = QRectF(
+					rect.x() + lineLeft,
+					rect.y() + lineTop,
+					lineWidth,
+					lineBottom - lineTop);
+				if (customEmoji) {
+					lineRect = lineRect.marginsAdded(
+						QMarginsF(margins));
+				}
+				const auto mapped = context.mapToElement(p, lineRect);
+				if (!mapped || mapped->isEmpty()) {
+					geometryKnown = false;
+					break;
+				}
+				region += *mapped;
+			}
+			lineTop = lineBottom;
+		}
+	}
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(_descriptionRepaint.stale);
+	const auto previous = stale.united(
+		base::take(_descriptionRepaint.current));
+	_descriptionRepaint.current = std::move(region);
+	_descriptionRepaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty()
+			&& previous == _descriptionRepaint.current)) {
+		return;
+	}
+	_descriptionRepaint.pending = true;
+	repaintDescriptionRegion(
+		previous.united(_descriptionRepaint.current));
+}
+
+void Game::invalidateDescriptionRepaint() const {
+	if (_descriptionRepaint.pending && !_descriptionRepaint.known) {
+		_parent->clearCustomEmojiRepaint();
+	}
+	_descriptionRepaint.stale = _descriptionRepaint.stale.united(
+		base::take(_descriptionRepaint.current));
+	_descriptionRepaint.pending = false;
+	_descriptionRepaint.known = false;
+}
+
+void Game::repaintDescriptionRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
 	}
 }
 
@@ -541,6 +702,8 @@ void Game::unloadHeavyPart() {
 }
 
 Game::~Game() {
+	invalidateDescriptionRepaint();
+	++_descriptionRepaint.generation;
 	history()->owner().unregisterGameView(_data, _parent);
 }
 
