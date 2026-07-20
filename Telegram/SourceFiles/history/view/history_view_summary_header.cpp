@@ -83,10 +83,16 @@ bool SummaryHeader::isNameUpdated(not_null<const Element*> view) const {
 }
 
 int SummaryHeader::resizeToWidth(int width) const {
-	_ripple.animation = nullptr;
-	_height = st::historyReplyPadding.top()
+	const auto height = st::historyReplyPadding.top()
 		+ st::msgServiceNameFont->height * 2
 		+ st::historyReplyPadding.bottom();
+	if (_width != width || _height != height) {
+		invalidateRippleRepaint(_ripple.repaint);
+		invalidateRippleRepaint(_iconRipple.repaint);
+	}
+	_ripple.animation = nullptr;
+	++_ripple.repaint.generation;
+	_height = height;
 	_width = width;
 	return _height;
 }
@@ -112,6 +118,7 @@ void SummaryHeader::paint(
 
 	y += st::historyReplyTop;
 	const auto rect = QRect(x, y, w, _height);
+	recordRippleRepaint(view, _ripple.repaint, p, context, rect);
 	const auto colorPattern = 0;
 	const auto cache = !inBubble
 		? st->serviceReplyCache(colorPattern).get()
@@ -135,16 +142,20 @@ void SummaryHeader::paint(
 	}
 	{
 		const auto r = iconRect().translated(x, y);
+		recordRippleRepaint(view, _iconRipple.repaint, p, context, r);
 		const auto lottieX = r.x() + st::historySummaryHeaderIconSizeInner;
 		const auto lottieY = r.y() + st::historySummaryHeaderIconSizeInner;
 		_lottie->paint(p, lottieX, lottieY, nameColor);
 		if (_iconRipple.animation) {
+			p.save();
+			p.translate(r.topLeft());
 			_iconRipple.animation->paint(
 				p,
-				r.x(),
-				r.y(),
+				0,
+				0,
 				r.width(),
 				&rippleColor);
+			p.restore();
 			if (_iconRipple.animation->empty()) {
 				_iconRipple.animation.reset();
 			}
@@ -230,7 +241,15 @@ void SummaryHeader::paint(
 	}
 
 	if (_ripple.animation) {
-		_ripple.animation->paint(p, x, y, w, &rippleColor);
+		p.save();
+		p.translate(rect.topLeft());
+		_ripple.animation->paint(
+			p,
+			0,
+			0,
+			rect.width(),
+			&rippleColor);
+		p.restore();
 		if (_ripple.animation->empty()) {
 			_ripple.animation.reset();
 		}
@@ -276,17 +295,109 @@ void SummaryHeader::repaintParticles(
 void SummaryHeader::createRippleAnimation(
 		not_null<const Element*> view,
 		QSize size) {
+	const auto weak = base::make_weak(view);
+	const auto rippleGeneration = ++_ripple.repaint.generation;
 	_ripple.animation = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		Ui::RippleAnimation::RoundRectMask(
 			size,
 			st::messageQuoteStyle.radius),
-		[=] { view->repaint(); });
+		[weak, rippleGeneration] {
+			if (const auto strong = weak.get()) {
+				if (const auto header = strong->Get<SummaryHeader>()) {
+					header->repaintRipple(
+						strong,
+						header->_ripple.repaint,
+						rippleGeneration);
+				}
+			}
+		});
 	const auto rippleIconSize = st::historySummaryHeaderIconSize;
+	const auto iconRippleGeneration = ++_iconRipple.repaint.generation;
 	_iconRipple.animation = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		Ui::RippleAnimation::EllipseMask(Size(rippleIconSize)),
-		[=] { view->repaint(); });
+		[weak, iconRippleGeneration] {
+			if (const auto strong = weak.get()) {
+				if (const auto header = strong->Get<SummaryHeader>()) {
+					header->repaintRipple(
+						strong,
+						header->_iconRipple.repaint,
+						iconRippleGeneration);
+				}
+			}
+		});
+}
+
+void SummaryHeader::repaintRipple(
+		not_null<const Element*> view,
+		RippleRepaint &repaint,
+		uint64 generation) const {
+	if (repaint.generation != generation || repaint.pending) {
+		return;
+	} else if (repaint.known && repaint.current.isEmpty()) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		view->repaint();
+	} else {
+		repaintRippleRegion(view, repaint.current);
+	}
+}
+
+void SummaryHeader::recordRippleRepaint(
+		not_null<const Element*> view,
+		RippleRepaint &repaint,
+		const Painter &p,
+		const Ui::ChatPaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped) {
+			known = false;
+		} else if (!mapped->isEmpty()) {
+			current += *mapped;
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			view->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRippleRegion(view, previous.united(repaint.current));
+}
+
+void SummaryHeader::invalidateRippleRepaint(
+		RippleRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void SummaryHeader::repaintRippleRegion(
+		not_null<const Element*> view,
+		const QRegion &region) const {
+	for (const auto &rect : region) {
+		view->repaint(rect);
+	}
 }
 
 void SummaryHeader::saveRipplePoint(QPoint point) const {
@@ -320,7 +431,9 @@ void SummaryHeader::unloadHeavyPart() {
 	_unloadTime = crl::now();
 	_animation = nullptr;
 	_ripple.animation = nullptr;
+	++_ripple.repaint.generation;
 	_iconRipple.animation = nullptr;
+	++_iconRipple.repaint.generation;
 	_lottie = nullptr;
 }
 

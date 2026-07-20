@@ -58,9 +58,30 @@ private:
 		Rect,
 		Full,
 	};
+	struct RippleRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	void ensureAnimation() const;
 	void ensureLottie() const;
+	void repaintRipple(
+		not_null<const Element*> view,
+		RippleRepaint &repaint,
+		uint64 generation) const;
+	void recordRippleRepaint(
+		not_null<const Element*> view,
+		RippleRepaint &repaint,
+		const Painter &p,
+		const Ui::ChatPaintContext &context,
+		QRect rect) const;
+	void invalidateRippleRepaint(RippleRepaint &repaint) const;
+	void repaintRippleRegion(
+		not_null<const Element*> view,
+		const QRegion &region) const;
 	void scheduleParticlesRepaint(
 		not_null<const Element*> view,
 		std::optional<QRect> rect) const;
@@ -78,10 +99,12 @@ private:
 	mutable struct {
 		mutable std::unique_ptr<Ui::RippleAnimation> animation;
 		QPoint lastPoint;
+		RippleRepaint repaint;
 	} _ripple;
 	mutable struct {
 		mutable std::unique_ptr<Ui::RippleAnimation> animation;
 		QPoint lastPoint;
+		RippleRepaint repaint;
 	} _iconRipple;
 	mutable Ui::Text::String _name;
 	mutable Ui::Text::String _text;
