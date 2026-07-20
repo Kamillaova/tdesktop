@@ -261,6 +261,10 @@ QSize Contact::countOptimalSize() {
 	}
 
 	const auto vcardBoxFactory = _vcardBoxFactory;
+	for (auto &repaint : _buttonRippleRepaints) {
+		invalidateRippleRepaint(repaint);
+		repaint.generation = ++_nextRippleGeneration;
+	}
 	_buttons.clear();
 	if (_contact) {
 		const auto message = tr::lng_contact_send_message(tr::now).toUpper();
@@ -331,7 +335,26 @@ QSize Contact::countOptimalSize() {
 }
 
 void Contact::draw(Painter &p, const PaintContext &context) const {
+	const auto canonical = context.hasElementPainter(p);
+	if (canonical && _rippleLayoutSize != currentSize()) {
+		_rippleLayoutSize = currentSize();
+		invalidateRippleRepaints();
+	}
 	if (width() < rect::m::sum::h(st::msgPadding) + 1) {
+		if (canonical) {
+			recordRippleRepaint(
+				_mainRippleRepaint,
+				p,
+				context,
+				QRect());
+			for (auto &repaint : _buttonRippleRepaints) {
+				recordRippleRepaint(
+					repaint,
+					p,
+					context,
+					QRect());
+			}
+		}
 		return;
 	}
 
@@ -400,15 +423,32 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 		}
 	}
 
+	if (canonical
+		&& _mainButton.ripple
+		&& _mainButton.rippleSize != outer.size()) {
+		_mainButton.ripple = nullptr;
+		_mainButton.rippleSize = QSize();
+		_mainRippleRepaint.generation = ++_nextRippleGeneration;
+	}
+	recordRippleRepaint(
+		_mainRippleRepaint,
+		p,
+		context,
+		outer);
 	if (_mainButton.ripple) {
+		p.save();
+		p.translate(outer.topLeft());
 		_mainButton.ripple->paint(
 			p,
-			outer.x(),
-			outer.y(),
-			width(),
+			0,
+			0,
+			_mainButton.rippleSize.width(),
 			&cache->bg);
+		p.restore();
 		if (_mainButton.ripple->empty()) {
 			_mainButton.ripple = nullptr;
+			_mainButton.rippleSize = QSize();
+			_mainRippleRepaint.generation = ++_nextRippleGeneration;
 		}
 	}
 
@@ -503,10 +543,30 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 		for (auto i = 0; i < _buttons.size(); i++) {
 			const auto &button = _buttons[i];
 			const auto left = inner.x() + i * buttonWidth;
+			const auto rect = buttonRect(inner, outer, i);
+			auto &repaint = buttonRippleRepaint(i);
+			if (canonical
+				&& button.ripple
+				&& button.rippleSize != rect.size()) {
+				button.ripple = nullptr;
+				button.rippleSize = QSize();
+				repaint.generation = ++_nextRippleGeneration;
+			}
+			recordRippleRepaint(repaint, p, context, rect);
 			if (button.ripple) {
-				button.ripple->paint(p, left, end, buttonWidth, &cache->bg);
+				p.save();
+				p.translate(rect.topLeft());
+				button.ripple->paint(
+					p,
+					0,
+					0,
+					button.rippleSize.width(),
+					&cache->bg);
+				p.restore();
 				if (button.ripple->empty()) {
 					_buttons[i].ripple = nullptr;
+					_buttons[i].rippleSize = QSize();
+					repaint.generation = ++_nextRippleGeneration;
 				}
 			}
 			p.drawText(
@@ -514,6 +574,16 @@ void Contact::draw(Painter &p, const PaintContext &context) const {
 				top + st::semiboldFont->ascent,
 				button.text);
 		}
+	}
+	for (auto i = _buttons.size(); i < _buttonRippleRepaints.size(); ++i) {
+		recordRippleRepaint(
+			_buttonRippleRepaints[i],
+			p,
+			context,
+			QRect());
+	}
+	if (canonical && _buttonRippleRepaints.size() > _buttons.size()) {
+		_buttonRippleRepaints.resize(_buttons.size());
 	}
 }
 
@@ -574,13 +644,20 @@ void Contact::clickHandlerPressedChanged(
 		}
 		if (pressed) {
 			if (!_mainButton.ripple) {
-				const auto owner = &parent()->history()->owner();
+				const auto weak = base::make_weak(this);
+				const auto generation = resetRippleRepaint(
+					_mainRippleRepaint);
+				_mainButton.rippleSize = outer.size();
 				_mainButton.ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
 						outer.size(),
 						_st.radius),
-					[=] { owner->requestViewRepaint(parent()); });
+					[weak, generation] {
+						if (const auto strong = weak.get()) {
+							strong->repaintMainRipple(generation);
+						}
+					});
 			}
 			_mainButton.ripple->add(_lastPoint - outer.topLeft());
 		} else if (_mainButton.ripple) {
@@ -590,8 +667,6 @@ void Contact::clickHandlerPressedChanged(
 	} else if (_buttons.empty()) {
 		return;
 	}
-	const auto bWidth = inner.width() / float64(_buttons.size());
-	const auto bHeight = rect::bottom(outer) - end;
 	for (auto i = 0; i < _buttons.size(); i++) {
 		const auto &button = _buttons[i];
 		if (p != button.link) {
@@ -599,24 +674,133 @@ void Contact::clickHandlerPressedChanged(
 		}
 		if (pressed) {
 			if (!button.ripple) {
-				const auto owner = &parent()->history()->owner();
-
+				const auto rect = buttonRect(inner, outer, i);
+				auto &repaint = buttonRippleRepaint(i);
+				const auto weak = base::make_weak(this);
+				const auto generation = resetRippleRepaint(repaint);
+				_buttons[i].rippleSize = rect.size();
 				_buttons[i].ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::MaskByDrawer(
-						QSize(bWidth, bHeight),
+						rect.size(),
 						false,
 						[=](QPainter &p) {
-							p.drawRect(0, 0, bWidth, bHeight);
+							p.drawRect(Rect(rect.size()));
 						}),
-					[=] { owner->requestViewRepaint(parent()); });
+					[weak, index = i, generation] {
+						if (const auto strong = weak.get()) {
+							strong->repaintButtonRipple(
+								index,
+								generation);
+						}
+					});
 			}
-			button.ripple->add(_lastPoint
-				- QPoint(inner.x() + i * bWidth, end));
+			button.ripple->add(
+				_lastPoint - buttonRect(inner, outer, i).topLeft());
 		} else if (button.ripple) {
 			button.ripple->lastStop();
 		}
 	}
+}
+
+void Contact::repaintMainRipple(uint64 generation) const {
+	repaintRipple(_mainRippleRepaint, generation);
+}
+
+void Contact::repaintButtonRipple(int index, uint64 generation) const {
+	if (index < 0
+		|| index >= _buttons.size()
+		|| index >= _buttonRippleRepaints.size()) {
+		return;
+	}
+	repaintRipple(_buttonRippleRepaints[index], generation);
+}
+
+void Contact::repaintRipple(
+		RippleRepaint &repaint,
+		uint64 generation) const {
+	if (repaint.generation != generation
+		|| repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = 1;
+	if (!repaint.known) {
+		this->repaint();
+	} else {
+		repaintRippleRegion(repaint.current);
+	}
+}
+
+void Contact::recordRippleRepaint(
+		RippleRepaint &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = 0;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known ? 1 : 0;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = 1;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = 1;
+	repaintRippleRegion(previous.united(repaint.current));
+}
+
+void Contact::invalidateRippleRepaint(RippleRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = 0;
+	repaint.known = 0;
+}
+
+void Contact::invalidateRippleRepaints() const {
+	invalidateRippleRepaint(_mainRippleRepaint);
+	for (auto &repaint : _buttonRippleRepaints) {
+		invalidateRippleRepaint(repaint);
+	}
+}
+
+void Contact::repaintRippleRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+Contact::RippleRepaint &Contact::buttonRippleRepaint(int index) const {
+	Expects(index >= 0);
+	if (_buttonRippleRepaints.size() <= index) {
+		_buttonRippleRepaints.resize(index + 1);
+	}
+	return _buttonRippleRepaints[index];
+}
+
+uint64 Contact::resetRippleRepaint(RippleRepaint &repaint) const {
+	repaint.pending = 0;
+	repaint.generation = ++_nextRippleGeneration;
+	return repaint.generation;
 }
 
 QMargins Contact::inBubblePadding() const {
@@ -647,6 +831,21 @@ int Contact::bottomInfoPadding() const {
 	// back with st::msgPadding.bottom() instead of left().
 	result += st::msgPadding.bottom() - st::msgPadding.left();
 	return result;
+}
+
+QRect Contact::buttonRect(
+		const QRect &inner,
+		const QRect &outer,
+		int index) const {
+	Expects(index >= 0 && index < _buttons.size());
+	const auto top = rect::bottom(inner) + _st.padding.bottom();
+	const auto width = inner.width() / float64(_buttons.size());
+	return {
+		int(inner.x() + index * width),
+		top,
+		int(width),
+		rect::bottom(outer) - top,
+	};
 }
 
 TextSelection Contact::toTitleSelection(TextSelection selection) const {
