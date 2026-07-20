@@ -58,7 +58,7 @@ public:
 	InlineList(
 		not_null<::Data::Reactions*> owner,
 		Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
-		Fn<void()> customEmojiRepaint,
+		Fn<void(QRect)> customEmojiRepaint,
 		Data &&data);
 	~InlineList();
 
@@ -114,6 +114,7 @@ private:
 		bool someNotLoaded = false;
 	};
 	struct Button;
+	struct CustomEmojiRepaint;
 	struct RippleEffect;
 
 	void layout();
@@ -128,10 +129,25 @@ private:
 	void resolveUserpicsImage(const Button &button) const;
 	void paintCustomFrame(
 		Painter &p,
-		not_null<Ui::Text::CustomEmoji*> emoji,
-		QPoint innerTopLeft,
+		const Button &button,
+		QRect target,
 		const PaintContext &context,
 		const QColor &textColor) const;
+	void customEmojiUpdated(
+		const ReactionId &id,
+		uint64 generation) const;
+	void invalidateCustomEmojiRepaints();
+	void syncCustomEmojiRepaints();
+	void beginCustomEmojiPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	void recordCustomEmojiRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Button &button,
+		QRect rect) const;
+	void finishCustomEmojiPaint() const;
+	void repaintCustomEmojiRegion(const QRegion &region) const;
 	void paintSingleBg(
 		Painter &p,
 		const QRect &fill,
@@ -145,14 +161,15 @@ private:
 
 	const not_null<::Data::Reactions*> _owner;
 	const Fn<ClickHandlerPtr(ReactionId)> _handlerFactory;
-	const Fn<void()> _customEmojiRepaint;
+	const Fn<void(QRect)> _customEmojiRepaint;
 	Data _data;
+	mutable std::vector<CustomEmojiRepaint> _customEmojiRepaints;
 	std::vector<Button> _buttons;
 	QSize _skipBlock;
 	mutable QImage _tagBg;
 	mutable QColor _tagBgColor;
 	mutable QImage _customCache;
-	mutable int _customSkip = 0;
+	uint64 _customEmojiGeneration = 0;
 	bool _hasCustomEmoji = false;
 	mutable std::unique_ptr<RippleEffect> _ripple;
 	mutable QPoint _lastPoint;

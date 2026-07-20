@@ -89,9 +89,20 @@ struct InlineList::Button {
 	QString text;
 	int textWidth = 0;
 	int count = 0;
+	uint64 customGeneration = 0;
 	bool chosen = false;
 	bool paid = false;
 	bool tag = false;
+};
+
+struct InlineList::CustomEmojiRepaint {
+	ReactionId id;
+	uint64 generation = 0;
+	QRegion repaintRegion;
+	QRegion collectedRepaintRegion;
+	QRegion staleRepaintRegion;
+	bool repaintPending = false;
+	bool collectingRepaintRegion = false;
 };
 
 struct InlineList::RippleEffect : Ui::RippleAnimation {
@@ -113,7 +124,7 @@ struct InlineList::RippleEffect : Ui::RippleAnimation {
 InlineList::InlineList(
 	not_null<::Data::Reactions*> owner,
 	Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
-	Fn<void()> customEmojiRepaint,
+	Fn<void(QRect)> customEmojiRepaint,
 	Data &&data)
 : _owner(owner)
 , _handlerFactory(std::move(handlerFactory))
@@ -125,6 +136,7 @@ InlineList::InlineList(
 InlineList::~InlineList() = default;
 
 void InlineList::update(Data &&data, int availableWidth) {
+	invalidateCustomEmojiRepaints();
 	_data = std::move(data);
 	layout();
 	if (width() > 0) {
@@ -169,8 +181,149 @@ void InlineList::unloadCustomEmoji() {
 	_customCache = QImage();
 }
 
+void InlineList::customEmojiUpdated(
+		const ReactionId &id,
+		uint64 generation) const {
+	const auto button = ranges::find(_buttons, id, &Button::id);
+	if (button == end(_buttons)
+		|| !button->custom
+		|| button->customGeneration != generation) {
+		return;
+	}
+	const auto repaint = ranges::find(
+		_customEmojiRepaints,
+		id,
+		&CustomEmojiRepaint::id);
+	if (repaint == end(_customEmojiRepaints)
+		|| repaint->generation != generation) {
+		_customEmojiRepaint(QRect());
+		return;
+	} else if (repaint->repaintPending) {
+		return;
+	}
+	repaint->repaintPending = true;
+	if (repaint->repaintRegion.isEmpty()) {
+		_customEmojiRepaint(QRect());
+	} else {
+		repaintCustomEmojiRegion(repaint->repaintRegion);
+	}
+}
+
+void InlineList::invalidateCustomEmojiRepaints() {
+	for (auto &repaint : _customEmojiRepaints) {
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+}
+
+void InlineList::syncCustomEmojiRepaints() {
+	for (auto &repaint : _customEmojiRepaints) {
+		const auto button = ranges::find(_buttons, repaint.id, &Button::id);
+		const auto generation = (button != end(_buttons) && button->custom)
+			? button->customGeneration
+			: 0;
+		if (repaint.generation == generation) {
+			continue;
+		}
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.generation = generation;
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+	for (const auto &button : _buttons) {
+		if (!button.custom) {
+			continue;
+		}
+		const auto repaint = ranges::find(
+			_customEmojiRepaints,
+			button.id,
+			&CustomEmojiRepaint::id);
+		if (repaint == end(_customEmojiRepaints)) {
+			_customEmojiRepaints.push_back({
+				.id = button.id,
+				.generation = button.customGeneration,
+			});
+		}
+	}
+}
+
+void InlineList::beginCustomEmojiPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	const auto collect = context.hasElementPainter(p);
+	for (auto &repaint : _customEmojiRepaints) {
+		if (collect) {
+			repaint.repaintPending = false;
+			repaint.collectedRepaintRegion = QRegion();
+			repaint.collectingRepaintRegion = true;
+		} else {
+			if (repaint.repaintRegion.isEmpty()) {
+				repaint.repaintPending = false;
+			}
+			repaint.collectingRepaintRegion = false;
+		}
+	}
+}
+
+void InlineList::recordCustomEmojiRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Button &button,
+		QRect rect) const {
+	const auto repaint = ranges::find(
+		_customEmojiRepaints,
+		button.id,
+		&CustomEmojiRepaint::id);
+	if (repaint == end(_customEmojiRepaints)
+		|| repaint->generation != button.customGeneration
+		|| !repaint->collectingRepaintRegion) {
+		return;
+	}
+	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+		repaint->collectedRepaintRegion += *mapped;
+	}
+}
+
+void InlineList::finishCustomEmojiPaint() const {
+	auto repaintRegion = QRegion();
+	for (auto i = begin(_customEmojiRepaints);
+			i != end(_customEmojiRepaints);) {
+		if (!i->collectingRepaintRegion) {
+			++i;
+			continue;
+		}
+		i->collectingRepaintRegion = false;
+		const auto stale = base::take(i->staleRepaintRegion);
+		const auto previous = stale.united(base::take(i->repaintRegion));
+		i->repaintRegion = base::take(i->collectedRepaintRegion);
+		if (!previous.isEmpty()
+			&& (!stale.isEmpty() || previous != i->repaintRegion)) {
+			i->repaintPending = true;
+			repaintRegion += previous.united(i->repaintRegion);
+		}
+		if (!i->generation && i->repaintRegion.isEmpty()) {
+			i = _customEmojiRepaints.erase(i);
+		} else {
+			++i;
+		}
+	}
+	repaintCustomEmojiRegion(repaintRegion);
+}
+
+void InlineList::repaintCustomEmojiRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_customEmojiRepaint(rect);
+	}
+}
+
 void InlineList::layout() {
 	layoutButtons();
+	syncCustomEmojiRepaints();
 	initDimensions();
 }
 
@@ -249,9 +402,11 @@ InlineList::Dimension InlineList::countDimension(int width) const {
 InlineList::Button InlineList::prepareButtonWithId(const ReactionId &id) {
 	auto result = Button{ .id = id, .paid = id.paid()};
 	if (const auto customId = id.custom()) {
+		const auto generation = ++_customEmojiGeneration;
+		result.customGeneration = generation;
 		result.custom = _owner->owner().customEmojiManager().create(
 			customId,
-			_customEmojiRepaint);
+			[=] { customEmojiUpdated(id, generation); });
 	} else {
 		_owner->preloadReactionImageFor(id);
 	}
@@ -326,6 +481,7 @@ void InlineList::setButtonUserpics(
 }
 
 QSize InlineList::countOptimalSize() {
+	invalidateCustomEmojiRepaints();
 	if (_buttons.empty()) {
 		return _skipBlock;
 	}
@@ -373,6 +529,7 @@ QSize InlineList::countOptimalSize() {
 }
 
 QSize InlineList::countCurrentSize(int newWidth) {
+	invalidateCustomEmojiRepaints();
 	_data.flags &= ~Data::Flag::Flipped;
 	if (_buttons.empty()) {
 		return optimalSize();
@@ -438,6 +595,7 @@ int InlineList::countNiceWidth() const {
 }
 
 void InlineList::flipToRight() {
+	invalidateCustomEmojiRepaints();
 	_data.flags |= Data::Flag::Flipped;
 	for (auto &button : _buttons) {
 		button.geometry.moveLeft(
@@ -458,6 +616,7 @@ void InlineList::paint(
 		const PaintContext &context,
 		int outerWidth,
 		const QRect &clip) const {
+	beginCustomEmojiPaint(p, context);
 	struct SingleAnimation {
 		not_null<Ui::ReactionFlyAnimation*> animation;
 		QColor textColor;
@@ -577,12 +736,24 @@ void InlineList::paint(
 		const auto image = QRect(
 			inner.topLeft() + QPoint(skip, skip),
 			QSize(st::reactionInlineImage, st::reactionInlineImage));
+		const auto adjusted = button.custom
+			? Ui::Text::AdjustCustomEmojiSize(st::emojiSize)
+			: 0;
+		const auto customSkip = (st::emojiSize - adjusted) / 2;
+		const auto customTarget = button.custom
+			? QRect(
+				inner.topLeft() + QPoint(customSkip, customSkip),
+				QSize(adjusted, adjusted))
+			: QRect();
+		if (!customTarget.isEmpty()) {
+			recordCustomEmojiRect(p, context, button, customTarget);
+		}
 		if (!skipImage) {
-			if (const auto custom = button.custom.get()) {
+			if (button.custom) {
 				paintCustomFrame(
 					p,
-					custom,
-					inner.topLeft(),
+					button,
+					customTarget,
 					context,
 					textFg.color());
 			} else if (!button.image.isNull()) {
@@ -647,6 +818,7 @@ void InlineList::paint(
 			return result;
 		};
 	}
+	finishCustomEmojiPaint();
 }
 
 float64 InlineList::TagDotAlpha() {
@@ -852,10 +1024,12 @@ void InlineList::resolveUserpicsImage(const Button &button) const {
 
 void InlineList::paintCustomFrame(
 		Painter &p,
-		not_null<Ui::Text::CustomEmoji*> emoji,
-		QPoint innerTopLeft,
+		const Button &button,
+		QRect target,
 		const PaintContext &context,
 		const QColor &textColor) const {
+	Expects(button.custom != nullptr);
+
 	if (_customCache.isNull()) {
 		using namespace Ui::Text;
 		const auto size = st::emojiSize;
@@ -865,11 +1039,10 @@ void InlineList::paintCustomFrame(
 			QSize(adjusted, adjusted) * factor,
 			QImage::Format_ARGB32_Premultiplied);
 		_customCache.setDevicePixelRatio(factor);
-		_customSkip = (size - adjusted) / 2;
 	}
 	_customCache.fill(Qt::transparent);
 	auto q = QPainter(&_customCache);
-	emoji->paint(q, {
+	button.custom->paint(q, {
 		.textColor = textColor,
 		.now = context.now,
 		.paused = context.paused || On(PowerSaving::kEmojiChat),
@@ -881,9 +1054,7 @@ void InlineList::paintCustomFrame(
 			| Images::Option::RoundSkipTopRight
 			| Images::Option::RoundSkipBottomRight));
 
-	p.drawImage(
-		innerTopLeft + QPoint(_customSkip, _customSkip),
-		_customCache);
+	p.drawImage(target.topLeft(), _customCache);
 }
 
 auto InlineList::takeAnimations()

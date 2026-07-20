@@ -2754,7 +2754,13 @@ void Element::refreshReactions() {
 		setReactions(std::make_unique<InlineList>(
 			&history()->owner().reactions(),
 			handlerFactory,
-			[=] { customEmojiRepaint(); },
+			[=](QRect rect) {
+				if (rect.isNull()) {
+					customEmojiRepaint();
+				} else {
+					repaint(rect);
+				}
+			},
 			std::move(reactionsData)));
 	} else {
 		auto was = _reactions->computeTagsList();
