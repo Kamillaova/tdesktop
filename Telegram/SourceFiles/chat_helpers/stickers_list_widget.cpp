@@ -2115,12 +2115,30 @@ void StickersListWidget::updateSet(const SectionInfo &info) {
 void StickersListWidget::repaintItems(
 		const SectionInfo &info,
 		crl::time now) {
-	update(
-		0,
-		info.rowsTop,
-		width(),
-		info.rowsBottom - info.rowsTop);
 	auto &set = shownSets()[info.section];
+	const auto count = std::min(
+		info.count,
+		info.rowsCount * _columnCount);
+	auto repaintedRow = -1;
+	for (auto i = 0; i != count; ++i) {
+		const auto &sticker = set.stickers[i];
+		if (itemVisible(info, i)
+			&& (sticker.lottie || sticker.webm || sticker.webm.isBad())) {
+			if (rtl()) {
+				const auto row = i / _columnCount;
+				if (repaintedRow != row) {
+					repaintedRow = row;
+					update(
+						0,
+						info.rowsTop + row * _singleSize.height(),
+						width(),
+						_singleSize.height());
+				}
+			} else {
+				rtlupdate(stickerRect(info.section, i));
+			}
+		}
+	}
 	set.lastUpdateTime = now;
 }
 
