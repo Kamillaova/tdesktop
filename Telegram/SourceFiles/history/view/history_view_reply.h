@@ -122,6 +122,12 @@ private:
 	void setLinkFrom(
 		not_null<Element*> view,
 		not_null<HistoryMessageReply*> data);
+	void repaintAnimation(not_null<const Element*> view) const;
+	void recordAnimationRepaintRect(
+		const Painter &p,
+		not_null<const Element*> view,
+		const Ui::ChatPaintContext &context,
+		QRect rect) const;
 
 	[[nodiscard]] PeerData *sender(
 		not_null<const Element*> view,
@@ -150,6 +156,7 @@ private:
 	mutable int _minHeight = 0;
 	mutable int _height = 0;
 	mutable int _nameVersion = 0;
+	mutable QRect _animationRepaintRect;
 	uint8 _hiddenSenderColorIndexPlusOne : 7 = 0;
 	uint8 _hasQuoteIcon : 1 = 0;
 	uint8 _expanded : 1 = 0;
@@ -159,6 +166,7 @@ private:
 	mutable uint8 _hasPreview : 1 = 0;
 	mutable uint8 _displaying : 1 = 0;
 	mutable uint8 _multiline : 1 = 0;
+	mutable uint8 _animationRepaintPending : 1 = 0;
 
 };
 

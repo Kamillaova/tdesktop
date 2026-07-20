@@ -395,7 +395,14 @@ void Reply::update(
 		&& !fields.quote.empty();
 	_hasQuoteIcon = hasQuoteIcon ? 1 : 0;
 
-	const auto repaint = [=] { item->customEmojiRepaint(); };
+	const auto weak = base::make_weak(view);
+	const auto repaint = [weak] {
+		if (const auto strong = weak.get()) {
+			if (const auto reply = strong->Get<Reply>()) {
+				reply->repaintAnimation(strong);
+			}
+		}
+	};
 	auto helper = Ui::Text::CustomEmojiHelper(Core::TextContext({
 		.session = &view->history()->session(),
 		.repaint = repaint,
@@ -792,6 +799,7 @@ void Reply::paint(
 
 	y += st::historyReplyTop;
 	const auto rect = QRect(x, y, w, _height);
+	recordAnimationRepaintRect(p, view, context, rect);
 	const auto selected = context.selected();
 	const auto backgroundEmojiId = _colorPeer
 		? _colorPeer->backgroundEmojiId()
@@ -1040,6 +1048,41 @@ void Reply::paint(
 					x + w - textLeft - st::historyReplyPadding.right()));
 		}
 	}
+}
+
+void Reply::repaintAnimation(not_null<const Element*> view) const {
+	if (_animationRepaintPending) {
+		return;
+	}
+	_animationRepaintPending = 1;
+	if (_animationRepaintRect.isEmpty()) {
+		view->repaint();
+	} else {
+		view->repaint(_animationRepaintRect);
+	}
+}
+
+void Reply::recordAnimationRepaintRect(
+		const Painter &p,
+		not_null<const Element*> view,
+		const Ui::ChatPaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		if (_animationRepaintRect.isEmpty()) {
+			_animationRepaintPending = 0;
+		}
+		return;
+	}
+	_animationRepaintPending = 0;
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto current = mapped ? *mapped : QRect();
+	const auto previous = _animationRepaintRect;
+	_animationRepaintRect = current;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	_animationRepaintPending = 1;
+	view->repaint(previous.united(current));
 }
 
 void Reply::createRippleAnimation(
