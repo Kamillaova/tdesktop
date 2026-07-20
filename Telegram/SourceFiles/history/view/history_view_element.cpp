@@ -182,7 +182,7 @@ const style::TextStyle &KeyboardStyle::textStyle() const {
 }
 
 void KeyboardStyle::repaint(not_null<const HistoryItem*> item) const {
-	item->history()->owner().requestItemRepaint(item);
+	item->history()->owner().requestItemVisualRepaint(item);
 }
 
 Images::CornersMaskRef KeyboardStyle::buttonRounding(
@@ -2168,7 +2168,7 @@ void Element::validateInlineKeyboard(HistoryMessageReplyMarkup *markup) {
 		item,
 		std::make_unique<KeyboardStyle>(
 			st::msgBotKbButton,
-			[=] { item->history()->owner().requestItemRepaint(item); }));
+			[=] { item->history()->owner().requestItemVisualRepaint(item); }));
 }
 
 void Element::previousInBlocksChanged() {
