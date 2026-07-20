@@ -72,6 +72,13 @@ public:
 	QSize countCurrentSize(int newWidth) override;
 
 private:
+	void repaintStars() const;
+	void recordStarsRepaintRect(
+		const Painter &p,
+		not_null<Element*> owner,
+		const PaintContext &context,
+		QRect rect) const;
+
 	Ui::Text::String _text;
 	QMargins _margins;
 	QColor _bg;
@@ -79,11 +86,14 @@ private:
 
 	ClickHandlerPtr _link;
 	std::unique_ptr<Ui::RippleAnimation> _ripple;
-	mutable Ui::Premium::ColoredMiniStars _stars;
-	mutable std::optional<QColor> _starsLastColor;
 	Fn<void()> _repaint;
 
 	mutable QPoint _lastPoint;
+	mutable Element *_starsRepaintOwner = nullptr;
+	mutable QRect _starsRepaintRect;
+	mutable bool _starsRepaintPending = false;
+	mutable Ui::Premium::ColoredMiniStars _stars;
+	mutable std::optional<QColor> _starsLastColor;
 
 };
 
@@ -193,10 +203,10 @@ ButtonPart::ButtonPart(
 		+ st::msgServiceGiftBoxButtonPadding.right()),
 	st::msgServiceGiftBoxButtonHeight)
 , _link(std::move(link))
+, _repaint(std::move(repaint))
 , _stars([=](const QRect &) {
-	repaint();
-}, Ui::Premium::MiniStarsType::SlowStars)
-, _repaint(std::move(repaint)) {
+	repaintStars();
+}, Ui::Premium::MiniStarsType::SlowStars) {
 }
 
 void ButtonPart::draw(
@@ -218,6 +228,11 @@ void ButtonPart::draw(
 	const auto radius = _size.height() / 2.;
 	const auto r = Rect(_size);
 	p.drawRoundedRect(r, radius, radius);
+	recordStarsRepaintRect(
+		p,
+		owner->parent(),
+		context,
+		r.marginsAdded(Margins(st::lineWidth)));
 
 	auto white = QColor(255, 255, 255);
 	const auto fg = customColors ? white : context.st->msgServiceFg()->c;
@@ -263,6 +278,42 @@ void ButtonPart::draw(
 		style::al_top);
 
 	p.translate(-position);
+}
+
+void ButtonPart::repaintStars() const {
+	if (_starsRepaintPending) {
+		return;
+	}
+	_starsRepaintPending = true;
+	if (_starsRepaintOwner && !_starsRepaintRect.isEmpty()) {
+		_starsRepaintOwner->repaint(_starsRepaintRect);
+	} else {
+		_repaint();
+	}
+}
+
+void ButtonPart::recordStarsRepaintRect(
+		const Painter &p,
+		not_null<Element*> owner,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		if (_starsRepaintRect.isEmpty()) {
+			_starsRepaintPending = false;
+		}
+		return;
+	}
+	_starsRepaintOwner = owner;
+	_starsRepaintPending = false;
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto current = mapped ? *mapped : QRect();
+	const auto previous = _starsRepaintRect;
+	_starsRepaintRect = current;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	_starsRepaintPending = true;
+	owner->repaint(previous.united(current));
 }
 
 TextState ButtonPart::textState(
