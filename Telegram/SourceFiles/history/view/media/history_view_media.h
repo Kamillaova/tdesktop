@@ -444,7 +444,8 @@ protected:
 		QPainter &p,
 		not_null<MediaSpoiler*> spoiler,
 		QRect rect,
-		const PaintContext &context) const;
+		const PaintContext &context,
+		const QPainter *repaintPainter = nullptr) const;
 	void drawSpoilerTag(
 		Painter &p,
 		not_null<MediaSpoiler*> spoiler,
@@ -457,6 +458,7 @@ protected:
 		not_null<MediaSpoiler*> spoiler,
 		std::unique_ptr<MediaSpoilerTag> &tag) const;
 	void createSpoilerLink(not_null<MediaSpoiler*> spoiler);
+	void repaintSpoiler(not_null<MediaSpoiler*> spoiler) const;
 
 	void repaint() const;
 

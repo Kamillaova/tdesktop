@@ -730,7 +730,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 			auto frame = _spoiler->background;
 			{
 				auto q = QPainter(&frame);
-				fillImageSpoiler(q, _spoiler.get(), rthumb, context);
+				fillImageSpoiler(q, _spoiler.get(), rthumb, context, &p);
 			}
 			p.drawImage(rthumb.topLeft(), Images::Circle(std::move(frame)));
 		}
@@ -2038,6 +2038,7 @@ bool Gif::uploading() const {
 void Gif::hideSpoilers() {
 	if (_spoiler) {
 		_spoiler->revealed = false;
+		_spoiler->lastPaintedRect = QRect();
 	}
 }
 
@@ -2285,6 +2286,7 @@ void Gif::unloadHeavyPart() {
 	if (_spoiler) {
 		_spoiler->background = _spoiler->cornerCache = QImage();
 		_spoiler->animation = nullptr;
+		_spoiler->lastPaintedRect = QRect();
 	}
 	_thumbCache = QImage();
 	_seekLastFrame = QImage();

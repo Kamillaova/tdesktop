@@ -204,6 +204,7 @@ void Photo::unloadHeavyPart() {
 	if (_spoiler) {
 		_spoiler->background = _spoiler->cornerCache = QImage();
 		_spoiler->animation = nullptr;
+		_spoiler->lastPaintedRect = QRect();
 	}
 	_imageCache = QImage();
 	togglePollingStory(false);
@@ -1142,6 +1143,7 @@ bool Photo::videoAutoplayEnabled() const {
 void Photo::hideSpoilers() {
 	if (_spoiler) {
 		_spoiler->revealed = false;
+		_spoiler->lastPaintedRect = QRect();
 	}
 }
 

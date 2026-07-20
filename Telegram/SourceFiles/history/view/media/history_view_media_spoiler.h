@@ -23,6 +23,7 @@ struct MediaSpoiler {
 	QImage background;
 	std::optional<Ui::BubbleRounding> backgroundRounding;
 	Ui::Animations::Simple revealAnimation;
+	QRect lastPaintedRect;
 	bool revealed = false;
 };
 

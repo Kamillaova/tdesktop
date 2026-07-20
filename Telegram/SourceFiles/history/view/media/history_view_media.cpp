@@ -345,14 +345,20 @@ void Media::fillImageSpoiler(
 		QPainter &p,
 		not_null<MediaSpoiler*> spoiler,
 		QRect rect,
-		const PaintContext &context) const {
+		const PaintContext &context,
+		const QPainter *repaintPainter) const {
+	const auto &mappedPainter = repaintPainter ? *repaintPainter : p;
+	if (context.hasElementPainter(mappedPainter)) {
+		spoiler->lastPaintedRect = context.mapToElement(
+			mappedPainter,
+			QRectF(rect)).value_or(QRect());
+	}
 	if (!spoiler->animation) {
 		spoiler->animation = std::make_unique<Ui::SpoilerAnimation>([=] {
-			_parent->customEmojiRepaint();
+			repaintSpoiler(spoiler);
 		});
 		history()->owner().registerHeavyViewPart(_parent);
 	}
-	_parent->clearCustomEmojiRepaint();
 	const auto pausedSpoiler = context.paused
 		|| On(PowerSaving::kChatSpoiler);
 	Ui::FillSpoilerRect(
@@ -522,12 +528,22 @@ void Media::createSpoilerLink(not_null<MediaSpoiler*> spoiler) {
 		}
 		const auto view = media->parent();
 		spoiler->revealed = true;
-		spoiler->revealAnimation.start([=] {
-			view->repaint();
+		spoiler->revealAnimation.start([weak, spoiler] {
+			if (const auto media = weak.get()) {
+				media->repaintSpoiler(spoiler);
+			}
 		}, 0., 1., st::fadeWrapDuration);
-		view->repaint();
+		media->repaintSpoiler(spoiler);
 		media->history()->owner().registerShownSpoiler(view);
 	});
+}
+
+void Media::repaintSpoiler(not_null<MediaSpoiler*> spoiler) const {
+	if (spoiler->lastPaintedRect.isEmpty()) {
+		_parent->repaint();
+	} else {
+		_parent->repaint(spoiler->lastPaintedRect);
+	}
 }
 
 void Media::repaint() const {
