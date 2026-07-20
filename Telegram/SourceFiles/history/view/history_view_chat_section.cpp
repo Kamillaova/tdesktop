@@ -1047,12 +1047,22 @@ void ChatWidget::setupSwipeReplyAndBack() {
 			|| (_gestureHorizontal.translation != data.translation)
 			|| (_gestureHorizontal.reachRatio != data.reachRatio);
 		if (changed) {
+			const auto previousId = _gestureHorizontal.msgBareId;
 			_gestureHorizontal = data;
-			const auto item = _peer->owner().message(
-				_peer->id,
-				MsgId{ data.msgBareId });
-			if (item) {
-				_history->owner().requestItemRepaint(item);
+			const auto repaint = [=](int64 bareId) {
+				const auto item = _peer->owner().message(
+					_peer->id,
+					MsgId{ bareId });
+				const auto view = item
+					? _inner->viewByPosition(item->position())
+					: nullptr;
+				if (view && view->data() == item) {
+					view->repaint();
+				}
+			};
+			repaint(previousId);
+			if (data.msgBareId != previousId) {
+				repaint(data.msgBareId);
 			}
 		}
 	};
