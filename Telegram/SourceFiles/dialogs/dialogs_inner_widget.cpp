@@ -112,8 +112,8 @@ constexpr auto kStartDragToFilterThresholdY = 75;
 constexpr auto kQueryPreviewLimit = 32;
 constexpr auto kPreviewPostsLimit = 3;
 
-[[nodiscard]] uint64 RowsCacheKey(Entry *entry) {
-	return uint64(reinterpret_cast<quintptr>(entry));
+[[nodiscard]] uint64 RowsCacheKey(const Row *row) {
+	return uint64(reinterpret_cast<quintptr>(row));
 }
 
 [[nodiscard]] InnerWidget::ChatsFilterTagsKey SerializeFilterTagsKey(
@@ -528,24 +528,36 @@ InnerWidget::InnerWidget(
 		refreshDialogRow({ update.item->history(), update.item->fullId() });
 	}, lifetime());
 
+	using EntryUpdateFlag = Data::EntryUpdate::Flag;
 	session().changes().entryUpdates(
-		Data::EntryUpdate::Flag::Repaint
-		| Data::EntryUpdate::Flag::Height
+		EntryUpdateFlag::Repaint
+		| EntryUpdateFlag::Animation
+		| EntryUpdateFlag::Height
 	) | rpl::on_next([=](const Data::EntryUpdate &update) {
 		const auto entry = update.entry;
-		if (update.flags & Data::EntryUpdate::Flag::Height) {
+		if (update.flags & EntryUpdateFlag::Height) {
 			if (updateEntryHeight(entry)) {
 				refresh();
+				return;
 			}
+		}
+		if (!(update.flags
+			& (EntryUpdateFlag::Repaint | EntryUpdateFlag::Animation))) {
 			return;
 		}
+		const auto animationOnly = (update.flags & EntryUpdateFlag::Animation)
+			&& !(update.flags & EntryUpdateFlag::Repaint);
 		const auto repaintId = (_state == WidgetState::Default)
 			? _filterId
 			: 0;
-		if (const auto links = entry->chatListLinks(repaintId)) {
-			repaintDialogRow(repaintId, links->main);
+		if (animationOnly) {
+			repaintDialogRowAnimation(entry);
+		} else if (const auto links = entry->chatListLinks(repaintId)) {
+				repaintDialogRow(repaintId, links->main);
 		}
-		if (session().supportMode()
+		repaintCommunityRows(entry, animationOnly);
+		if (!animationOnly
+			&& session().supportMode()
 			&& !session().settings().supportAllSearchResults()) {
 			repaintDialogRow({ entry, FullMsgId() });
 		}
@@ -899,6 +911,9 @@ void InnerWidget::changeOpenedForum(Data::Forum *forum) {
 }
 
 void InnerWidget::rebuildCommunitySections() {
+	for (auto index = 0; index != _communityViewable.size(); ++index) {
+		invalidatePaintedRow(RowsCacheKey(_communityViewable.rowAt(index)));
+	}
 	_communityViewable.clear();
 	_communitySelected = -1;
 	setCommunityPressed(-1);
@@ -1011,6 +1026,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		Window::GifPauseReason::Any);
 	auto fullWidth = width();
 	const auto r = e->rect();
+	const auto repaintRegion = e->region();
 	auto dialogsClip = r;
 	const auto ms = crl::now();
 	clearExpiredQuickActions(ms);
@@ -1066,7 +1082,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 
 		const auto videoUserpic = validateVideoUserpic(row);
 		const auto cacheRatio = style::DevicePixelRatio();
-		const auto cacheKey = RowsCacheKey(row->entry());
+		const auto cacheKey = RowsCacheKey(row);
 		const auto cacheSize = QSize(fullWidth, row->height()) * cacheRatio;
 		const auto cacheSelected = _menuRow.key
 			? (row->key() == _menuRow.key)
@@ -1082,22 +1098,6 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 			&& !expanding
 			&& !childListShown.shown
 			&& (fullWidth > 0);
-		if (cacheAllowed && _rowsScrollCache.hasFresh(cacheKey, cacheSize)) {
-			context.topicsExpanded = 0.;
-			context.active = false;
-			context.selected = false;
-			context.topicJumpSelected = false;
-			context.chatsFilterTags = nullptr;
-			_rowsScrollCache.paintRow(
-				p,
-				cacheKey,
-				cacheSize,
-				cacheRatio,
-				[](QImage &) {});
-			paintCachedRowOverlays(p, row, cacheKey, context);
-			return;
-		}
-
 		auto chatsFilterTags = std::vector<QImage*>();
 		if (context.narrow) {
 			context.chatsFilterTags = nullptr;
@@ -1173,42 +1173,65 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 		context.topicJumpSelected = selected
 			&& _selectedTopicJump
 			&& (!_pressed || _pressedTopicJump);
+		if (cacheAllowed && _rowsScrollCache.hasFresh(cacheKey, cacheSize)) {
+			const auto i = _paintedRows.find(cacheKey);
+			if (i != end(_paintedRows) && i->second.cache) {
+				context.topicsExpanded = 0.;
+				context.active = false;
+				context.selected = false;
+				context.topicJumpSelected = false;
+				_rowsScrollCache.paintRow(
+					p,
+					cacheKey,
+					cacheSize,
+					cacheRatio,
+					[](QImage &) {});
+				paintCachedRowOverlays(p, row, cacheKey, context);
+				return;
+			}
+			_rowsScrollCache.invalidate(cacheKey);
+		}
 		if (cacheAllowed) {
-			const auto thread = row->thread();
-			const auto view = thread
-				? &thread->lastItemDialogsView()
-				: nullptr;
-			auto &badge = row->entry()->chatListPeerBadge();
 			_rowsScrollCache.paintRow(
 				p,
 				cacheKey,
 				cacheSize,
 				cacheRatio,
 				[&](QImage &image) {
-					if (view) {
-						view->resetLastPaintGeometry();
-					}
 					auto q = Painter(&image);
 					q.setInactive(p.inactive());
-					Ui::RowPainter::Paint(q, row, nullptr, context);
-					auto cached = CachedRow();
-					cached.badge = badge.emojiStatusRect();
-					cached.preview = (view && view->hasAnimatedContent())
-						? view->lastPaintGeometry()
-						: QRect();
+					const auto painted = Ui::RowPainter::Paint(
+						q,
+						row,
+						nullptr,
+						context);
+					auto stored = PaintedRow();
+					stored.entry = row->entry().get();
+					stored.animation = painted.animated;
+					stored.animationGeneration
+						= painted.animationGeneration;
+					stored.messagePreviewPainted
+						= painted.messagePreviewPainted;
+					stored.cache.emplace();
+					auto &cached = *stored.cache;
 					cached.video = (videoUserpic != nullptr);
 					cached.userpic = history
 						? history->peer->userpicUniqueKey(
 							row->userpicView())
 						: std::pair<uint64, uint64>();
-					if (!cached.badge.isEmpty()) {
-						q.fillRect(cached.badge, st::dialogsBg);
+					for (const auto &rect : stored.animation) {
+						q.fillRect(rect, context.currentBg);
 					}
-					_cachedRows[cacheKey] = std::move(cached);
+					_paintedRows[cacheKey] = std::move(stored);
 				});
 			paintCachedRowOverlays(p, row, cacheKey, context);
 		} else {
-			Ui::RowPainter::Paint(p, row, videoUserpic, context);
+			const auto painted = Ui::RowPainter::Paint(
+				p,
+				row,
+				videoUserpic,
+				context);
+			trackPaintedRow(p, row, painted, repaintRegion);
 		}
 		if (context.quickActionContext) {
 			context.quickActionContext = nullptr;
@@ -3225,10 +3248,10 @@ void InnerWidget::dialogRowReplaced(
 		Row *oldRow,
 		Row *newRow) {
 	if (oldRow) {
-		invalidateCachedRow(RowsCacheKey(oldRow->entry()));
+		invalidatePaintedRow(RowsCacheKey(oldRow));
 	}
 	if (newRow) {
-		invalidateCachedRow(RowsCacheKey(newRow->entry()));
+		invalidatePaintedRow(RowsCacheKey(newRow));
 	}
 	if (_activeSubItemsRow == oldRow) {
 		_activeSubItemsRow = nullptr;
@@ -3386,29 +3409,85 @@ int InnerWidget::defaultRowTop(not_null<Row*> row) const {
 void InnerWidget::repaintDialogRow(
 		FilterId filterId,
 		not_null<Row*> row) {
-	if (!animatedPreviewCached(row)) {
-		invalidateCachedRow(RowsCacheKey(row->entry()));
-	}
+	invalidatePaintedRows(row->entry());
 	if (_state == WidgetState::Default) {
 		if (_filterId == filterId) {
-			if (const auto folder = row->folder()) {
+			const auto shown = _shownList->getRow(row->key());
+			if (!shown) {
+				return;
+			}
+			if (const auto folder = shown->folder()) {
 				repaintCollapsedFolderRow(folder);
 			}
-			update(0, defaultRowTop(row), width(), row->height());
+			update(0, defaultRowTop(shown), width(), shown->height());
 		}
 	} else if (_state == WidgetState::Filtered) {
 		if (!filterId) {
-			for (auto i = 0, l = int(_filterResults.size()); i != l; ++i) {
-				const auto &result = _filterResults[i];
+			for (const auto &result : _filterResults) {
 				if (result.key() == row->key()) {
 					update(
 						0,
 						filteredOffset() + result.top,
 						width(),
 						result.row->height());
-					break;
 				}
 			}
+		}
+	}
+}
+
+void InnerWidget::repaintDialogRowAnimation(not_null<Entry*> entry) {
+	if (_state == WidgetState::Default) {
+		if (const auto shown = _shownList->getRow(Key(entry))) {
+			if (const auto folder = shown->folder()) {
+				repaintCollapsedFolderRow(folder);
+			}
+			repaintDialogRowAnimationAt(shown, defaultRowTop(shown));
+		}
+	} else if (_state == WidgetState::Filtered) {
+		for (const auto &result : _filterResults) {
+			if (result.row->entry().get() == entry.get()) {
+				repaintDialogRowAnimationAt(
+					result.row,
+					filteredOffset() + result.top);
+			}
+		}
+	}
+}
+
+void InnerWidget::repaintDialogRowAnimationAt(
+		not_null<Row*> row,
+		int top) {
+	const auto animation = paintedAnimationDamage(row);
+	if (!animation) {
+		invalidatePaintedRow(RowsCacheKey(row));
+		update(0, top, width(), row->height());
+		return;
+	}
+	for (const auto &rect : *animation) {
+		update(rect.translated(0, top));
+	}
+}
+
+void InnerWidget::repaintCommunityRows(
+		not_null<Entry*> entry,
+		bool animationOnly) {
+	if ((_state != WidgetState::Default) || !communityModeShown()) {
+		return;
+	}
+	if (!animationOnly) {
+		invalidatePaintedRows(entry);
+	}
+	for (auto index = 0; index != _communityViewable.size(); ++index) {
+		const auto row = _communityViewable.rowAt(index);
+		if (row->entry().get() != entry.get()) {
+			continue;
+		}
+		const auto top = communityRowAbsoluteTop(index);
+		if (animationOnly) {
+			repaintDialogRowAnimationAt(row, top);
+		} else {
+			update(0, top, width(), row->height());
 		}
 	}
 }
@@ -3419,7 +3498,7 @@ void InnerWidget::repaintDialogRow(RowDescriptor row) {
 
 void InnerWidget::refreshDialogRow(RowDescriptor row) {
 	if (row.key) {
-		invalidateCachedRow(RowsCacheKey(row.key.entry()));
+		invalidatePaintedRows(row.key.entry());
 	}
 	if (row.fullId) {
 		for (const auto &result : _searchResults) {
@@ -3466,11 +3545,15 @@ void InnerWidget::updateDialogRow(
 	}
 
 	if (row.key) {
-		const auto dialog = (_state == WidgetState::Default)
-			? _shownList->getRow(row.key)
-			: nullptr;
-		if (!dialog || !animatedPreviewCached(dialog)) {
-			invalidateCachedRow(RowsCacheKey(row.key.entry()));
+		if (updateRect.isEmpty()) {
+			invalidatePaintedRows(row.key.entry());
+		} else {
+			const auto dialog = (_state == WidgetState::Default)
+				? _shownList->getRow(row.key)
+				: nullptr;
+			if (!dialog || !cachedVideoUserpicDamage(dialog, updateRect)) {
+				invalidatePaintedRowCaches(row.key.entry());
+			}
 		}
 	}
 	const auto updateRow = [&](int rowTop, int rowHeight) {
@@ -3573,39 +3656,98 @@ Row *InnerWidget::shownRowByKey(Key key) {
 	return links ? links->main.get() : nullptr;
 }
 
-bool InnerWidget::animatedPreviewCached(not_null<Row*> row) {
-	if (!_rowsScrollCache.scrolling()) {
-		return false;
-	}
-	const auto i = _cachedRows.find(RowsCacheKey(row->entry()));
-	if (i == end(_cachedRows)
-		|| (i->second.preview.isEmpty()
-			&& i->second.badge.isEmpty()
-			&& !i->second.video)) {
-		return false;
+std::optional<QRegion> InnerWidget::paintedAnimationDamage(
+		not_null<Row*> row) {
+	const auto i = _paintedRows.find(RowsCacheKey(row));
+	if (i == end(_paintedRows)) {
+		return std::nullopt;
 	}
 	const auto thread = row->thread();
-	const auto item = thread ? row->entry()->chatListMessage() : nullptr;
-	if (!item) {
-		return false;
+	if (!thread) {
+		return std::nullopt;
 	}
-	const auto history = row->history();
-	const auto peer = history ? history->peer.get() : nullptr;
-	const auto forumish = peer
-		&& (peer->displayAsForum() || history->amMonoforumAdmin());
-	if (!thread->lastItemDialogsView().prepared(
-			item,
-			forumish ? peer->forum() : nullptr,
-			forumish ? peer->monoforum() : nullptr)) {
-		return false;
+	auto &view = thread->lastItemDialogsView();
+	const auto generation = view.animationGeneration();
+	if (generation == i->second.animationGeneration) {
+		return QRegion();
 	}
-	i->second.bandDirty = true;
-	return true;
+	if (i->second.animation.isEmpty()) {
+		i->second.animationGeneration = generation;
+		return QRegion();
+	}
+	if (i->second.messagePreviewPainted) {
+		const auto item = row->entry()->chatListMessage();
+		if (!item) {
+			return std::nullopt;
+		}
+		const auto history = row->history();
+		const auto peer = history ? history->peer.get() : nullptr;
+		const auto forumish = peer
+			&& (peer->displayAsForum() || history->amMonoforumAdmin());
+		if (!view.prepared(
+				item,
+				forumish ? peer->forum() : nullptr,
+				forumish ? peer->monoforum() : nullptr)) {
+			return std::nullopt;
+		}
+	}
+	i->second.animationGeneration = generation;
+	if (i->second.cache) {
+		i->second.cache->bandDirty = true;
+	}
+	return i->second.animation;
 }
 
-void InnerWidget::invalidateCachedRow(uint64 rowId) {
+bool InnerWidget::cachedVideoUserpicDamage(
+		not_null<Row*> row,
+		QRect damage) {
+	if (!_rowsScrollCache.scrolling() || damage.isEmpty()) {
+		return false;
+	}
+	const auto i = _paintedRows.find(RowsCacheKey(row));
+	if (i == end(_paintedRows)
+		|| !i->second.cache
+		|| !i->second.cache->video) {
+		return false;
+	}
+	const auto &st = Row::ComputeSt(row->entry(), _filterId);
+	return QRect(
+		st.padding.left(),
+		st.padding.top(),
+		st.photoSize,
+		st.photoSize).contains(damage);
+}
+
+void InnerWidget::invalidatePaintedRowCache(uint64 rowId) {
 	_rowsScrollCache.invalidate(rowId);
-	_cachedRows.erase(rowId);
+	if (const auto i = _paintedRows.find(rowId); i != end(_paintedRows)) {
+		i->second.cache.reset();
+	}
+}
+
+void InnerWidget::invalidatePaintedRowCaches(not_null<Entry*> entry) {
+	for (const auto &[rowId, painted] : _paintedRows) {
+		if (painted.entry == entry.get()) {
+			invalidatePaintedRowCache(rowId);
+		}
+	}
+}
+
+void InnerWidget::invalidatePaintedRow(uint64 rowId) {
+	invalidatePaintedRowCache(rowId);
+	_paintedRows.erase(rowId);
+}
+
+void InnerWidget::invalidatePaintedRows(not_null<Entry*> entry) {
+	auto remove = std::vector<uint64>();
+	for (const auto &[rowId, painted] : _paintedRows) {
+		if (painted.entry == entry.get()) {
+			remove.push_back(rowId);
+		}
+	}
+	for (const auto rowId : remove) {
+		invalidatePaintedRow(rowId);
+	}
 }
 
 void InnerWidget::invalidateLoadedUserpics() {
@@ -3613,6 +3755,22 @@ void InnerWidget::invalidateLoadedUserpics() {
 		|| (_state != WidgetState::Default)) {
 		return;
 	}
+	const auto validate = [&](not_null<Row*> row) {
+		const auto history = row->history();
+		if (!history) {
+			return;
+		}
+		const auto key = RowsCacheKey(row);
+		const auto i = _paintedRows.find(key);
+		if (i == end(_paintedRows) || !i->second.cache) {
+			return;
+		}
+		const auto userpicKey = history->peer->userpicUniqueKey(
+			row->userpicView());
+		if (userpicKey != i->second.cache->userpic) {
+			invalidatePaintedRowCache(key);
+		}
+	};
 	const auto skip = dialogsOffset();
 	const auto &list = _shownList->all();
 	const auto till = _visibleBottom - skip;
@@ -3623,20 +3781,62 @@ void InnerWidget::invalidateLoadedUserpics() {
 		if (row->top() >= till) {
 			break;
 		}
-		const auto history = row->history();
-		if (!history) {
-			continue;
+		validate(row);
+	}
+	for (auto index = 0; index != _communityViewable.size(); ++index) {
+		validate(_communityViewable.rowAt(index));
+	}
+}
+
+void InnerWidget::trackPaintedRow(
+		Painter &p,
+		not_null<Row*> row,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion) {
+	const auto transform = p.transform();
+	const auto mapRegion = [&](const QRegion &region) {
+		auto result = QRegion();
+		for (const auto &rect : region) {
+			result += transform.mapRect(rect);
 		}
-		const auto key = RowsCacheKey(row->entry());
-		const auto it = _cachedRows.find(key);
-		if (it == end(_cachedRows)) {
-			continue;
+		return result.intersected(this->rect());
+	};
+	const auto current = mapRegion(painted.animated);
+	const auto key = RowsCacheKey(row);
+	const auto i = _paintedRows.find(key);
+	if (i == end(_paintedRows)
+		|| i->second.entry != row->entry().get()) {
+		if (!current.subtracted(repaintRegion).isEmpty()) {
+			return;
 		}
-		const auto userpicKey = history->peer->userpicUniqueKey(
-			row->userpicView());
-		if (userpicKey != it->second.userpic) {
-			invalidateCachedRow(key);
-		}
+		_rowsScrollCache.invalidate(key);
+		auto stored = PaintedRow();
+		stored.entry = row->entry().get();
+		stored.animation = painted.animated;
+		stored.animationGeneration = painted.animationGeneration;
+		stored.messagePreviewPainted = painted.messagePreviewPainted;
+		_paintedRows[key] = std::move(stored);
+		return;
+	}
+	auto &stored = i->second;
+	const auto previous = stored.animation;
+	const auto covered = previous.isEmpty()
+		? current
+		: mapRegion(previous);
+	if (!covered.subtracted(repaintRegion).isEmpty()) {
+		return;
+	}
+	if (stored.cache) {
+		stored.animation = previous.united(painted.animated);
+		stored.cache->bandDirty = true;
+	} else {
+		stored.animation = painted.animated;
+	}
+	stored.animationGeneration = painted.animationGeneration;
+	stored.messagePreviewPainted = painted.messagePreviewPainted;
+	const auto added = stored.animation.subtracted(previous);
+	for (const auto &rect : added) {
+		update(transform.mapRect(rect));
 	}
 }
 
@@ -3645,10 +3845,12 @@ void InnerWidget::paintCachedRowOverlays(
 		not_null<Row*> row,
 		uint64 rowId,
 		const Ui::PaintContext &context) {
-	const auto i = _cachedRows.find(rowId);
-	if (i == end(_cachedRows)) {
+	const auto i = _paintedRows.find(rowId);
+	if (i == end(_paintedRows) || !i->second.cache) {
 		return;
 	}
+	auto &painted = i->second;
+	auto &cached = *painted.cache;
 	if (!context.narrow) {
 		if (const auto videoUserpic = validateVideoUserpic(row)) {
 			const auto history = row->history();
@@ -3661,56 +3863,58 @@ void InnerWidget::paintCachedRowOverlays(
 				false);
 		}
 	}
-	if (!i->second.badge.isEmpty()) {
-		row->entry()->chatListPeerBadge().paintEmojiStatusFrame(
-			p,
-			context.now,
-			context.paused,
-			i->second.badge.topLeft());
-	}
-	if (!i->second.preview.isEmpty()) {
-		if (const auto thread = row->thread()) {
-			paintAnimatedPreview(
-				p,
-				&thread->lastItemDialogsView(),
-				i->second,
-				context);
-		}
+	if (!painted.animation.isEmpty()) {
+		paintAnimatedRow(p, row, painted, cached, context);
 	}
 }
 
-void InnerWidget::paintAnimatedPreview(
+void InnerWidget::paintAnimatedRow(
 		Painter &p,
-		not_null<Ui::MessageView*> view,
+		not_null<Row*> row,
+		PaintedRow &painted,
 		CachedRow &cached,
 		const Ui::PaintContext &context) {
-	const auto geometry = cached.preview;
-	const auto ratio = style::DevicePixelRatio();
-	const auto size = geometry.size() * ratio;
-	if (size.isEmpty()) {
-		return;
-	}
-	if (cached.band.size() != size) {
-		cached.band = QImage(size, QImage::Format_RGB32);
-		cached.band.setDevicePixelRatio(ratio);
-		cached.bandDirty = true;
-	}
 	if (cached.bandDirty) {
 		cached.bandDirty = false;
-		cached.band.fill(st::dialogsBg->c);
-		auto q = Painter(&cached.band);
-		q.setInactive(p.inactive());
-		q.translate(-geometry.topLeft());
-		view->paint(q, geometry, context);
+		const auto render = [&] {
+			const auto geometry = painted.animation.boundingRect();
+			const auto ratio = style::DevicePixelRatio();
+			const auto size = geometry.size() * ratio;
+			if (cached.band.size() != size) {
+				cached.band = QImage(
+					size,
+					QImage::Format_ARGB32_Premultiplied);
+				cached.band.setDevicePixelRatio(ratio);
+			}
+			cached.band.fill(Qt::transparent);
+			auto q = Painter(&cached.band);
+			q.setInactive(p.inactive());
+			q.translate(-geometry.topLeft());
+			q.setClipRegion(painted.animation);
+			return Ui::RowPainter::Paint(q, row, nullptr, context);
+		};
+		auto rendered = render();
+		const auto expanded = painted.animation.united(rendered.animated);
+		if (expanded != painted.animation) {
+			const auto added = expanded.subtracted(painted.animation);
+			painted.animation = expanded;
+			rendered = render();
+			const auto transform = p.transform();
+			for (const auto &rect : added) {
+				update(transform.mapRect(rect));
+			}
+		}
+		painted.animationGeneration = rendered.animationGeneration;
+		painted.messagePreviewPainted = rendered.messagePreviewPainted;
 	}
-	p.drawImage(geometry.topLeft(), cached.band);
+	p.drawImage(painted.animation.boundingRect().topLeft(), cached.band);
 }
 
 void InnerWidget::updateSelectedRow(Key key) {
 	if (key) {
-		invalidateCachedRow(RowsCacheKey(key.entry()));
+		invalidatePaintedRows(key.entry());
 	} else if (_selected) {
-		invalidateCachedRow(RowsCacheKey(_selected->entry()));
+		invalidatePaintedRows(_selected->entry());
 	}
 	if (_state == WidgetState::Default) {
 		if (key) {
@@ -4781,7 +4985,7 @@ void InnerWidget::editOpenedFilter() {
 
 void InnerWidget::refresh(bool toTop) {
 	_rowsScrollCache.clear();
-	_cachedRows.clear();
+	_paintedRows.clear();
 	_activeSubItemsRow = nullptr;
 	if (!_geometryInited) {
 		return;
@@ -6024,7 +6228,7 @@ void InnerWidget::setupOnlineStatusCheck() {
 }
 
 void InnerWidget::repaintDialogRowCornerStatus(not_null<History*> history) {
-	invalidateCachedRow(RowsCacheKey(history));
+	invalidatePaintedRowCaches(history);
 	const auto user = history->peer->isUser();
 	const auto size = user
 		? st::dialogsOnlineBadgeSize

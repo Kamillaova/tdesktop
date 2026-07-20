@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_community.h"
 #include "data/data_session.h"
 #include "dialogs/ui/dialogs_layout.h"
+#include "dialogs/ui/dialogs_message_view.h"
 #include "dialogs/dialogs_entry.h"
 #include "dialogs/dialogs_row.h"
 #include "history/history.h"
@@ -81,24 +82,39 @@ CommunityChatsList::CommunityChatsList(
 
 	using Flag = Data::EntryUpdate::Flag;
 	_controller->session().changes().entryUpdates(
-		Flag::Height | Flag::Repaint
+		Flag::Height | Flag::Repaint | Flag::Animation
 	) | rpl::filter([=](const Data::EntryUpdate &update) {
 		const auto history = update.entry->asHistory();
 		return history && _view.contains(history);
 	}) | rpl::on_next([=](const Data::EntryUpdate &entryUpdate) {
 		if (entryUpdate.flags & Flag::Height) {
+			_paintedRows.clear();
 			_view.recountHeights(0.);
 			resizeToWidth(width());
+			update();
 		} else if (const auto history = entryUpdate.entry->asHistory()) {
 			for (auto index = 0; index != _view.size(); ++index) {
 				const auto row = _view.rowAt(index);
 				if (row->history() == history) {
+					const auto top = _view.rowTop(index);
+					const auto animationOnly
+						= (entryUpdate.flags & Flag::Animation)
+						&& !(entryUpdate.flags & Flag::Repaint);
+					if (animationOnly) {
+						const auto damage = paintedAnimationDamage(row);
+						if (damage) {
+							for (const auto &rect : *damage) {
+								update(rect.translated(0, top));
+							}
+							continue;
+						}
+					}
+					_paintedRows.erase(row);
 					update(
 						0,
-						_view.rowTop(index),
+						top,
 						width(),
 						row->height());
-					break;
 				}
 			}
 		}
@@ -109,6 +125,7 @@ CommunityChatsList::~CommunityChatsList() = default;
 
 void CommunityChatsList::rebuild() {
 	const auto wasCount = _view.size();
+	_paintedRows.clear();
 	_view.clear();
 	setSelected(-1);
 	setPressed(-1);
@@ -157,6 +174,9 @@ void CommunityChatsList::rebuild() {
 }
 
 int CommunityChatsList::resizeGetHeight(int newWidth) {
+	if (newWidth != width()) {
+		_paintedRows.clear();
+	}
 	return _view.height();
 }
 
@@ -164,6 +184,7 @@ void CommunityChatsList::paintEvent(QPaintEvent *e) {
 	Painter p(this);
 
 	const auto clip = e->rect();
+	const auto repaintRegion = e->region();
 	p.fillRect(clip, st::dialogsBg);
 	if (_view.empty()) {
 		return;
@@ -187,9 +208,95 @@ void CommunityChatsList::paintEvent(QPaintEvent *e) {
 			: (_selected == index);
 		context.st = &ComputeCommunityInfoSt(row);
 		p.translate(0, top);
-		Ui::RowPainter::Paint(p, row.get(), nullptr, context);
+		const auto painted = Ui::RowPainter::Paint(
+			p,
+			row.get(),
+			nullptr,
+			context);
+		trackPaintedRow(p, row, painted, repaintRegion);
 		p.translate(0, -top);
 	});
+}
+
+std::optional<QRegion> CommunityChatsList::paintedAnimationDamage(
+		not_null<Row*> row) {
+	const auto i = _paintedRows.find(row.get());
+	if (i == end(_paintedRows)) {
+		return std::nullopt;
+	}
+	const auto thread = row->thread();
+	if (!thread) {
+		return std::nullopt;
+	}
+	auto &view = thread->lastItemDialogsView();
+	const auto generation = view.animationGeneration();
+	if (generation == i->second.animationGeneration) {
+		return QRegion();
+	}
+	if (i->second.animation.isEmpty()) {
+		i->second.animationGeneration = generation;
+		return QRegion();
+	}
+	if (i->second.messagePreviewPainted) {
+		const auto item = row->entry()->chatListMessage();
+		if (!item) {
+			return std::nullopt;
+		}
+		const auto history = row->history();
+		const auto peer = history ? history->peer.get() : nullptr;
+		const auto forumish = peer
+			&& (peer->displayAsForum() || history->amMonoforumAdmin());
+		if (!view.prepared(
+			item,
+			forumish ? peer->forum() : nullptr,
+			forumish ? peer->monoforum() : nullptr)) {
+			return std::nullopt;
+		}
+	}
+	i->second.animationGeneration = generation;
+	return i->second.animation;
+}
+
+void CommunityChatsList::trackPaintedRow(
+		Painter &p,
+		not_null<Row*> row,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion) {
+	const auto transform = p.transform();
+	const auto mapRegion = [&](const QRegion &region) {
+		auto result = QRegion();
+		for (const auto &rect : region) {
+			result += transform.mapRect(rect);
+		}
+		return result.intersected(this->rect());
+	};
+	const auto current = mapRegion(painted.animated);
+	const auto i = _paintedRows.find(row.get());
+	if (i == end(_paintedRows)) {
+		if (!current.subtracted(repaintRegion).isEmpty()) {
+			return;
+		}
+		_paintedRows.emplace(row.get(), PaintedRow{
+			.animation = painted.animated,
+			.animationGeneration = painted.animationGeneration,
+			.messagePreviewPainted = painted.messagePreviewPainted,
+		});
+		return;
+	}
+	const auto previous = i->second.animation;
+	const auto covered = previous.isEmpty()
+		? current
+		: mapRegion(previous);
+	if (!covered.subtracted(repaintRegion).isEmpty()) {
+		return;
+	}
+	i->second.animation = painted.animated;
+	i->second.animationGeneration = painted.animationGeneration;
+	i->second.messagePreviewPainted = painted.messagePreviewPainted;
+	const auto added = painted.animated.subtracted(previous);
+	for (const auto &rect : added) {
+		update(transform.mapRect(rect));
+	}
 }
 
 void CommunityChatsList::updateSelected(QPoint local) {

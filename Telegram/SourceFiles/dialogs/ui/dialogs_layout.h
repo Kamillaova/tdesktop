@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/ui/dialogs_quick_action_context.h"
 #include "ui/cached_round_corners.h"
 
+#include <QtGui/QRegion>
+
 namespace style {
 struct DialogRow;
 struct VerifiedBadge;
@@ -79,6 +81,12 @@ struct PaintContext {
 	bool insideCommunity = false;
 };
 
+struct RowPaintResult {
+	QRegion animated;
+	uint64 animationGeneration = 0;
+	bool messagePreviewPainted = false;
+};
+
 extern const char kOptionDialogsMuteIcon[];
 
 [[nodiscard]] const style::icon *ChatTypeIcon(
@@ -91,12 +99,12 @@ extern const char kOptionDialogsMuteIcon[];
 
 class RowPainter {
 public:
-	static void Paint(
+	static RowPaintResult Paint(
 		Painter &p,
 		not_null<const Row*> row,
 		VideoUserpic *videoUserpic,
 		const PaintContext &context);
-	static void Paint(
+	static RowPaintResult Paint(
 		Painter &p,
 		not_null<const FakeRow*> row,
 		const PaintContext &context);

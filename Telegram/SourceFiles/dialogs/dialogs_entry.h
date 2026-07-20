@@ -121,6 +121,7 @@ public:
 		QChar letter,
 		not_null<Row*> row);
 	void updateChatListEntry();
+	void updateChatListEntryAnimation();
 	void updateChatListEntryPostponed();
 	void updateChatListEntryHeight();
 	[[nodiscard]] bool isPinnedDialog(FilterId filterId) const {

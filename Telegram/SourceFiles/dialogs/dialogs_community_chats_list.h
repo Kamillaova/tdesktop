@@ -7,8 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/flat_map.h"
 #include "dialogs/dialogs_community_rows_view.h"
 #include "ui/rp_widget.h"
+
+#include <QtGui/QRegion>
+#include <optional>
 
 class History;
 class PeerData;
@@ -29,12 +33,16 @@ namespace Dialogs {
 
 class Row;
 
+namespace Ui {
+struct RowPaintResult;
+} // namespace Ui
+
 enum class CommunityChatsKind : uchar {
 	Joined,
 	Viewable,
 };
 
-class CommunityChatsList final : public Ui::RpWidget {
+class CommunityChatsList final : public ::Ui::RpWidget {
 public:
 	CommunityChatsList(
 		QWidget *parent,
@@ -56,10 +64,23 @@ protected:
 	void leaveEventHook(QEvent *e) override;
 
 private:
+	struct PaintedRow {
+		QRegion animation;
+		uint64 animationGeneration = 0;
+		bool messagePreviewPainted = false;
+	};
+
 	void rebuild();
 	void updateSelected(QPoint local);
 	void setSelected(int selected);
 	void setPressed(int pressed);
+	[[nodiscard]] std::optional<QRegion> paintedAnimationDamage(
+		not_null<Row*> row);
+	void trackPaintedRow(
+		Painter &p,
+		not_null<Row*> row,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion);
 
 	const not_null<Window::SessionController*> _controller;
 	const not_null<Data::CommunityInfo*> _community;
@@ -67,6 +88,7 @@ private:
 	const not_null<const style::DialogRow*> _st;
 
 	CommunityRowsView _view;
+	base::flat_map<Row*, PaintedRow> _paintedRows;
 	int _selected = -1;
 	int _pressed = -1;
 	rpl::variable<int> _count = 0;

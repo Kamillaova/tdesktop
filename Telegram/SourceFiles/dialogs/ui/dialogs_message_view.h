@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtGui/QRegion>
+
 #include <any>
 
 class Image;
@@ -42,6 +44,9 @@ struct TopicJumpCache;
 class TopicsView;
 
 [[nodiscard]] TextWithEntities DialogsPreviewText(TextWithEntities text);
+[[nodiscard]] QRect TextAnimationRect(
+	const Text::String &text,
+	QRect geometry);
 
 class MessageView final {
 public:
@@ -66,16 +71,16 @@ public:
 		Fn<void()> customEmojiRepaint,
 		ToPreviewOptions options);
 
-	void paint(
+	QRegion paint(
 		Painter &p,
 		const QRect &geometry,
 		const PaintContext &context) const;
 
 	[[nodiscard]] bool hasAnimatedContent() const;
-	[[nodiscard]] QRect lastPaintGeometry() const {
-		return _lastPaintGeometry;
+	[[nodiscard]] Fn<void()> trackAnimationRepaint(Fn<void()> repaint);
+	[[nodiscard]] uint64 animationGeneration() const {
+		return *_animationGeneration;
 	}
-	void resetLastPaintGeometry();
 
 	[[nodiscard]] bool isInTopicJump(int x, int y) const;
 	void addTopicJumpRipple(
@@ -104,7 +109,8 @@ private:
 	mutable std::unique_ptr<LoadingContext> _loadingContext;
 	mutable const style::DialogsMiniIcon *_leftIcon = nullptr;
 	mutable QImage _cornersCache;
-	mutable QRect _lastPaintGeometry;
+	std::shared_ptr<uint64> _animationGeneration
+		= std::make_shared<uint64>();
 	mutable bool _hasPlainLinkAtBegin = false;
 	mutable bool _unreadMedia = false;
 

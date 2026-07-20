@@ -22,6 +22,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 #include "ui/userpic_view.h"
 
+#include <QtGui/QRegion>
+
 namespace style {
 struct DialogRow;
 struct DialogRightButton;
@@ -74,6 +76,7 @@ using namespace ::Ui;
 class VideoUserpic;
 class MessageView;
 struct PaintContext;
+struct RowPaintResult;
 struct TopicJumpCache;
 } // namespace Dialogs::Ui
 
@@ -311,12 +314,18 @@ private:
 	};
 
 	struct CachedRow {
-		QRect preview;
-		QRect badge;
 		QImage band;
 		std::pair<uint64, uint64> userpic;
 		bool bandDirty = true;
 		bool video = false;
+	};
+
+	struct PaintedRow {
+		Entry *entry = nullptr;
+		QRegion animation;
+		std::optional<CachedRow> cache;
+		uint64 animationGeneration = 0;
+		bool messagePreviewPainted = false;
 	};
 
 	struct FilterResult {
@@ -349,6 +358,9 @@ private:
 		const RowDescriptor &entry) const;
 
 	void repaintDialogRow(FilterId filterId, not_null<Row*> row);
+	void repaintDialogRowAnimation(not_null<Entry*> entry);
+	void repaintDialogRowAnimationAt(not_null<Row*> row, int top);
+	void repaintCommunityRows(not_null<Entry*> entry, bool animationOnly);
 	void repaintDialogRow(RowDescriptor row);
 	void refreshDialogRow(RowDescriptor row);
 	bool updateEntryHeight(not_null<Entry*> entry);
@@ -416,17 +428,30 @@ private:
 	void updateRowCornerStatusShown(not_null<History*> history);
 	void repaintDialogRowCornerStatus(not_null<History*> history);
 
-	[[nodiscard]] bool animatedPreviewCached(not_null<Row*> row);
-	void invalidateCachedRow(uint64 rowId);
+	[[nodiscard]] std::optional<QRegion> paintedAnimationDamage(
+		not_null<Row*> row);
+	[[nodiscard]] bool cachedVideoUserpicDamage(
+		not_null<Row*> row,
+		QRect damage);
+	void invalidatePaintedRowCache(uint64 rowId);
+	void invalidatePaintedRowCaches(not_null<Entry*> entry);
+	void invalidatePaintedRow(uint64 rowId);
+	void invalidatePaintedRows(not_null<Entry*> entry);
 	void invalidateLoadedUserpics();
+	void trackPaintedRow(
+		Painter &p,
+		not_null<Row*> row,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion);
 	void paintCachedRowOverlays(
 		Painter &p,
 		not_null<Row*> row,
 		uint64 rowId,
 		const Ui::PaintContext &context);
-	void paintAnimatedPreview(
+	void paintAnimatedRow(
 		Painter &p,
-		not_null<Ui::MessageView*> view,
+		not_null<Row*> row,
+		PaintedRow &painted,
 		CachedRow &cached,
 		const Ui::PaintContext &context);
 
@@ -652,9 +677,9 @@ private:
 	std::vector<std::unique_ptr<CollapsedRow>> _collapsedRows;
 	not_null<const style::DialogRow*> _st;
 	mutable std::unique_ptr<Ui::TopicJumpCache> _topicJumpCache;
-	base::flat_map<uint64, CachedRow> _cachedRows;
+	base::flat_map<uint64, PaintedRow> _paintedRows;
 	Ui::RowsScrollCache _rowsScrollCache{[this] {
-		_cachedRows.clear();
+		_paintedRows.clear();
 		update();
 	}};
 	bool _selectedChatTypeFilter = false;

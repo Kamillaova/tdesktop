@@ -118,6 +118,27 @@ TextWithEntities DialogsPreviewText(TextWithEntities text) {
 	return result;
 }
 
+QRect TextAnimationRect(const Text::String &text, QRect geometry) {
+	if (geometry.isEmpty()
+		|| (!text.hasCustomEmoji() && !text.hasSpoilers())) {
+		return QRect();
+	}
+	geometry.setWidth(std::min(geometry.width(), text.maxWidth()));
+	if (geometry.width() <= 0 || !text.hasCustomEmoji()) {
+		return geometry;
+	}
+	const auto add = st::lineWidth - Ui::Emoji::GetCustomSkipNormal();
+	return QRect(
+		geometry.x() - add,
+		geometry.y() - add,
+		geometry.width() + add + add,
+		std::max(
+			geometry.height() + add + add,
+			st::lineWidth
+				+ Ui::Emoji::GetCustomSizeNormal()
+				+ st::lineWidth));
+}
+
 struct MessageView::LoadingContext {
 	std::any context;
 	rpl::lifetime lifetime;
@@ -404,18 +425,23 @@ bool MessageView::hasAnimatedContent() const {
 	return false;
 }
 
-void MessageView::resetLastPaintGeometry() {
-	_lastPaintGeometry = QRect();
+Fn<void()> MessageView::trackAnimationRepaint(Fn<void()> repaint) {
+	return [generation = _animationGeneration, repaint = std::move(repaint)] {
+		++*generation;
+		if (repaint) {
+			repaint();
+		}
+	};
 }
 
-void MessageView::paint(
+QRegion MessageView::paint(
 		Painter &p,
 		const QRect &geometry,
 		const PaintContext &context) const {
 	if (geometry.isEmpty()) {
-		return;
+		return QRegion();
 	}
-	_lastPaintGeometry = geometry;
+	auto animated = QRegion();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
@@ -445,6 +471,19 @@ void MessageView::paint(
 	}
 
 	if (withTopic) {
+		if (_topics->hasAnimatedContent()) {
+			const auto add = st::lineWidth
+				- Ui::Emoji::GetCustomSkipNormal();
+			animated += QRect(
+				rect.x() - add,
+				rect.y() - add,
+				rect.width() + add + add,
+				std::max(
+					context.st->topicsHeight + add + add,
+					st::lineWidth
+						+ Ui::Emoji::GetCustomSizeNormal()
+						+ st::lineWidth));
+		}
 		_topics->paint(p, rect, context);
 		rect.setTop(rect.top() + context.st->topicsHeight);
 	}
@@ -457,6 +496,7 @@ void MessageView::paint(
 	const auto pausedSpoiler = context.paused
 		|| On(PowerSaving::kChatSpoiler);
 	if (!_senderCache.isEmpty()) {
+		animated += TextAnimationRect(_senderCache, rect);
 		_senderCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -511,6 +551,7 @@ void MessageView::paint(
 		if (!image.data.isNull()) {
 			p.drawImage(mini, image.data);
 			if (image.hasSpoiler()) {
+				animated += mini;
 				const auto frame = DefaultImageSpoiler().frame(
 					_spoiler->index(context.now, pausedSpoiler));
 				if (image.isEllipse()) {
@@ -536,6 +577,7 @@ void MessageView::paint(
 	static const auto ellipsisWidth = st::dialogsTextStyle.font->width(
 		kQEllipsis);
 	if (rect.width() > ellipsisWidth) {
+		animated += TextAnimationRect(_textCache, rect);
 		_textCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -555,6 +597,7 @@ void MessageView::paint(
 			? st::forumDialogJumpArrowOver
 			: st::forumDialogJumpArrow).paint(p, position, context.width);
 	}
+	return animated;
 }
 
 void MessageView::paintJumpToLast(

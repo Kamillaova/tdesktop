@@ -513,6 +513,12 @@ void Entry::updateChatListEntry() {
 	session().changes().entryUpdated(this, Data::EntryUpdate::Flag::Repaint);
 }
 
+void Entry::updateChatListEntryAnimation() {
+	session().changes().entryUpdated(
+		this,
+		Data::EntryUpdate::Flag::Animation);
+}
+
 void Entry::updateChatListEntryPostponed() {
 	if (_flags & Flag::UpdatePostponed) {
 		return;

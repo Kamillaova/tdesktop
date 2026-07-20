@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_list.h"
 #include "dialogs/dialogs_three_state_icon.h"
 #include "dialogs/dialogs_quick_action.h"
+#include "dialogs/ui/dialogs_message_view.h"
 #include "dialogs/ui/dialogs_video_userpic.h"
 #include "history/history.h"
 #include "history/history_item.h"
@@ -444,6 +445,7 @@ void PaintRow(
 		VideoUserpic *videoUserpic,
 		PeerData *from,
 		PeerBadge &rowBadge,
+		RowPaintResult &result,
 		Fn<void()> customEmojiRepaint,
 		const Text::String &rowName,
 		const HiddenSenderInfo *hiddenSenderInfo,
@@ -597,6 +599,7 @@ void PaintRow(
 		const auto &st = Ui::VerifiedStyle(context);
 		const auto position = rectForName.topLeft();
 		const auto skip = rowBadge.drawVerified(p, position, st);
+		result.animated += rowBadge.botVerifiedRect();
 		rectForName.setLeft(position.x() + skip + st::dialogsChatTypeSkip);
 	} else if (from) {
 		if (const auto chatTypeIcon = ChatTypeIcon(from, context)) {
@@ -766,6 +769,13 @@ void PaintRow(
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 				.elisionLines = 1,
 			});
+			result.animated += TextAnimationRect(
+				cache,
+				QRect(
+					nameleft,
+					texttop,
+					availableWidth,
+					st::dialogsTextFont->height));
 		}
 	} else if (!item) {
 		auto availableWidth = namewidth;
@@ -899,6 +909,8 @@ void PaintRow(
 			.now = context.now,
 			.paused = context.paused,
 		});
+		result.animated += rowBadge.emojiStatusRect();
+		result.animated += rowBadge.botVerifiedRect();
 		rectForName.setWidth(rectForName.width() - badgeWidth);
 	};
 	if (flags
@@ -1016,6 +1028,7 @@ void PaintRow(
 		}
 	}
 	if (swipeTranslation) {
+		result.animated.translate(-swipeTranslation, 0);
 		p.translate(swipeTranslation, 0);
 		const auto swipeActionRect = QRect(
 			rect::right(geometry) - swipeTranslation,
@@ -1118,15 +1131,32 @@ const style::VerifiedBadge &VerifiedStyle(const PaintContext &context) {
 		: st::dialogsVerifiedColors;
 }
 
-void RowPainter::Paint(
+RowPaintResult RowPainter::Paint(
 		Painter &p,
 		not_null<const Row*> row,
 		VideoUserpic *videoUserpic,
 		const PaintContext &context) {
+	auto result = RowPaintResult();
 	const auto entry = row->entry();
 	const auto history = row->history();
 	const auto thread = row->thread();
 	const auto sublist = row->sublist();
+	const auto animationView = thread
+		? &thread->lastItemDialogsView()
+		: nullptr;
+	const auto animationGeneration = animationView
+		? animationView->animationGeneration()
+		: 0;
+	const auto weakEntry = base::make_weak(entry);
+	auto customEmojiRepaint = Fn<void()>([=] {
+		if (const auto strong = weakEntry.get()) {
+			strong->updateChatListEntryAnimation();
+		}
+	});
+	if (animationView) {
+		customEmojiRepaint = animationView->trackAnimationRepaint(
+			std::move(customEmojiRepaint));
+	}
 	const auto peer = history ? history->peer.get() : nullptr;
 	const auto badgesState = entry->chatListBadgesState();
 	entry->chatListPreloadData(); // Allow chat list message resolve.
@@ -1212,9 +1242,7 @@ void RowPainter::Paint(
 			: false;
 		const auto view = actionWasPainted
 			? nullptr
-			: thread
-			? &thread->lastItemDialogsView()
-			: nullptr;
+			: animationView;
 		if (view) {
 			const auto forum = (peer && context.st->topicsHeight)
 				? peer->forum()
@@ -1227,24 +1255,27 @@ void RowPainter::Paint(
 					item,
 					forum,
 					monoforum,
-					[=] { entry->updateChatListEntry(); },
+					customEmojiRepaint,
 					{});
 			}
 			if (forum || monoforum) {
 				rect.setHeight(context.st->topicsHeight + rect.height());
 			}
-			view->paint(p, rect, context);
+			result.animated += view->paint(p, rect, context);
+			result.messagePreviewPainted = true;
 		}
 	};
+	const auto geometry = QRect(0, 0, context.width, row->height());
 	PaintRow(
 		p,
 		row,
-		QRect(0, 0, context.width, row->height()),
+		geometry,
 		entry,
 		videoUserpic,
 		from,
 		entry->chatListPeerBadge(),
-		[=] { entry->updateChatListEntry(); },
+		result,
+		customEmojiRepaint,
 		entry->chatListNameText(),
 		nullptr,
 		item,
@@ -1255,13 +1286,21 @@ void RowPainter::Paint(
 		badgesState,
 		flags,
 		paintItemCallback);
+	result.animated = result.animated.intersected(geometry);
+	result.animationGeneration = animationGeneration;
+	return result;
 }
 
-void RowPainter::Paint(
+RowPaintResult RowPainter::Paint(
 		Painter &p,
 		not_null<const FakeRow*> row,
 		const PaintContext &context) {
+	auto result = RowPaintResult();
 	const auto item = row->item();
+	auto &animationView = row->itemView();
+	const auto animationGeneration = animationView.animationGeneration();
+	const auto customEmojiRepaint = animationView.trackAnimationRepaint(
+		row->repaint());
 	const auto topic = context.forum ? row->topic() : nullptr;
 	const auto history = topic ? nullptr : item->history().get();
 	const auto entry = topic ? (Entry*)topic : (Entry*)history;
@@ -1325,16 +1364,16 @@ void RowPainter::Paint(
 			texttop,
 			availableWidth,
 			st::dialogsTextFont->height);
-		auto &view = row->itemView();
-		if (!view.prepared(item, nullptr, nullptr)) {
-			view.prepare(
+		if (!animationView.prepared(item, nullptr, nullptr)) {
+			animationView.prepare(
 				item,
 				nullptr,
 				nullptr,
-				row->repaint(),
+				customEmojiRepaint,
 				previewOptions);
 		}
-		view.paint(p, itemRect, context);
+		result.animated += animationView.paint(p, itemRect, context);
+		result.messagePreviewPainted = true;
 	};
 	const auto showSavedMessages = history
 		&& history->peer->isSelf()
@@ -1348,15 +1387,17 @@ void RowPainter::Paint(
 	const auto flags = (showSavedMessages ? Flag::SavedMessages : Flag(0))
 		| (showRepliesMessages ? Flag::RepliesMessages : Flag(0))
 		| (showVerifyCodes ? Flag::VerifyCodes : Flag(0));
+	const auto geometry = QRect(0, 0, context.width, context.st->height);
 	PaintRow(
 		p,
 		row,
-		QRect(0, 0, context.width, context.st->height),
+		geometry,
 		entry,
 		nullptr,
 		from,
 		row->badge(),
-		row->repaint(),
+		result,
+		customEmojiRepaint,
 		row->name(),
 		hiddenSenderInfo,
 		item,
@@ -1367,6 +1408,9 @@ void RowPainter::Paint(
 		badgesState,
 		flags,
 		paintItemCallback);
+	result.animated = result.animated.intersected(geometry);
+	result.animationGeneration = animationGeneration;
+	return result;
 }
 
 QRect RowPainter::SendActionAnimationRect(
