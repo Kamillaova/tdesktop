@@ -326,6 +326,7 @@ QSize Gif::countThumbSize(int &inOutWidthMax) const {
 }
 
 QSize Gif::countOptimalSize() {
+	clearRadialAnimationRepaintRect();
 	if (_data->isVideoMessage() && _transcribe) {
 		const auto &entry = _data->session().api().transcribes().entry(
 			_realParent);
@@ -380,6 +381,7 @@ QSize Gif::countOptimalSize() {
 }
 
 QSize Gif::countCurrentSize(int newWidth) {
+	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
 	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
 		; !forced.isEmpty()) {
@@ -536,7 +538,10 @@ bool Gif::hideMessageText() const {
 }
 
 void Gif::draw(Painter &p, const PaintContext &context) const {
-	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
+	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordRadialAnimationRepaintRect(p, context, QRect());
+		return;
+	}
 
 	_smallGroupPart = false;
 
@@ -1023,6 +1028,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (_drawTtl) {
 		_drawTtl(p, rthumb, context);
 	}
+	recordRadialAnimationRepaintRect(p, context, rthumb);
 }
 
 void Gif::paintTranscribe(
@@ -1715,10 +1721,12 @@ bool Gif::fullFeaturedGrouped(RectParts sides) const {
 }
 
 QSize Gif::sizeForGroupingOptimal(int maxWidth, bool last) const {
+	clearRadialAnimationRepaintRect();
 	return sizeForAspectRatio();
 }
 
 QSize Gif::sizeForGrouping(int width) const {
+	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
 	return sizeForAspectRatio();
 }
@@ -1945,6 +1953,7 @@ void Gif::drawGrouped(
 	if (!_smallGroupPart) {
 		drawCornerStatus(p, context, geometry.topLeft());
 	}
+	recordRadialAnimationRepaintRect(p, context, geometry);
 }
 
 TextState Gif::getStateGrouped(
@@ -2280,6 +2289,7 @@ bool Gif::hasHeavyPart() const {
 }
 
 void Gif::unloadHeavyPart() {
+	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
 	stopAnimation();
 	_dataMedia = nullptr;
