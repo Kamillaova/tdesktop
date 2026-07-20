@@ -122,15 +122,17 @@ QString GiftResaleColorEmoji::entityData() {
 	return DataFor(_color);
 }
 
-void GiftResaleColorEmoji::paint(QPainter &p, const Context &context) {
+QRectF GiftResaleColorEmoji::paint(QPainter &p, const Context &context) {
 	auto hq = PainterHighQualityEnabler(p);
 	p.setBrush(_color);
 	p.setPen(Qt::NoPen);
-	p.drawEllipse(
+	const auto rect = QRectF(
 		context.position.x(),
 		context.position.y() + st::giftBoxResaleColorTop,
 		width(),
 		width());
+	p.drawEllipse(rect);
+	return rect;
 }
 
 void GiftResaleColorEmoji::unload() {

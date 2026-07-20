@@ -54,7 +54,7 @@ public:
 	int width() override;
 	QString entityData() override;
 
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -90,7 +90,7 @@ QString DefaultIconEmoji::entityData() {
 	return u"topic_icon:%1"_q.arg(_icon.colorId);
 }
 
-void DefaultIconEmoji::paint(QPainter &p, const Context &context) {
+QRectF DefaultIconEmoji::paint(QPainter &p, const Context &context) {
 	const auto &st = (_tag == Data::CustomEmojiSizeTag::Normal)
 		? st::normalForumTopicIcon
 		: st::defaultForumTopicIcon;
@@ -108,9 +108,15 @@ void DefaultIconEmoji::paint(QPainter &p, const Context &context) {
 	const auto esize = full / style::DevicePixelRatio();
 	const auto customSize = Ui::Text::AdjustCustomEmojiSize(esize);
 	const auto skip = (customSize - st.size) / 2;
-	p.drawImage(context.position + QPoint(skip, skip), general
+	const auto position = context.position + QPoint(skip, skip);
+	auto image = general
 		? style::colorizeImage(_image, context.textColor)
-		: _image);
+		: _image;
+	if (general) {
+		image.setDevicePixelRatio(_image.devicePixelRatio());
+	}
+	p.drawImage(position, image);
+	return QRectF(position, image.deviceIndependentSize());
 }
 
 void DefaultIconEmoji::unload() {

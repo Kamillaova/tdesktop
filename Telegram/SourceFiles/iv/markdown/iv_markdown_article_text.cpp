@@ -325,7 +325,7 @@ public:
 	[[nodiscard]] bool failed() const;
 	[[nodiscard]] std::optional<Ui::Text::CustomEmojiVerticalMetrics> vertical(
 		const style::TextStyle &textStyle) const;
-	void paint(
+	QRectF paint(
 		QPainter &p,
 		const Ui::Text::CustomEmoji::Context &context,
 		const QString &replacementText,
@@ -433,7 +433,7 @@ public:
 		const style::TextStyle &textStyle) override;
 	QString replacementText() override;
 	Ui::Text::CustomEmojiSemantics semantics() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -462,7 +462,7 @@ public:
 		const style::TextStyle &textStyle) override;
 	QString replacementText() override;
 	Ui::Text::CustomEmojiSemantics semantics() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -717,7 +717,7 @@ auto InlineFormulaSharedState::vertical(const style::TextStyle &textStyle) const
 	};
 }
 
-void InlineFormulaSharedState::paint(
+QRectF InlineFormulaSharedState::paint(
 		QPainter &p,
 		const Ui::Text::CustomEmoji::Context &context,
 		const QString &replacementText,
@@ -728,31 +728,33 @@ void InlineFormulaSharedState::paint(
 		if (const auto image = colorizedImage(
 				context.textColor,
 				std::max(style::DevicePixelRatio(), 1))) {
-			p.drawImage(
-				QPointF(context.position)
-					+ QPointF(0., LogicalInlineFormulaMetric(
-						geometry.paintOffsetYScaled)),
-				*image);
+			const auto position = QPointF(context.position)
+				+ QPointF(0., LogicalInlineFormulaMetric(
+					geometry.paintOffsetYScaled));
+			p.drawImage(position, *image);
+			return QRectF(position, image->deviceIndependentSize());
 		}
-		return;
+		return {};
 	}
 	const auto fallbackText = replacementText.isEmpty()
 		? _displayFallbackText
 		: replacementText;
 	if (fallbackText.isEmpty()) {
-		return;
+		return {};
 	}
+	const auto rect = QRect(
+		context.position.x(),
+		context.position.y(),
+		std::max(fallbackWidth, 1),
+		p.fontMetrics().height());
 	p.save();
 	p.setPen(context.textColor);
 	p.drawText(
-		QRect(
-			context.position.x(),
-			context.position.y(),
-			std::max(fallbackWidth, 1),
-			p.fontMetrics().height()),
+		rect,
 		Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
 		fallbackText);
 	p.restore();
+	return rect;
 }
 
 void InlineFormulaSharedState::setRenderer(std::shared_ptr<MathRenderer> renderer) {
@@ -833,6 +835,7 @@ const QImage *InlineFormulaSharedState::colorizedImage(
 	auto colorized = QImage(
 		rendered.image.size(),
 		QImage::Format_ARGB32_Premultiplied);
+	colorized.setDevicePixelRatio(rendered.image.devicePixelRatio());
 	style::colorizeImage(
 		rendered.image,
 		color,
@@ -887,10 +890,10 @@ Ui::Text::CustomEmojiSemantics InlineFormulaObject::semantics() {
 	};
 }
 
-void InlineFormulaObject::paint(QPainter &p, const Context &context) {
-	if (_state) {
-		_state->paint(p, context, _replacementText, _fallbackWidth);
-	}
+QRectF InlineFormulaObject::paint(QPainter &p, const Context &context) {
+	return _state
+		? _state->paint(p, context, _replacementText, _fallbackWidth)
+		: QRectF();
 }
 
 void InlineFormulaObject::unload() {
@@ -991,8 +994,9 @@ Ui::Text::CustomEmojiSemantics InlineIvImageObject::semantics() {
 	};
 }
 
-void InlineIvImageObject::paint(QPainter &p, const Context &context) {
-	*_lastPaintRect = QRect(context.position, QSize(_width, _height));
+QRectF InlineIvImageObject::paint(QPainter &p, const Context &context) {
+	const auto rect = QRect(context.position, QSize(_width, _height));
+	*_lastPaintRect = rect;
 	if (_image) {
 		if (!_subscribed) {
 			_subscribed = true;
@@ -1009,22 +1013,21 @@ void InlineIvImageObject::paint(QPainter &p, const Context &context) {
 		}
 		if (const auto image = _image->image(std::max(_width, _height));
 			!image.isNull()) {
-			p.drawImage(
-				QRect(context.position, QSize(_width, _height)),
-				image);
-			return;
+			p.drawImage(rect, image);
+			return rect;
 		}
 	}
 	if (_replacementText.isEmpty()) {
-		return;
+		return {};
 	}
 	p.save();
 	p.setPen(context.textColor);
 	p.drawText(
-		QRect(context.position, QSize(_width, _height)),
+		rect,
 		Qt::AlignCenter | Qt::TextWordWrap,
 		_replacementText);
 	p.restore();
+	return rect;
 }
 
 void InlineIvImageObject::unload() {

@@ -286,7 +286,7 @@ public:
 		const style::TextStyle &) override;
 	QString replacementText() override;
 	Ui::Text::CustomEmojiSemantics semantics() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -339,8 +339,9 @@ Ui::Text::CustomEmojiSemantics FormulaLikeObject::semantics() {
 	};
 }
 
-void FormulaLikeObject::paint(QPainter &p, const Context &context) {
+QRectF FormulaLikeObject::paint(QPainter &p, const Context &context) {
 	p.drawImage(context.position, _image);
+	return QRectF(context.position, _image.deviceIndependentSize());
 }
 
 void FormulaLikeObject::unload() {

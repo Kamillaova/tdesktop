@@ -43,7 +43,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -206,16 +206,18 @@ void CollectibleEmoji::prepareFrame() {
 	p.drawRect(QRect(QPoint(), clip));
 }
 
-void CollectibleEmoji::paint(QPainter &p, const Context &context) {
+QRectF CollectibleEmoji::paint(QPainter &p, const Context &context) {
 	prepareFrame();
 	p.drawImage(context.position, _frame);
+	auto result = QRectF(context.position, _frame.deviceIndependentSize());
 	if (context.paused) {
 		_animation.stop();
 	} else if (!_animation.animating()) {
 		_animation.start();
 	}
-	_inner->paint(p, context);
+	const auto inner = _inner->paint(p, context);
 	_skippedPaints = 0;
+	return inner.isEmpty() ? result : result.united(inner);
 }
 
 void CollectibleEmoji::unload() {

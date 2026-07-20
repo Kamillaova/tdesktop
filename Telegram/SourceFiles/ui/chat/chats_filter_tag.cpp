@@ -22,7 +22,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -40,7 +40,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -48,6 +48,7 @@ public:
 private:
 	const std::unique_ptr<Ui::Text::CustomEmoji> _wrapped;
 	QImage _frame;
+	QColor _frameColor;
 	QPoint _shift;
 
 };
@@ -68,7 +69,7 @@ QString ScaledSimpleEmoji::entityData() {
 	return u"scaled-simple:"_q + _emoji->text();
 }
 
-void ScaledSimpleEmoji::paint(QPainter &p, const Context &context) {
+QRectF ScaledSimpleEmoji::paint(QPainter &p, const Context &context) {
 	if (_frame.isNull()) {
 		const auto adjusted = Text::AdjustCustomEmojiSize(st::emojiSize);
 		const auto xskip = (st::emojiSize - adjusted) / 2;
@@ -92,7 +93,9 @@ void ScaledSimpleEmoji::paint(QPainter &p, const Context &context) {
 			Qt::SmoothTransformation);
 	}
 
-	p.drawImage(context.position - _shift, _frame);
+	const auto position = context.position - _shift;
+	p.drawImage(position, _frame);
+	return QRectF(position, _frame.deviceIndependentSize());
 }
 
 void ScaledSimpleEmoji::unload() {
@@ -119,32 +122,42 @@ QString ScaledCustomEmoji::entityData() {
 	return u"scaled-custom:"_q + _wrapped->entityData();
 }
 
-void ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
-	if (_frame.isNull()) {
+QRectF ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
+	if (_frame.isNull() || _frameColor != context.textColor) {
 		if (!_wrapped->ready()) {
-			return;
+			return {};
 		}
 		const auto ratio = style::DevicePixelRatio();
 		const auto large = Emoji::GetSizeLarge();
 		const auto largeadjust = Text::AdjustCustomEmojiSize(large / ratio);
 		const auto size = QSize(largeadjust, largeadjust) * ratio;
-		_frame = QImage(size, QImage::Format_ARGB32_Premultiplied);
-		_frame.setDevicePixelRatio(ratio);
-		_frame.fill(Qt::transparent);
+		auto frame = QImage(size, QImage::Format_ARGB32_Premultiplied);
+		frame.setDevicePixelRatio(ratio);
+		frame.fill(Qt::transparent);
 
-		auto p = QPainter(&_frame);
-		p.translate(-context.position);
+		auto q = QPainter(&frame);
+		q.translate(-context.position);
 		const auto was = context.internal.forceFirstFrame;
 		context.internal.forceFirstFrame = true;
-		_wrapped->paint(p, context);
+		const auto painted = _wrapped->paint(q, context);
 		context.internal.forceFirstFrame = was;
-		p.end();
+		const auto sourceBounds = painted.isEmpty()
+			? QRectF()
+			: q.transform().map(
+				QPolygonF(painted)
+			).boundingRect().intersected(
+				QRectF(QPointF(), frame.deviceIndependentSize()));
+		q.end();
+		if (sourceBounds.isEmpty()) {
+			return {};
+		}
 
 		const auto smalladjust = Text::AdjustCustomEmojiSize(width());
-		_frame = _frame.scaled(
+		_frame = frame.scaled(
 			QSize(smalladjust, smalladjust) * ratio,
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
+		_frameColor = context.textColor;
 		_wrapped->unload();
 
 		const auto adjusted = Text::AdjustCustomEmojiSize(st::emojiSize);
@@ -154,7 +167,9 @@ void ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
 		const auto add = (width() - smalladjust) / 2;
 		_shift = QPoint(xskip, yskip) - QPoint(add, add);
 	}
-	p.drawImage(context.position - _shift, _frame);
+	const auto position = context.position - _shift;
+	p.drawImage(position, _frame);
+	return QRectF(position, _frame.deviceIndependentSize());
 }
 
 void ScaledCustomEmoji::unload() {

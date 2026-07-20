@@ -43,7 +43,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -75,10 +75,10 @@ QString ScaledBotVerifiedEmoji::entityData() {
 	return _wrapped->entityData();
 }
 
-void ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
+QRectF ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 	if (_cache->frame.isNull() || _cache->frameColor != context.textColor) {
 		if (!_wrapped->ready()) {
-			return;
+			return {};
 		}
 		const auto ratio = style::DevicePixelRatio();
 		const auto sourcePx = Data::FrameSizeFromTag(
@@ -94,22 +94,33 @@ void ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 		painter.translate(-context.position);
 		const auto was = context.internal.forceFirstFrame;
 		context.internal.forceFirstFrame = true;
-		_wrapped->paint(painter, context);
+		const auto painted = _wrapped->paint(painter, context);
 		context.internal.forceFirstFrame = was;
+		const auto sourceBounds = painted.isEmpty()
+			? QRectF()
+			: painter.transform().map(
+				QPolygonF(painted)
+			).boundingRect().intersected(
+				QRectF(QPointF(), frame.deviceIndependentSize()));
 		painter.end();
+		if (sourceBounds.isEmpty()) {
+			return {};
+		}
 
 		frame = frame.scaled(
 			QSize(_innerSize, _innerSize) * ratio,
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
 		if (_cache->version != version) {
-			return;
+			return {};
 		}
 		_cache->frame = std::move(frame);
 		_cache->frameColor = context.textColor;
 	}
 	const auto skip = (_outerSize - _innerSize) / 2;
-	p.drawImage(context.position + QPoint(skip, skip), _cache->frame);
+	const auto position = context.position + QPoint(skip, skip);
+	p.drawImage(position, _cache->frame);
+	return QRectF(position, _cache->frame.deviceIndependentSize());
 }
 
 void ScaledBotVerifiedEmoji::unload() {
@@ -132,6 +143,7 @@ struct PeerBadge::EmojiStatus {
 	EmojiStatusId id;
 	std::unique_ptr<Ui::Text::CustomEmoji> emoji;
 	QPoint lastPosition;
+	QRect lastRect;
 	QColor lastColor;
 	int skip = 0;
 };
@@ -369,6 +381,14 @@ int PeerBadge::drawPremiumEmojiStatus(
 	const auto iconx = rectForName.x()
 		+ qMin(descriptor.nameWidth, rectForName.width() - width);
 	const auto icony = rectForName.y();
+	_emojiStatus->lastPosition = QPoint(
+		iconx - 2 * _emojiStatus->skip,
+		icony + _emojiStatus->skip);
+	_emojiStatus->lastColor = (*descriptor.premiumFg)->c;
+	_emojiStatus->lastRect = QRectF(
+		_emojiStatus->lastPosition,
+		Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize))
+	).toAlignedRect();
 	if (_emojiStatus->id != id) {
 		using namespace Ui::Text;
 		auto &manager = peer->session().data().customEmojiManager();
@@ -380,18 +400,18 @@ int PeerBadge::drawPremiumEmojiStatus(
 			kPlayStatusLimit);
 	}
 	if (!_emojiStatus->emoji) {
+		_emojiStatus->lastRect = QRect();
 		return 0;
 	}
-	_emojiStatus->lastPosition = QPoint(
-		iconx - 2 * _emojiStatus->skip,
-		icony + _emojiStatus->skip);
-	_emojiStatus->lastColor = (*descriptor.premiumFg)->c;
-	_emojiStatus->emoji->paint(p, {
+	const auto painted = _emojiStatus->emoji->paint(p, {
 		.textColor = _emojiStatus->lastColor,
 		.now = descriptor.now,
 		.position = _emojiStatus->lastPosition,
 		.paused = descriptor.paused || On(PowerSaving::kEmojiStatus),
 	});
+	if (!painted.isEmpty()) {
+		_emojiStatus->lastRect = painted.toAlignedRect();
+	}
 	return width;
 }
 
@@ -407,12 +427,10 @@ int PeerBadge::drawPremiumStar(Painter &p, const Descriptor &descriptor) {
 }
 
 QRect PeerBadge::emojiStatusRect() const {
-	if (!_emojiStatus || !_emojiStatus->emoji) {
+	if (!_emojiStatus) {
 		return QRect();
 	}
-	return QRect(
-		_emojiStatus->lastPosition,
-		Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
+	return _emojiStatus->lastRect;
 }
 
 QRect PeerBadge::botVerifiedRect() const {
@@ -510,12 +528,18 @@ int PeerBadge::drawVerified(
 	data->lastRect = QRect();
 	if (const auto icon = data->icon.get()) {
 		const auto iconPosition = position + st.position;
-		data->lastRect = QRect(iconPosition, Size(st::emojiSize));
-		icon->paint(p, {
+		data->lastRect = QRectF(
+			iconPosition,
+			Size(st::emojiSize)
+		).toAlignedRect();
+		const auto painted = icon->paint(p, {
 			.textColor = st.color->c,
 			.now = crl::now(),
 			.position = iconPosition,
 		});
+		if (!painted.isEmpty()) {
+			data->lastRect = painted.toAlignedRect();
+		}
 		return icon->width();
 	}
 	return 0;

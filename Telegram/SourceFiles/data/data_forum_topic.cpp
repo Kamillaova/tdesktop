@@ -159,7 +159,9 @@ QImage ForumTopicGeneralIconFrame(int size, const QColor &color) {
 	svg.render(&p, QRectF(skip, skip, use, use));
 	p.end();
 
-	return style::colorizeImage(result, color);
+	auto colorized = style::colorizeImage(result, color);
+	colorized.setDevicePixelRatio(ratio);
+	return colorized;
 }
 
 TextWithEntities ForumTopicIconWithTitle(

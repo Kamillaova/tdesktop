@@ -60,7 +60,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	void paint(QPainter &p, const Context &context) override;
+	QRectF paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -93,15 +93,19 @@ QString StripEmoji::entityData() {
 	return _wrapped->entityData();
 }
 
-void StripEmoji::paint(QPainter &p, const Context &context) {
+QRectF StripEmoji::paint(QPainter &p, const Context &context) {
 	if (_switched) {
-		_wrapped->paint(p, context);
+		return _wrapped->paint(p, context);
 	} else if (_wrapped->readyInDefaultState()
 		&& _strip->inDefaultState(_index)) {
 		_switched = true;
-		_wrapped->paint(p, context);
+		return _wrapped->paint(p, context);
 	} else {
-		_strip->paintOne(p, _index, context.position + _shift, 1.);
+		return _strip->paintOne(
+			p,
+			_index,
+			context.position + _shift,
+			1.);
 	}
 }
 
