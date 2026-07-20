@@ -16,7 +16,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_iv.h"
 #include "styles/style_basic.h"
 
+#include <QtGui/QTransform>
+
 #include <vector>
+
+class QPaintDevice;
+class QPainter;
 
 enum class ImageRoundRadius;
 
@@ -210,6 +215,8 @@ struct ChatPaintContext {
 	mutable QRect highlightInterpolateTo;
 	crl::time now = 0;
 	Ui::Controls::SwipeContextData gestureHorizontal;
+	const QPaintDevice *elementPaintDevice = nullptr;
+	std::optional<QTransform> elementTransform;
 
 	void translate(int x, int y) {
 		viewport.translate(x, y);
@@ -238,6 +245,12 @@ struct ChatPaintContext {
 	[[nodiscard]] ChatPaintContext translated(QPoint point) const {
 		return translated(point.x(), point.y());
 	}
+	[[nodiscard]] ChatPaintContext withElementPainter(
+		const QPainter &p) const;
+	[[nodiscard]] bool hasElementPainter(const QPainter &p) const;
+	[[nodiscard]] std::optional<QRect> mapToElement(
+		const QPainter &p,
+		QRectF rect) const;
 	[[nodiscard]] ChatPaintContext withSelection(
 			TextSelection selection) const {
 		return withSelectionState(

@@ -2580,7 +2580,9 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 			if (clip.y() < top + about->height
 				&& clip.y() + clip.height() > top) {
 				p.translate(0, top);
-				view->draw(p, context.translated(0, -top));
+				view->draw(
+					p,
+					context.translated(0, -top).withElementPainter(p));
 				p.translate(0, -top);
 			}
 		}
@@ -2634,7 +2636,7 @@ void ListWidget::paintEvent(QPaintEvent *e) {
 			context.fullMessageSelected = selection.fullMessageSelected;
 			context.messageSelection = selection.messageSelection;
 			context.highlight = _highlighter.state(item);
-			view->draw(p, context);
+			view->draw(p, context.withElementPainter(p));
 		}
 		if (_translateTracker) {
 			_translateTracker->add(view);
@@ -4712,7 +4714,27 @@ void ListWidget::performDrag() {
 }
 
 int ListWidget::itemTop(not_null<const Element*> view) const {
+	const auto about = _delegate->listAboutView();
+	if (about && about->view() == view) {
+		return about->top;
+	}
 	return _itemsTop + view->y();
+}
+
+int ListWidget::itemTopForRepaint(not_null<const Element*> view) const {
+	const auto logicalTop = itemTop(view);
+	const auto about = _delegate->listAboutView();
+	if (about && about->view() == view) {
+		return logicalTop;
+	}
+	auto result = logicalTop;
+	for (const auto &gap : _collapseGaps) {
+		if (logicalTop < gap.absY) {
+			break;
+		}
+		result += gap.height;
+	}
+	return result;
 }
 
 void ListWidget::setCollapseGaps(std::vector<Ui::CollapseGap> gaps) {
@@ -4781,7 +4803,7 @@ void ListWidget::repaintItem(const Element *view) {
 	if (!view) {
 		return;
 	}
-	const auto top = itemTop(view);
+	const auto top = itemTopForRepaint(view);
 	const auto range = view->verticalRepaintRange();
 	update(0, top + range.top, width(), range.height);
 	const auto id = view->data()->fullId();
@@ -4800,7 +4822,7 @@ void ListWidget::repaintItem(const Element *view, QRect rect) {
 	if (!view) {
 		return;
 	}
-	const auto top = itemTop(view);
+	const auto top = itemTopForRepaint(view);
 	update(rect.translated(0, top));
 }
 

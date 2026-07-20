@@ -663,6 +663,7 @@ private:
 	void performDrag();
 	style::cursor computeMouseCursor() const;
 	int itemTop(not_null<const Element*> view) const;
+	int itemTopForRepaint(not_null<const Element*> view) const;
 	void repaintItem(FullMsgId itemId);
 	void repaintItem(const Element *view);
 	void repaintItem(const Element *view, QRect rect);

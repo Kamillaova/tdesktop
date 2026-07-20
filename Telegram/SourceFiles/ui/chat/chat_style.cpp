@@ -18,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_polls.h"
 #include "styles/style_widgets.h"
 
+#include <QtGui/QPolygonF>
+
 namespace Ui {
 namespace {
 
@@ -67,6 +69,34 @@ void EnsurePreCache(
 }
 
 } // namespace
+
+ChatPaintContext ChatPaintContext::withElementPainter(
+		const QPainter &p) const {
+	auto result = *this;
+	result.elementPaintDevice = p.device();
+	result.elementTransform = p.transform();
+	return result;
+}
+
+bool ChatPaintContext::hasElementPainter(const QPainter &p) const {
+	return elementTransform && elementPaintDevice == p.device();
+}
+
+std::optional<QRect> ChatPaintContext::mapToElement(
+		const QPainter &p,
+		QRectF rect) const {
+	if (!hasElementPainter(p)) {
+		return std::nullopt;
+	}
+	auto invertible = false;
+	const auto inverted = elementTransform->inverted(&invertible);
+	if (!invertible) {
+		return std::nullopt;
+	}
+	return inverted.map(
+		p.transform().map(QPolygonF(rect))
+	).boundingRect().toAlignedRect();
+}
 
 not_null<const MessageStyle*> ChatPaintContext::messageStyle() const {
 	return &st->messageStyle(outbg, selected());

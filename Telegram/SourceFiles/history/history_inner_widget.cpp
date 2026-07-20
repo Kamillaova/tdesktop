@@ -877,7 +877,7 @@ void HistoryInner::repaintItem(const Element *view) {
 	if (_widget->skipItemRepaint()) {
 		return;
 	}
-	const auto top = itemTop(view);
+	const auto top = itemTopForRepaint(view);
 	if (top >= 0) {
 		const auto range = view->verticalRepaintRange();
 		update(0, top + range.top, width(), range.height);
@@ -895,7 +895,7 @@ void HistoryInner::repaintItem(const Element *view, QRect rect) {
 	if (_widget->skipItemRepaint()) {
 		return;
 	}
-	const auto top = itemTop(view);
+	const auto top = itemTopForRepaint(view);
 	if (top >= 0) {
 		update(rect.translated(0, top));
 	}
@@ -1428,7 +1428,7 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 			context.fullMessageSelected = selection.fullMessageSelected;
 			context.messageSelection = selection.messageSelection;
 			p.translate(0, top);
-			view->draw(p, context);
+			view->draw(p, context.withElementPainter(p));
 			context.translate(0, top);
 			p.translate(0, -top);
 		}
@@ -1580,7 +1580,7 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 			context.fullMessageSelected = selection.fullMessageSelected;
 			context.messageSelection = selection.messageSelection;
 			context.highlight = _widget->itemHighlight(view->data());
-			view->draw(p, context);
+			view->draw(p, context.withElementPainter(p));
 			processPainted(view, top, height);
 
 			top += height;
@@ -1649,7 +1649,7 @@ void HistoryInner::paintEvent(QPaintEvent *e) {
 				context.fullMessageSelected = selection.fullMessageSelected;
 				context.messageSelection = selection.messageSelection;
 				context.highlight = _widget->itemHighlight(item);
-				view->draw(p, context);
+				view->draw(p, context.withElementPainter(p));
 				processPainted(view, top, height);
 			}
 			top += height;
@@ -5712,6 +5712,23 @@ int HistoryInner::itemTop(const Element *view) const {
 			? migratedTop()
 			: -2);
 	return (top < 0) ? top : (top + view->y() + view->block()->y());
+}
+
+int HistoryInner::itemTopForRepaint(const Element *view) const {
+	const auto logicalTop = itemTop(view);
+	if (logicalTop < 0) {
+		return logicalTop;
+	} else if (_aboutView && view == _aboutView->view()) {
+		return logicalTop;
+	}
+	auto result = logicalTop;
+	for (const auto &gap : _collapseGaps) {
+		if (logicalTop < gap.absY) {
+			break;
+		}
+		result += gap.height;
+	}
+	return result;
 }
 
 bool HistoryInner::scrollToElementLocalY(

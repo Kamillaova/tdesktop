@@ -1930,7 +1930,7 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 					? &_selectedTextSelection
 					: nullptr;
 				context.highlight = _highlighter.state(view->data());
-				view->draw(p, context);
+				view->draw(p, context.withElementPainter(p));
 
 				const auto height = view->height();
 				top += height;
