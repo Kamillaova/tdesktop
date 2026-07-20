@@ -1757,8 +1757,34 @@ Ui::VideoUserpic *InnerWidget::validateVideoUserpic(
 		return i->second.get();
 	}
 	const auto repaint = [=] {
-		updateDialogRow({ history, FullMsgId() });
-		updateSearchResult(history->peer);
+		const auto &st = Row::ComputeSt(history, _filterId);
+		auto rect = QRect(
+			st.padding.left(),
+			st.padding.top(),
+			st.photoSize,
+			st.photoSize);
+		const auto action = [&] {
+			if (_activeQuickAction
+				&& (_activeQuickAction->data.msgBareId == peer->id.value)) {
+				return _activeQuickAction.get();
+			}
+			auto result = static_cast<Ui::QuickActionContext*>(nullptr);
+			for (const auto &inactive : _inactiveQuickActions) {
+				if (inactive->data.msgBareId == peer->id.value) {
+					result = inactive.get();
+				}
+			}
+			return result;
+		}();
+		if (action
+			&& !action->ripple
+			&& (action->data.translation != 0)) {
+			rect = QRect();
+		}
+		updateDialogRow(
+			{ history, FullMsgId() },
+			rect,
+			UpdateRowSection::Default | UpdateRowSection::Filtered);
 	};
 	return _videoUserpics.emplace(peer, std::make_unique<Ui::VideoUserpic>(
 		peer,
