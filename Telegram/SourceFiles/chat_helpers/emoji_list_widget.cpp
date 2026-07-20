@@ -146,6 +146,7 @@ struct EmojiListWidget::CustomEmojiInstance {
 struct EmojiListWidget::RecentOne {
 	std::shared_ptr<Data::EmojiStatusCollectible> collectible;
 	Ui::Text::CustomEmoji *custom = nullptr;
+	DocumentId customDocumentId = 0;
 	RecentEmojiId id;
 	mutable QImage premiumLock;
 };
@@ -1162,8 +1163,7 @@ void EmojiListWidget::fillCloudSearchResults() {
 		_searchResults.push_back({
 			.custom = resolveCustomEmoji(
 				statusId,
-				document,
-				SearchEmojiSectionSetId()),
+				document),
 			.id = { RecentEmojiDocument{ .id = id, .test = test } },
 		});
 	}
@@ -1220,8 +1220,7 @@ bool EmojiListWidget::addSearchShortcut(not_null<Data::StickersSet*> set) {
 			list.push_back({
 				.custom = resolveCustomEmoji(
 					EmojiStatusId{ document->id },
-					document,
-					set->id),
+					document),
 				.document = document,
 				.emoji = Ui::Emoji::Find(sticker->alt),
 			});
@@ -1256,8 +1255,7 @@ std::vector<EmojiListWidget::CustomOne> EmojiListWidget::collectSearchSet(
 			result.push_back({
 				.custom = resolveCustomEmoji(
 					statusId,
-					document,
-					set->id),
+					document),
 				.document = document,
 				.emoji = Ui::Emoji::Find(sticker->alt),
 			});
@@ -1471,49 +1469,84 @@ void EmojiListWidget::provideRecent(
 	resizeToWidth(width());
 }
 
-void EmojiListWidget::repaintCustom(uint64 setId) {
-	if (!_repaintsScheduled.emplace(setId).second) {
+void EmojiListWidget::repaintCustom(DocumentId documentId) {
+	if (!_repaintsScheduled.emplace(documentId).second) {
 		return;
 	}
-	const auto repaintSearch = (setId == SearchEmojiSectionSetId());
-	if (_searchMode) {
-		if (repaintSearch) {
-			update();
-		} else {
-			for (auto i = 0, count = int(_searchShortcutSets.size());
-					i != count; ++i) {
-				if (_searchShortcutSets[i].id == setId) {
-					rtlupdate(searchShortcutRect(i));
+	const auto visibleTop = getVisibleTop();
+	const auto visibleBottom = getVisibleBottom();
+	const auto visible = QRect(
+		0,
+		visibleTop,
+		width(),
+		std::max(visibleBottom - visibleTop, 0));
+	const auto repaintSection = [&](const SectionInfo &info) {
+		if (info.rowsTop >= visibleBottom
+			|| info.rowsBottom <= visibleTop) {
+			return;
+		}
+		const auto fromRow = floorclamp(
+			visibleTop - info.rowsTop,
+			_singleSize.height(),
+			0,
+			info.rowsCount);
+		const auto tillRow = ceilclamp(
+			visibleBottom - info.rowsTop,
+			_singleSize.height(),
+			0,
+			info.rowsCount);
+		const auto paintedCount = info.collapsed
+			? std::min(info.count, _columnCount * kCollapsedRows - 1)
+			: info.count;
+		const auto from = fromRow * _columnCount;
+		const auto till = std::min(
+			paintedCount,
+			tillRow * _columnCount);
+		for (auto index = from; index != till; ++index) {
+			const auto matches = [&] {
+				if (!_searchMode
+					&& info.section == int(Section::Recent)
+					&& index < _recent.size()
+					&& _recent[index].customDocumentId) {
+					return (_recent[index].customDocumentId == documentId);
+				}
+				const auto custom = lookupCustomEmoji(index, info.section);
+				return custom.document && custom.document->id == documentId;
+			}();
+			if (matches) {
+				const auto rect = emojiRect(info.section, index);
+				if (rtl()) {
+					update(0, rect.y(), width(), rect.height());
+				} else {
+					update(rect);
 				}
 			}
-			enumerateSections([&](const SectionInfo &info) {
-				if (info.section > 0
-					&& searchSetBySection(info.section).id == setId) {
-					update(
-						0,
-						info.rowsTop,
-						width(),
-						info.rowsBottom - info.rowsTop);
-				}
-				return true;
-			});
 		}
+	};
+	if (_searchMode) {
+		for (auto i = 0, count = int(_searchShortcutSets.size());
+				i != count; ++i) {
+			const auto &set = _searchShortcutSets[i];
+			if (!set.list.empty()
+				&& set.list.front().document->id == documentId) {
+				const auto rect = searchShortcutRect(i);
+				if (rect.intersects(visible)) {
+					if (rtl()) {
+						update(0, rect.y(), width(), rect.height());
+					} else {
+						update(rect);
+					}
+				}
+			}
+		}
+		enumerateSections([&](const SectionInfo &info) {
+			repaintSection(info);
+			return true;
+		});
 		return;
 	}
-	const auto repaintRecent = (setId == RecentEmojiSectionSetId());
 	enumerateSections([&](const SectionInfo &info) {
-		const auto repaint1 = repaintRecent
-			&& (info.section == int(Section::Recent));
-		const auto repaint2 = !repaint1
-			&& (info.section >= _staticCount)
-			&& (setId == _custom[info.section - _staticCount].id);
-		if (repaint1 || repaint2) {
-			update(
-				0,
-				info.rowsTop,
-				width(),
-				info.rowsBottom - info.rowsTop);
-		}
+		repaintSection(info);
 		return true;
 	});
 }
@@ -1896,6 +1929,7 @@ void EmojiListWidget::fillRecent() {
 		}
 		_recent.push_back({
 			.custom = resolveCustomRecent(one.id),
+			.customDocumentId = document ? document->id : 0,
 			.id = one.id,
 		});
 		if (document) {
@@ -1923,6 +1957,7 @@ void EmojiListWidget::fillRecentFrom(
 			const auto no = QString::fromUtf8("\xe2\x9b\x94\xef\xb8\x8f");
 			_recent.push_back({
 				.custom = resolveCustomRecent(fakeId),
+				.customDocumentId = fakeId,
 				.id = { Ui::Emoji::Find(no) },
 			});
 			_recentCustomIds.emplace(fakeId);
@@ -1930,6 +1965,9 @@ void EmojiListWidget::fillRecentFrom(
 			_recent.push_back({
 				.collectible = id.collectible,
 				.custom = resolveCustomRecent(id),
+				.customDocumentId = id.collectible
+					? id.collectible->documentId
+					: id.documentId,
 				.id = {
 					RecentEmojiDocument{ .id = id.documentId, .test = test },
 				},
@@ -3540,7 +3578,7 @@ void EmojiListWidget::refreshCustom() {
 				continue;
 			} else if (const auto sticker = document->sticker()) {
 				set.push_back({
-					.custom = resolveCustomEmoji(id, document, lookupId),
+					.custom = resolveCustomEmoji(id, document),
 					.document = document,
 					.emoji = Ui::Emoji::Find(sticker->alt),
 				});
@@ -3595,24 +3633,13 @@ void EmojiListWidget::refreshCustom() {
 	}
 }
 
-Fn<void()> EmojiListWidget::repaintCallback(
-		DocumentId documentId,
-		uint64 setId) {
-	return [=] {
-		repaintCustom(setId);
-		if (_recentCustomIds.contains(documentId)) {
-			repaintCustom(RecentEmojiSectionSetId());
-		}
-		if (_searchCustomIds.contains(documentId)) {
-			repaintCustom(SearchEmojiSectionSetId());
-		}
-	};
+Fn<void()> EmojiListWidget::repaintCallback(DocumentId documentId) {
+	return [=] { repaintCustom(documentId); };
 }
 
 not_null<Ui::Text::CustomEmoji*> EmojiListWidget::resolveCustomEmoji(
 		EmojiStatusId id,
-		not_null<DocumentData*> document,
-		uint64 setId) {
+		not_null<DocumentData*> document) {
 	const auto documentId = document->id;
 	const auto i = _customEmoji.find(id);
 	const auto recentOnly = (i != end(_customEmoji)) && i->second.recentOnly;
@@ -3621,7 +3648,7 @@ not_null<Ui::Text::CustomEmoji*> EmojiListWidget::resolveCustomEmoji(
 	}
 	auto instance = document->owner().customEmojiManager().create(
 		Data::EmojiStatusCustomId(id),
-		repaintCallback(documentId, setId),
+		repaintCallback(documentId),
 		Data::CustomEmojiManager::SizeTag::Large);
 	if (recentOnly) {
 		for (auto &recent : _recent) {
@@ -3670,7 +3697,7 @@ not_null<Ui::Text::CustomEmoji*> EmojiListWidget::resolveCustomRecent(
 	const auto documentId = id.collectible
 		? id.collectible->documentId
 		: id.documentId;
-	auto repaint = repaintCallback(documentId, RecentEmojiSectionSetId());
+	auto repaint = repaintCallback(documentId);
 	if (_customRecentFactory && !id.collectible) {
 		return _customRecent.emplace(
 			id.documentId,
@@ -3704,7 +3731,7 @@ void EmojiListWidget::refreshEmojiStatusCollectibles() {
 		const auto sticker = document->sticker();
 		set.push_back({
 			.collectible = status.collectible,
-			.custom = resolveCustomEmoji(status, document, setId),
+			.custom = resolveCustomEmoji(status, document),
 			.document = document,
 			.emoji = sticker ? Ui::Emoji::Find(sticker->alt) : nullptr,
 		});

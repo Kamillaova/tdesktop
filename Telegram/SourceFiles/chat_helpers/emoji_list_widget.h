@@ -465,23 +465,20 @@ private:
 	createSearchShortcutRipple(int index);
 	[[nodiscard]] PowerSaving::Flag powerSavingFlag() const;
 
-	void repaintCustom(uint64 setId);
+	void repaintCustom(DocumentId documentId);
 
 	void fillRecent();
 	void fillRecentFrom(const std::vector<EmojiStatusId> &list);
 	[[nodiscard]] not_null<Ui::Text::CustomEmoji*> resolveCustomEmoji(
 		EmojiStatusId id,
-		not_null<DocumentData*> document,
-		uint64 setId);
+		not_null<DocumentData*> document);
 	[[nodiscard]] Ui::Text::CustomEmoji *resolveCustomRecent(
 		Core::RecentEmojiId customId);
 	[[nodiscard]] not_null<Ui::Text::CustomEmoji*> resolveCustomRecent(
 		DocumentId documentId);
 	[[nodiscard]] not_null<Ui::Text::CustomEmoji*> resolveCustomRecent(
 		EmojiStatusId id);
-	[[nodiscard]] Fn<void()> repaintCallback(
-		DocumentId documentId,
-		uint64 setId);
+	[[nodiscard]] Fn<void()> repaintCallback(DocumentId documentId);
 
 	void showPreview();
 	bool showPreviewFor(not_null<DocumentData*> document);
@@ -512,7 +509,7 @@ private:
 	std::vector<RecentOne> _recent;
 	base::flat_set<DocumentId> _recentCustomIds;
 	base::flat_set<DocumentId> _freeEffects;
-	base::flat_set<uint64> _repaintsScheduled;
+	base::flat_set<DocumentId> _repaintsScheduled;
 	rpl::variable<int> _recentShownCount;
 	std::unique_ptr<Ui::Text::CustomEmojiPaintContext> _emojiPaintContext;
 	bool _recentPainted = false;
