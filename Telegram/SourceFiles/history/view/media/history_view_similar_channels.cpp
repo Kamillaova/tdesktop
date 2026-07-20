@@ -113,7 +113,8 @@ void SimilarChannels::clickHandlerActiveChanged(
 void SimilarChannels::clickHandlerPressedChanged(
 		const ClickHandlerPtr &p,
 		bool pressed) {
-	for (auto &channel : _channels) {
+	for (auto i = 0; i != int(_channels.size()); ++i) {
+		auto &channel = _channels[i];
 		if (channel.link != p) {
 			continue;
 		}
@@ -124,7 +125,11 @@ void SimilarChannels::clickHandlerPressedChanged(
 					Ui::RippleAnimation::RoundRectMask(
 						channel.geometry.size(),
 						st::roundRadiusLarge),
-					[=] { repaint(); });
+					channelRepaintCallback(
+						i,
+						_channelsGeneration,
+						RepaintSource::Ripple,
+						false));
 			}
 			channel.ripple->add(_lastPoint);
 		} else if (channel.ripple) {
@@ -167,7 +172,33 @@ void SimilarChannels::draw(Painter &p, const PaintContext &context) const {
 	p.setClipRect(geometry);
 	_hasHeavyPart = 1;
 	validateLastPremiumLock();
-	const auto drawOne = [&](const Channel &channel) {
+	for (auto i = 0; i != int(_channels.size()); ++i) {
+		const auto raw = _channels[i].geometry.translated(
+			-int(_scrollLeft),
+			0);
+		const auto right = raw.x() + raw.width();
+		const auto cached = (raw.x() < padding.left())
+			|| (right > width() - padding.right());
+		auto ripple = style::rtlrect(raw, width());
+		if (cached) {
+			ripple = ripple.intersected(raw);
+		}
+		recordChannelRepaint(
+			p,
+			context,
+			i,
+			RepaintSource::Content,
+			raw.intersected(geometry));
+		recordChannelRepaint(
+			p,
+			context,
+			i,
+			RepaintSource::Ripple,
+			ripple.intersected(geometry));
+	}
+	const auto generation = _channelsGeneration;
+	const auto drawOne = [&](int index) {
+		const auto &channel = _channels[index];
 		const auto geometry = channel.geometry.translated(-int(_scrollLeft), 0);
 		const auto right = geometry.x() + geometry.width();
 		if (right <= 0) {
@@ -176,15 +207,11 @@ void SimilarChannels::draw(Painter &p, const PaintContext &context) const {
 		const auto subscribing = !channel.subscribed;
 		if (subscribing) {
 			channel.subscribed = 1;
-			const auto raw = channel.thumbnail.get();
-			channel.thumbnail->subscribeToUpdates([=] {
-				for (const auto &channel : _channels) {
-					if (channel.thumbnail.get() == raw) {
-						channel.counterBgValid = 0;
-						repaint();
-					}
-				}
-			});
+			channel.thumbnail->subscribeToUpdates(channelRepaintCallback(
+				index,
+				generation,
+				RepaintSource::Content,
+				true));
 		}
 		auto cachedp = std::optional<Painter>();
 		const auto cached = (geometry.x() < padding.left())
@@ -230,9 +257,12 @@ void SimilarChannels::draw(Painter &p, const PaintContext &context) const {
 				--i;
 				if (const auto &thumbnail = _moreThumbnails[i]) {
 					if (subscribing) {
-						thumbnail->subscribeToUpdates([=] {
-							repaint();
-						});
+						thumbnail->subscribeToUpdates(
+							channelRepaintCallback(
+								index,
+								generation,
+								RepaintSource::Content,
+								false));
 					}
 					q->drawImage(left, top, thumbnail->image(size));
 					q->setBrush(Qt::NoBrush);
@@ -313,11 +343,12 @@ void SimilarChannels::draw(Painter &p, const PaintContext &context) const {
 			p.drawImage(geometry.topLeft(), _roundedCache);
 		}
 	};
-	for (const auto &channel : _channels) {
+	for (auto i = 0; i != int(_channels.size()); ++i) {
+		const auto &channel = _channels[i];
 		if (channel.geometry.x() >= _scrollLeft + width()) {
 			break;
 		}
-		drawOne(channel);
+		drawOne(i);
 	}
 	p.setPen(stm->historyTextFg);
 	p.setFont(st::chatSimilarTitle);
@@ -465,6 +496,102 @@ ClickHandlerPtr SimilarChannels::ensureToggleLink() const {
 	return _toggleLink;
 }
 
+Fn<void()> SimilarChannels::channelRepaintCallback(
+		int index,
+		uint64 generation,
+		RepaintSource source,
+		bool invalidateCounter) const {
+	const auto weak = base::make_weak(this);
+	return [weak, index, generation, source, invalidateCounter] {
+		if (const auto strong = weak.get()) {
+			strong->repaintChannel(
+				index,
+				generation,
+				source,
+				invalidateCounter);
+		}
+	};
+}
+
+void SimilarChannels::repaintChannel(
+		int index,
+		uint64 generation,
+		RepaintSource source,
+		bool invalidateCounter) const {
+	if (generation != _channelsGeneration
+		|| index < 0
+		|| index >= int(_channels.size())) {
+		return;
+	}
+	const auto &channel = _channels[index];
+	if (invalidateCounter) {
+		channel.counterBgValid = 0;
+	}
+	auto &repaint = (source == RepaintSource::Content)
+		? channel.contentRepaint
+		: channel.rippleRepaint;
+	if (repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = 1;
+	if (!repaint.known) {
+		this->repaint();
+	} else {
+		repaintChannelRegion(repaint.current);
+	}
+}
+
+void SimilarChannels::recordChannelRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		RepaintSource source,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	Assert(index >= 0 && index < int(_channels.size()));
+	const auto &channel = _channels[index];
+	auto &repaint = (source == RepaintSource::Content)
+		? channel.contentRepaint
+		: channel.rippleRepaint;
+	const auto wasKnown = repaint.known;
+	repaint.pending = 0;
+	auto current = QRegion();
+	auto geometryKnown = true;
+	if (!rect.isEmpty()) {
+		if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+			current += *mapped;
+		} else {
+			geometryKnown = false;
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.current = geometryKnown ? std::move(current) : QRegion();
+	repaint.known = geometryKnown ? 1 : 0;
+	if ((!wasKnown && stale.isEmpty() && previous.isEmpty())
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = 1;
+	repaintChannelRegion(previous.united(repaint.current));
+}
+
+void SimilarChannels::repaintChannelRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+void SimilarChannels::resetChannelRepaints() const {
+	for (const auto &channel : _channels) {
+		channel.contentRepaint = {};
+		channel.rippleRepaint = {};
+	}
+}
+
 void SimilarChannels::ensureCacheReady(QSize size) const {
 	const auto ratio = style::DevicePixelRatio();
 	if (_roundedCache.size() != size * ratio) {
@@ -517,6 +644,7 @@ QSize SimilarChannels::countOptimalSize() {
 	const auto channel = parent()->history()->peer->asChannel();
 	Assert(channel != nullptr);
 
+	++_channelsGeneration;
 	_channels.clear();
 	_moreThumbnails = {};
 	const auto api = &channel->session().api();
@@ -608,8 +736,12 @@ QSize SimilarChannels::countCurrentSize(int newWidth) {
 	if (!_toggled) {
 		return {};
 	}
+	const auto scrollLeft = _scrollLeft;
 	_scrollMax = std::max(int(_fullWidth) - newWidth, 0);
 	_scrollLeft = std::clamp(_scrollLeft, uint32(), _scrollMax);
+	if (_scrollLeft != scrollLeft) {
+		resetChannelRepaints();
+	}
 	_hasViewAll = (_scrollMax != 0) ? 1 : 0;
 	return { newWidth, minHeight() };
 }
@@ -643,6 +775,7 @@ bool SimilarChannels::consumeHorizontalScroll(QPoint position, int delta) {
 	if (_scrollLeft == left) {
 		return false;
 	}
+	resetChannelRepaints();
 	repaint();
 	return true;
 }

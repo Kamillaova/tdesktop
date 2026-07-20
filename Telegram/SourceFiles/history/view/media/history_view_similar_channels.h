@@ -55,7 +55,18 @@ public:
 	bool consumeHorizontalScroll(QPoint position, int delta) override;
 
 private:
+	enum class RepaintSource {
+		Content,
+		Ripple,
+	};
 	struct Channel {
+		struct Repaint {
+			QRegion current;
+			QRegion stale;
+			uint32 pending : 1 = 0;
+			uint32 known : 1 = 0;
+		};
+
 		QRect geometry;
 		Ui::Text::String name;
 		std::shared_ptr<Ui::DynamicImage> thumbnail;
@@ -68,6 +79,8 @@ private:
 		mutable uint32 moreLocked : 1 = 0;
 		mutable uint32 subscribed : 1 = 0;
 		mutable uint32 counterBgValid : 1 = 0;
+		mutable Repaint contentRepaint;
+		mutable Repaint rippleRepaint;
 	};
 
 	void ensureCacheReady(QSize size) const;
@@ -75,6 +88,24 @@ private:
 	void fillMoreThumbnails() const;
 	void validateCounterBg(const Channel &channel) const;
 	[[nodiscard]] ClickHandlerPtr ensureToggleLink() const;
+	[[nodiscard]] Fn<void()> channelRepaintCallback(
+		int index,
+		uint64 generation,
+		RepaintSource source,
+		bool invalidateCounter) const;
+	void repaintChannel(
+		int index,
+		uint64 generation,
+		RepaintSource source,
+		bool invalidateCounter) const;
+	void recordChannelRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		int index,
+		RepaintSource source,
+		QRect rect) const;
+	void repaintChannelRegion(const QRegion &region) const;
+	void resetChannelRepaints() const;
 
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -93,6 +124,7 @@ private:
 	uint32 _scrollMax : 15 = 0;
 	uint32 _hasViewAll : 1 = 0;
 	mutable uint32 _hasHeavyPart : 1 = 0;
+	uint64 _channelsGeneration = 0;
 
 	std::vector<Channel> _channels;
 	mutable std::array<std::shared_ptr<Ui::DynamicImage>, 2> _moreThumbnails;
