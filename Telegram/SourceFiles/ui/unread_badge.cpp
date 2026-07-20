@@ -27,12 +27,19 @@ namespace {
 constexpr auto kPlayStatusLimit = 2;
 constexpr auto kBotVerifiedScale = 0.88;
 
+struct ScaledBotVerifiedEmojiCache {
+	QImage frame;
+	QColor frameColor;
+	uint64 version = 0;
+};
+
 class ScaledBotVerifiedEmoji final : public Ui::Text::CustomEmoji {
 public:
 	ScaledBotVerifiedEmoji(
 		std::unique_ptr<Ui::Text::CustomEmoji> wrapped,
 		int innerSize,
-		int outerSize);
+		int outerSize,
+		std::shared_ptr<ScaledBotVerifiedEmojiCache> cache);
 
 	int width() override;
 	QString entityData() override;
@@ -45,18 +52,19 @@ private:
 	const std::unique_ptr<Ui::Text::CustomEmoji> _wrapped;
 	const int _innerSize = 0;
 	const int _outerSize = 0;
-	QImage _frame;
-	QColor _frameColor;
+	const std::shared_ptr<ScaledBotVerifiedEmojiCache> _cache;
 
 };
 
 ScaledBotVerifiedEmoji::ScaledBotVerifiedEmoji(
 	std::unique_ptr<Ui::Text::CustomEmoji> wrapped,
 	int innerSize,
-	int outerSize)
+	int outerSize,
+	std::shared_ptr<ScaledBotVerifiedEmojiCache> cache)
 : _wrapped(std::move(wrapped))
 , _innerSize(innerSize)
-, _outerSize(outerSize) {
+, _outerSize(outerSize)
+, _cache(std::move(cache)) {
 }
 
 int ScaledBotVerifiedEmoji::width() {
@@ -68,20 +76,21 @@ QString ScaledBotVerifiedEmoji::entityData() {
 }
 
 void ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
-	if (_frame.isNull() || _frameColor != context.textColor) {
+	if (_cache->frame.isNull() || _cache->frameColor != context.textColor) {
 		if (!_wrapped->ready()) {
 			return;
 		}
 		const auto ratio = style::DevicePixelRatio();
 		const auto sourcePx = Data::FrameSizeFromTag(
 			Data::CustomEmojiSizeTag::Isolated);
-		_frame = QImage(
+		auto frame = QImage(
 			QSize(sourcePx, sourcePx),
 			QImage::Format_ARGB32_Premultiplied);
-		_frame.setDevicePixelRatio(ratio);
-		_frame.fill(Qt::transparent);
+		frame.setDevicePixelRatio(ratio);
+		frame.fill(Qt::transparent);
 
-		auto painter = QPainter(&_frame);
+		const auto version = _cache->version;
+		auto painter = QPainter(&frame);
 		painter.translate(-context.position);
 		const auto was = context.internal.forceFirstFrame;
 		context.internal.forceFirstFrame = true;
@@ -89,26 +98,32 @@ void ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 		context.internal.forceFirstFrame = was;
 		painter.end();
 
-		_frame = _frame.scaled(
+		frame = frame.scaled(
 			QSize(_innerSize, _innerSize) * ratio,
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
-		_frameColor = context.textColor;
+		if (_cache->version != version) {
+			return;
+		}
+		_cache->frame = std::move(frame);
+		_cache->frameColor = context.textColor;
 	}
 	const auto skip = (_outerSize - _innerSize) / 2;
-	p.drawImage(context.position + QPoint(skip, skip), _frame);
+	p.drawImage(context.position + QPoint(skip, skip), _cache->frame);
 }
 
 void ScaledBotVerifiedEmoji::unload() {
+	_cache->frame = QImage();
+	++_cache->version;
 	_wrapped->unload();
 }
 
 bool ScaledBotVerifiedEmoji::ready() {
-	return !_frame.isNull() || _wrapped->ready();
+	return !_cache->frame.isNull() || _wrapped->ready();
 }
 
 bool ScaledBotVerifiedEmoji::readyInDefaultState() {
-	return !_frame.isNull() || _wrapped->ready();
+	return !_cache->frame.isNull() || _wrapped->ready();
 }
 
 } // namespace
@@ -458,12 +473,20 @@ void PeerBadge::set(
 		const auto outer = st::emojiSize;
 		const auto inner = int(base::SafeRound(
 			st::emojiSize * kBotVerifiedScale));
+		const auto cache = std::make_shared<ScaledBotVerifiedEmojiCache>();
 		_botVerifiedData->icon = MakeWrappedEmoji<ScaledBotVerifiedEmoji>(
 			factory(
 				Data::SerializeCustomEmojiId(details->iconId),
-				{ .repaint = repaint }),
+				{ .repaint = [cache, repaint = std::move(repaint)] {
+					cache->frame = QImage();
+					++cache->version;
+					if (repaint) {
+						repaint();
+					}
+				} }),
 			inner,
-			outer);
+			outer,
+			cache);
 	}
 }
 
