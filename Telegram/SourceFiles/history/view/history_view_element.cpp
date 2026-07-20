@@ -1022,6 +1022,7 @@ void ServicePreMessage::init(
 		ClickHandlerPtr fullClickHandler,
 		std::unique_ptr<Media> media,
 		bool below) {
+	owner = view;
 	this->below = below;
 	text = Ui::Text::String(
 		st::serviceTextStyle,
@@ -1118,6 +1119,8 @@ void ServicePreMessage::paint(
 		p.setBrush(Qt::NoBrush);
 		p.setPen(context.st->msgServiceFg());
 		p.setFont(st::msgServiceFont);
+		Assert(owner != nullptr);
+		owner->prepareCustomEmojiPaint(p, context, text);
 		text.draw(p, {
 			.position = trect.topLeft(),
 			.availableWidth = trect.width(),

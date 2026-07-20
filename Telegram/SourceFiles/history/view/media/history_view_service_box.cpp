@@ -220,6 +220,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		const auto &padding = st::msgServiceGiftBoxTitlePadding;
 		top += padding.top();
 		if (!_title.isEmpty()) {
+			_parent->prepareCustomEmojiPaint(p, context, _title);
 			_title.draw(p, {
 				.position = QPoint(st::msgPadding.left(), top),
 				.availableWidth = _maxWidth,

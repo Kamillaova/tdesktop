@@ -365,6 +365,7 @@ struct ServicePreMessage : RuntimeComponent<ServicePreMessage, Element> {
 		const StateRequest &request,
 		QRect g) const;
 
+	Element *owner = nullptr;
 	std::unique_ptr<Media> media;
 	Ui::Text::String text;
 	ClickHandlerPtr handler;
