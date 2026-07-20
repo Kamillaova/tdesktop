@@ -13,6 +13,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "ui/userpic_view.h"
 
+#include <QtGui/QRegion>
+
 class History;
 class HistoryBlock;
 class HistoryItem;
@@ -351,7 +353,8 @@ struct ServicePreMessage : RuntimeComponent<ServicePreMessage, Element> {
 		PreparedServiceText string,
 		ClickHandlerPtr fullClickHandler,
 		std::unique_ptr<Media> media,
-		bool below);
+		bool below,
+		Fn<void()> repaint);
 
 	int resizeToWidth(int newWidth, ElementChatMode mode);
 
@@ -364,6 +367,8 @@ struct ServicePreMessage : RuntimeComponent<ServicePreMessage, Element> {
 		QPoint point,
 		const StateRequest &request,
 		QRect g) const;
+	void repaintText() const;
+	void repaintBeforeRemoval() const;
 
 	Element *owner = nullptr;
 	std::unique_ptr<Media> media;
@@ -372,6 +377,24 @@ struct ServicePreMessage : RuntimeComponent<ServicePreMessage, Element> {
 	int width = 0;
 	int height = 0;
 	bool below = false;
+
+private:
+	struct TextRepaint {
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
+	void finishTextRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const;
+	void invalidateTextRepaint() const;
+	void repaintTextRegion(const QRegion &region) const;
+
+	mutable TextRepaint _textRepaint;
 
 };
 
@@ -824,6 +847,7 @@ private:
 		const TextWithEntities &text,
 		const std::vector<ClickHandlerPtr> &links = {});
 	void repaintText(uint64 generation);
+	void repaintServicePreMessage(uint64 generation);
 	void invalidateTextRepaintRect();
 	void setReactions(std::unique_ptr<Reactions::InlineList> list);
 
@@ -843,6 +867,7 @@ private:
 	HistoryItem *_textItem = nullptr;
 	mutable Ui::Text::String _text;
 	uint64 _textGeneration = 0;
+	uint64 _servicePreMessageGeneration = 0;
 	mutable QRect _textRepaintRect;
 	mutable QRect _textStaleRepaintRect;
 	mutable uint32 _textWidth : 16 = 0;

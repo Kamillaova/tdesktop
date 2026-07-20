@@ -55,6 +55,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "ui/rect.h"
 #include "ui/round_rect.h"
 #include "data/components/ephemeral_messages.h"
@@ -1031,7 +1032,9 @@ void ServicePreMessage::init(
 		PreparedServiceText string,
 		ClickHandlerPtr fullClickHandler,
 		std::unique_ptr<Media> media,
-		bool below) {
+		bool below,
+		Fn<void()> repaint) {
+	invalidateTextRepaint();
 	owner = view;
 	this->below = below;
 	text = Ui::Text::String(
@@ -1041,16 +1044,18 @@ void ServicePreMessage::init(
 		st::msgMinWidth,
 		Core::TextContext({
 			.session = &view->history()->session(),
-			.repaint = [=] { view->customEmojiRepaint(); },
+			.repaint = std::move(repaint),
 		}));
 	handler = std::move(fullClickHandler);
 	for (auto i = 0; i != int(string.links.size()); ++i) {
 		text.setLink(i + 1, string.links[i]);
 	}
+	InitElementTextPart(view, text);
 	this->media = std::move(media);
 }
 
 int ServicePreMessage::resizeToWidth(int newWidth, ElementChatMode mode) {
+	invalidateTextRepaint();
 	width = newWidth;
 	if (mode == ElementChatMode::Wide) {
 		accumulate_min(
@@ -1098,6 +1103,11 @@ void ServicePreMessage::paint(
 		QRect g,
 		ElementChatMode mode) const {
 	if (media && media->hideServiceText()) {
+		finishTextRepaint(
+			p,
+			context,
+			QRegion(),
+			context.hasElementPainter(p));
 		const auto left = (width - media->width()) / 2;
 		const auto top = below
 			? (g.top() + g.height() - st::msgServiceMargin.top() + st::msgServiceMargin.bottom())
@@ -1117,6 +1127,43 @@ void ServicePreMessage::paint(
 		const auto rect = QRect(0, 0, width, height)
 			- st::msgServiceMargin;
 		const auto trect = rect - st::msgServicePadding;
+		auto repaintRegion = QRegion();
+		auto repaintGeometryKnown = context.hasElementPainter(p);
+		if (text.hasCustomEmoji() || text.hasSpoilers()) {
+			const auto lineWidths = text.countLineWidths(trect.width());
+			const auto customEmoji = text.hasCustomEmoji();
+			const auto margins = customEmoji
+				? CustomEmojiTextRepaintMargins()
+				: QMargins();
+			for (auto i = 0, count = int(lineWidths.size()); i != count; ++i) {
+				const auto lineWidth = std::clamp(
+					lineWidths[i],
+					0,
+					trect.width());
+				if (!lineWidth) {
+					continue;
+				}
+				auto repaintRect = QRectF(
+					trect.x() + (trect.width() - lineWidth) / 2,
+					trect.y() + i * st::msgServiceFont->height,
+					lineWidth,
+					st::msgServiceFont->height);
+				if (customEmoji) {
+					repaintRect = repaintRect.marginsAdded(QMarginsF(margins));
+				}
+				const auto mapped = context.mapToElement(p, repaintRect);
+				if (!mapped || mapped->isEmpty()) {
+					repaintGeometryKnown = false;
+					break;
+				}
+				repaintRegion += *mapped;
+			}
+		}
+		finishTextRepaint(
+			p,
+			context,
+			std::move(repaintRegion),
+			repaintGeometryKnown);
 
 		ServiceMessagePainter::PaintComplexBubble(
 			p,
@@ -1136,12 +1183,93 @@ void ServicePreMessage::paint(
 			.availableWidth = trect.width(),
 			.align = style::al_top,
 			.palette = &context.st->serviceTextPalette(),
+			.spoiler = Ui::Text::DefaultSpoilerCache(),
 			.now = context.now,
+			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.fullWidthSelection = false,
 			//.selection = context.selection,
 		});
 
 		p.translate(0, -top);
+	}
+}
+
+void ServicePreMessage::repaintText() const {
+	if (_textRepaint.pending) {
+		return;
+	} else if (_textRepaint.known && _textRepaint.current.isEmpty()) {
+		return;
+	}
+	_textRepaint.pending = true;
+	if (!_textRepaint.known) {
+		owner->customEmojiRepaint();
+	} else {
+		repaintTextRegion(_textRepaint.current);
+	}
+}
+
+void ServicePreMessage::repaintBeforeRemoval() const {
+	const auto known = _textRepaint.known;
+	const auto broadPending = _textRepaint.pending && !known;
+	const auto region = _textRepaint.stale.united(_textRepaint.current);
+	_textRepaint = TextRepaint();
+	if (broadPending) {
+		owner->clearCustomEmojiRepaint();
+	}
+	if (!known) {
+		owner->repaint();
+	} else {
+		repaintTextRegion(region);
+	}
+}
+
+void ServicePreMessage::finishTextRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const {
+	if (!context.hasElementPainter(p)) {
+		if (!_textRepaint.known) {
+			if (_textRepaint.pending) {
+				owner->clearCustomEmojiRepaint();
+			}
+			_textRepaint.pending = false;
+		}
+		return;
+	}
+	if (_textRepaint.pending && !_textRepaint.known) {
+		owner->clearCustomEmojiRepaint();
+	}
+	_textRepaint.pending = false;
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(_textRepaint.stale);
+	const auto previous = stale.united(base::take(_textRepaint.current));
+	_textRepaint.current = std::move(region);
+	_textRepaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == _textRepaint.current)) {
+		return;
+	}
+	_textRepaint.pending = true;
+	repaintTextRegion(previous.united(_textRepaint.current));
+}
+
+void ServicePreMessage::invalidateTextRepaint() const {
+	if (owner && _textRepaint.pending && !_textRepaint.known) {
+		owner->clearCustomEmojiRepaint();
+	}
+	_textRepaint.stale = _textRepaint.stale.united(
+		base::take(_textRepaint.current));
+	_textRepaint.pending = false;
+	_textRepaint.known = false;
+}
+
+void ServicePreMessage::repaintTextRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		owner->repaint(rect);
 	}
 }
 
@@ -1345,6 +1473,14 @@ void Element::hideSpoilers() {
 	if (_text.hasSpoilers()) {
 		_text.setSpoilerRevealed(false, anim::type::instant);
 	}
+	if (const auto service = Get<ServicePreMessage>()) {
+		if (service->text.hasSpoilers()) {
+			service->text.setSpoilerRevealed(false, anim::type::instant);
+		}
+		if (service->media) {
+			service->media->hideSpoilers();
+		}
+	}
 	if (_media) {
 		_media->hideSpoilers();
 	}
@@ -1374,6 +1510,15 @@ void Element::repaintText(uint64 generation) {
 		customEmojiRepaint();
 	} else {
 		repaint(_textRepaintRect);
+	}
+}
+
+void Element::repaintServicePreMessage(uint64 generation) {
+	if (_servicePreMessageGeneration != generation) {
+		return;
+	}
+	if (const auto service = Get<ServicePreMessage>()) {
+		service->repaintText();
 	}
 }
 
@@ -2547,17 +2692,25 @@ void Element::setServicePreMessage(
 		PreparedServiceText text,
 		ClickHandlerPtr fullClickHandler,
 		std::unique_ptr<Media> media) {
+	const auto generation = ++_servicePreMessageGeneration;
 	if (!text.text.empty() || media) {
 		AddComponents(ServicePreMessage::Bit());
 		const auto service = Get<ServicePreMessage>();
+		const auto weak = base::make_weak(this);
 		service->init(
 			this,
 			std::move(text),
 			std::move(fullClickHandler),
 			std::move(media),
-			false);
+			false,
+			[weak, generation] {
+				if (const auto strong = weak.get()) {
+					strong->repaintServicePreMessage(generation);
+				}
+			});
 		setPendingResize();
 	} else if (Has<ServicePreMessage>()) {
+		Get<ServicePreMessage>()->repaintBeforeRemoval();
 		RemoveComponents(ServicePreMessage::Bit());
 		setPendingResize();
 	}
@@ -2567,17 +2720,25 @@ void Element::setServicePostMessage(
 		PreparedServiceText text,
 		ClickHandlerPtr fullClickHandler,
 		std::unique_ptr<Media> media) {
+	const auto generation = ++_servicePreMessageGeneration;
 	if (!text.text.empty() || media) {
 		AddComponents(ServicePreMessage::Bit());
 		const auto service = Get<ServicePreMessage>();
+		const auto weak = base::make_weak(this);
 		service->init(
 			this,
 			std::move(text),
 			std::move(fullClickHandler),
 			std::move(media),
-			true);
+			true,
+			[weak, generation] {
+				if (const auto strong = weak.get()) {
+					strong->repaintServicePreMessage(generation);
+				}
+			});
 		setPendingResize();
 	} else if (Has<ServicePreMessage>()) {
+		Get<ServicePreMessage>()->repaintBeforeRemoval();
 		RemoveComponents(ServicePreMessage::Bit());
 		setPendingResize();
 	}
@@ -2741,8 +2902,10 @@ auto Element::verticalRepaintRange() const -> VerticalRepaintRange {
 
 bool Element::hasHeavyPart() const {
 	const auto rich = richpage();
+	const auto service = Get<ServicePreMessage>();
 	return (_flags & Flag::HeavyCustomEmoji)
 		|| (_media && _media->hasHeavyPart())
+		|| (service && service->media && service->media->hasHeavyPart())
 		|| (rich && rich->article.hasHeavyPart());
 }
 
@@ -2925,6 +3088,12 @@ void Element::unloadHeavyPart() {
 	}
 	if (_media) {
 		_media->unloadHeavyPart();
+	}
+	if (const auto service = Get<ServicePreMessage>()) {
+		if (service->media) {
+			service->media->unloadHeavyPart();
+		}
+		service->text.unloadPersistentAnimation();
 	}
 	if (const auto rich = richpage()) {
 		rich->article.unloadHeavyPart();
@@ -3346,7 +3515,15 @@ QPoint Element::mediaTopLeft() const {
 
 Element::~Element() {
 	++_textGeneration;
+	++_servicePreMessageGeneration;
 	setReactions(nullptr);
+	if (const auto service = Get<ServicePreMessage>()) {
+		if (service->media) {
+			service->media->unloadHeavyPart();
+		}
+		service->text.unloadPersistentAnimation();
+		checkHeavyPart();
+	}
 
 	// Delete media while owner still exists.
 	clearSpecialOnlyEmoji();
