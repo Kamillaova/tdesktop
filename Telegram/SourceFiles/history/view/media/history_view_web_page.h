@@ -119,6 +119,7 @@ private:
 	};
 	struct HintData {
 		QSize size;
+		QSize rippleSize;
 		QPointF lastPosition;
 		QString text;
 		int widthBefore = 0;
@@ -149,6 +150,13 @@ private:
 		uint32 expanded : 1 = 0;
 	};
 	struct DescriptionRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+	struct RippleRepaint {
 		QRegion current;
 		QRegion stale;
 		uint64 generation = 0;
@@ -197,6 +205,20 @@ private:
 		bool logEntryPreview) const;
 	void invalidateDescriptionRepaint() const;
 	void repaintDescriptionRegion(const QRegion &region) const;
+	void repaintOuterRipple(uint64 generation) const;
+	void repaintHintRipple(uint64 generation) const;
+	void repaintRipple(
+		RippleRepaint &repaint,
+		uint64 generation) const;
+	void recordRippleRepaint(
+		RippleRepaint &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const;
+	void invalidateRippleRepaint(RippleRepaint &repaint) const;
+	void repaintRippleRegion(const QRegion &region) const;
+	[[nodiscard]] uint64 resetRippleRepaint(
+		RippleRepaint &repaint) const;
 
 	[[nodiscard]] ClickHandlerPtr replaceAttachLink(
 		const ClickHandlerPtr &link) const;
@@ -225,6 +247,9 @@ private:
 	std::unique_ptr<Media> _attach;
 	mutable std::shared_ptr<Data::PhotoMedia> _photoMedia;
 	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
+	mutable QSize _rippleSize;
+	mutable RippleRepaint _rippleRepaint;
+	mutable RippleRepaint _hintRippleRepaint;
 
 	int _dataVersion = -1;
 	int _siteNameLines = 0;

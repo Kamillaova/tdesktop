@@ -430,9 +430,12 @@ void WebPage::customEmojiResolveDone(not_null<DocumentData*> document) {
 
 QSize WebPage::countOptimalSize() {
 	invalidateDescriptionRepaint();
+	invalidateRippleRepaint(_rippleRepaint);
+	invalidateRippleRepaint(_hintRippleRepaint);
 	if (_data->pendingTill || _data->failed) {
 		return { 0, 0 };
 	}
+	++_hintRippleRepaint.generation;
 	setupAdditionalData();
 	_hasLogEntryPreview = hasLogEntryPreview() ? 1 : 0;
 
@@ -464,6 +467,9 @@ QSize WebPage::countOptimalSize() {
 	const auto versionChanged = (_dataVersion != _data->version);
 	if (versionChanged) {
 		++_descriptionRepaint.generation;
+		_ripple = nullptr;
+		_rippleSize = QSize();
+		++_rippleRepaint.generation;
 		_dataVersion = _data->version;
 		_openl = nullptr;
 		_previewLink = nullptr;
@@ -798,6 +804,8 @@ QSize WebPage::countOptimalSize() {
 
 QSize WebPage::countCurrentSize(int newWidth) {
 	invalidateDescriptionRepaint();
+	invalidateRippleRepaint(_rippleRepaint);
+	invalidateRippleRepaint(_hintRippleRepaint);
 	if (_data->pendingTill || _data->failed) {
 		return { newWidth, minHeight() };
 	}
@@ -1185,6 +1193,85 @@ void WebPage::repaintDescriptionRegion(const QRegion &region) const {
 	}
 }
 
+void WebPage::repaintOuterRipple(uint64 generation) const {
+	repaintRipple(_rippleRepaint, generation);
+}
+
+void WebPage::repaintHintRipple(uint64 generation) const {
+	repaintRipple(_hintRippleRepaint, generation);
+}
+
+void WebPage::repaintRipple(
+		RippleRepaint &repaint,
+		uint64 generation) const {
+	if (repaint.generation != generation
+		|| repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		this->repaint();
+	} else {
+		repaintRippleRegion(repaint.current);
+	}
+}
+
+void WebPage::recordRippleRepaint(
+		RippleRepaint &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, rect);
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRippleRegion(previous.united(repaint.current));
+}
+
+void WebPage::invalidateRippleRepaint(RippleRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void WebPage::repaintRippleRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+uint64 WebPage::resetRippleRepaint(RippleRepaint &repaint) const {
+	repaint.pending = false;
+	return ++repaint.generation;
+}
+
 bool WebPage::hasHeavyPart() const {
 	if (const auto stickerSet = stickerSetData()) {
 		for (const auto &part : stickerSet->views) {
@@ -1221,6 +1308,16 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			0,
 			0,
 			false);
+		recordRippleRepaint(
+			_rippleRepaint,
+			p,
+			context,
+			QRectF());
+		recordRippleRepaint(
+			_hintRippleRepaint,
+			p,
+			context,
+			QRectF());
 		return;
 	}
 	const auto st = context.st;
@@ -1231,6 +1328,13 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 	const auto full = Rect(currentSize());
 	const auto outer = full - inBubblePadding();
 	const auto inner = outer - innerMargin();
+	const auto canonical = context.hasElementPainter(p);
+	if (canonical && _ripple && _rippleSize != outer.size()) {
+		_ripple = nullptr;
+		_rippleSize = QSize();
+		++_rippleRepaint.generation;
+	}
+	recordRippleRepaint(_rippleRepaint, p, context, QRectF(outer));
 	const auto attachAdditionalInfoText = _attach
 		? _attach->additionalInfoString()
 		: QString();
@@ -1315,9 +1419,14 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (_ripple) {
-		_ripple->paint(p, outer.x(), outer.y(), width(), &cache->bg);
+		p.save();
+		p.translate(outer.topLeft());
+		_ripple->paint(p, 0, 0, _rippleSize.width(), &cache->bg);
+		p.restore();
 		if (_ripple->empty()) {
 			_ripple = nullptr;
+			_rippleSize = QSize();
+			++_rippleRepaint.generation;
 		}
 	}
 
@@ -1420,6 +1529,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 		}
 		paintw -= pw + st::webPagePhotoDelta;
 	}
+	auto hintRepaintRecorded = false;
 	if (_siteNameLines) {
 		p.setPen(cache->icon);
 		p.setTextPalette(useColorCollectible
@@ -1455,20 +1565,38 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			hint->lastPosition = QPointF(
 				radius + inner.left() + hint->widthBefore,
 				tshift + (_siteName.style()->font->height - height) / 2.);
+			if (canonical
+				&& hint->ripple
+				&& hint->rippleSize != hint->size) {
+				hint->ripple = nullptr;
+				hint->rippleSize = QSize();
+				++_hintRippleRepaint.generation;
+			}
+			const auto rect = QRectF(hint->lastPosition, hint->size);
+			recordRippleRepaint(
+				_hintRippleRepaint,
+				p,
+				context,
+				rect);
+			hintRepaintRecorded = true;
 
 			if (hint->ripple) {
+				p.save();
+				p.translate(hint->lastPosition);
 				hint->ripple->paint(
 					p,
-					hint->lastPosition.x(),
-					hint->lastPosition.y(),
-					width(),
+					0,
+					0,
+					hint->rippleSize.width(),
 					&cache->bg);
+				p.restore();
 				if (hint->ripple->empty()) {
 					hint->ripple = nullptr;
+					hint->rippleSize = QSize();
+					++_hintRippleRepaint.generation;
 				}
 			}
 
-			const auto rect = QRectF(hint->lastPosition, hint->size);
 			auto hq = PainterHighQualityEnabler(p);
 			p.setPen(Qt::NoPen);
 			p.setBrush(color);
@@ -1482,6 +1610,13 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 		tshift += lineHeight;
 
 		p.setTextPalette(stm->textPalette);
+	}
+	if (!hintRepaintRecorded) {
+		recordRippleRepaint(
+			_hintRippleRepaint,
+			p,
+			context,
+			QRectF());
 	}
 	p.setPen(stm->historyTextFg);
 	if (_titleLines) {
@@ -1965,19 +2100,26 @@ void WebPage::clickHandlerPressedChanged(
 	if (hint && hint->link == p) {
 		if (pressed) {
 			if (!hint->ripple) {
-				const auto owner = &parent()->history()->owner();
+				const auto weak = base::make_weak(this);
+				const auto generation = resetRippleRepaint(
+					_hintRippleRepaint);
+				hint->rippleSize = hint->size;
 				hint->ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
-						hint->size,
-						_st.radius),
-					[=] { owner->requestViewRepaint(parent()); });
+						hint->rippleSize,
+						hint->size.height() / 2),
+					[weak, generation] {
+						if (const auto strong = weak.get()) {
+							strong->repaintHintRipple(generation);
+						}
+					});
 			}
 			const auto full = Rect(currentSize());
 			const auto outer = full - inBubblePadding();
-			hint->ripple->add(_lastPoint
-				+ outer.topLeft()
-				- hint->lastPosition.toPoint());
+			const auto origin = QPointF(_lastPoint + outer.topLeft())
+				- hint->lastPosition;
+			hint->ripple->add(origin.toPoint());
 		} else if (hint->ripple) {
 			hint->ripple->lastStop();
 		}
@@ -1988,15 +2130,25 @@ void WebPage::clickHandlerPressedChanged(
 			if (!_ripple) {
 				const auto full = Rect(currentSize());
 				const auto outer = full - inBubblePadding();
-				const auto owner = &parent()->history()->owner();
+				const auto weak = base::make_weak(this);
+				const auto generation = resetRippleRepaint(
+					_rippleRepaint);
+				_rippleSize = outer.size();
 				_ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
-						outer.size(),
+						_rippleSize,
 						_st.radius),
-					[=] { owner->requestViewRepaint(parent()); });
+					[weak, generation] {
+						if (const auto strong = weak.get()) {
+							strong->repaintOuterRipple(generation);
+						}
+					});
 			}
-			_ripple->add(_lastPoint);
+			const auto sponsoredTop = sponsoredData()
+				? st::msgDateFont->height
+				: 0;
+			_ripple->add(_lastPoint + QPoint(0, sponsoredTop));
 		} else if (_ripple) {
 			_ripple->lastStop();
 		}
@@ -2177,6 +2329,10 @@ int WebPage::bottomInfoPadding() const {
 WebPage::~WebPage() {
 	invalidateDescriptionRepaint();
 	++_descriptionRepaint.generation;
+	invalidateRippleRepaint(_rippleRepaint);
+	invalidateRippleRepaint(_hintRippleRepaint);
+	++_rippleRepaint.generation;
+	++_hintRippleRepaint.generation;
 	history()->owner().unregisterWebPageView(_data, _parent);
 	if (_composeToneListening) {
 		_data->session().data().customEmojiManager().unregisterListener(
