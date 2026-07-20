@@ -13,6 +13,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/weak_ptr.h"
 #include "base/timer.h"
 
+#include <QtGui/QRegion>
+#include <QtGui/QTransform>
+
 namespace Ui {
 class RippleAnimation;
 class FireworksAnimation;
@@ -90,6 +93,13 @@ private:
 	struct AttachedMedia;
 	struct SolutionMedia;
 	struct RecentVoter;
+	struct RepaintState {
+		uint64 generation = 0;
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -108,6 +118,35 @@ private:
 
 	[[nodiscard]] bool canAddOption() const;
 	void refreshWebpageSubscriptions();
+	void recordRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const;
+	void recordRepaintGeometry(
+		RepaintState &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		const QRegion &region) const;
+	void recordAnimationRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const;
+	void invalidateRepaintGeometry(RepaintState &repaint) const;
+	void repaintGeometry(RepaintState &repaint) const;
+	void repaintGeometry(
+		RepaintState &repaint,
+		uint64 generation) const;
+	[[nodiscard]] uint64 startRepaintGeneration(
+		RepaintState &repaint) const;
+	void stopRepaintGeneration(RepaintState &repaint) const;
+	void repaintRegion(const QRegion &region) const;
+	void invalidateFiniteRepaintGeometries() const;
+	void rememberElementPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	[[nodiscard]] std::optional<QRect> mapCurrentPaintToElement(
+		const Painter &p,
+		QRectF rect) const;
 
 	not_null<PollData*> _poll;
 	std::vector<WebPageData*> _registeredWebpages;
@@ -119,6 +158,14 @@ private:
 	mutable std::unique_ptr<Ui::FireworksAnimation> _fireworksAnimation;
 	Ui::Animations::Simple _wrongAnswerAnimation;
 	mutable QPoint _lastLinkPoint;
+	mutable RepaintState _fireworksRepaint;
+	mutable RepaintState _wrongAnswerRepaint;
+	mutable uint64 _nextRepaintGeneration = 0;
+	mutable QSize _repaintLayoutSize;
+	mutable const QPaintDevice *_elementPaintDevice = nullptr;
+	mutable std::optional<QTransform> _elementTransform;
+	mutable const QPaintDevice *_lastDrawPaintDevice = nullptr;
+	mutable uint32 _lastDrawCanonical : 1 = 0;
 
 	bool _addOptionActive = false;
 	mutable bool _wrongAnswerAnimated = false;

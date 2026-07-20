@@ -98,6 +98,22 @@ constexpr auto kRollDuration = crl::time(400);
 constexpr auto kExpiringVoteRestrictionDuration = 10 * 60 * crl::time(1000);
 constexpr auto kVoteRestrictionToastDuration = 5 * crl::time(1000);
 
+[[nodiscard]] QMargins PollBubbleRollRepaintMargins(QSize size) {
+	const auto radians = kRotateAmplitude * M_PI / 180.;
+	const auto sine = std::sin(radians);
+	const auto cosine = std::cos(radians);
+	const auto scale = 1. + kScaleAmplitude;
+	const auto addX = int(std::ceil(std::max(
+		0.,
+		(scale * (size.width() * cosine + size.height() * sine)
+			- size.width()) / 2.))) + st::lineWidth;
+	const auto addY = int(std::ceil(std::max(
+		0.,
+		(scale * (size.height() * cosine + size.width() * sine)
+			- size.height()) / 2.))) + st::lineWidth;
+	return QMargins(addX, addY, addX, addY);
+}
+
 [[nodiscard]] bool IsExpiringVoteRestriction(
 		PollData::VoteRestriction restriction) {
 	using Restriction = PollData::VoteRestriction;
@@ -797,6 +813,7 @@ struct Poll::Answer {
 	uint64 thumbnailId = 0;
 	uint64 textGeneration = 0;
 	mutable std::unique_ptr<Ui::RippleAnimation> ripple;
+	mutable QSize rippleMaskSize;
 	std::vector<UserpicInRow> recentVoters;
 	mutable QImage recentVotersImage;
 };
@@ -884,7 +901,13 @@ struct Poll::Footer : public Poll::Part {
 	ClickHandlerPtr _adminBackVoteLink;
 	ClickHandlerPtr _saveOptionLink;
 	mutable std::unique_ptr<Ui::RippleAnimation> _linkRipple;
+	mutable QImage _linkRippleMask;
+	mutable QSize _linkRippleLayoutSize;
+	mutable QSize _linkRippleMaskSize;
+	mutable Ui::BubbleRounding _linkRippleMaskRounding;
 	mutable int _linkRippleShift = 0;
+	mutable RepaintState _contentRepaint;
+	mutable RepaintState _rippleRepaint;
 	mutable base::Timer _closeTimer;
 
 private:
@@ -918,6 +941,11 @@ private:
 		int textWidth,
 		int innerWidth) const;
 	[[nodiscard]] QString linkButtonText() const;
+	void prepareLinkRippleMask(const Layout &layout, int outerWidth) const;
+	[[nodiscard]] QRect linkRippleRect(
+		const Layout &layout,
+		int outerWidth) const;
+	void resetLinkRipple() const;
 	void toggleLinkRipple(bool pressed);
 };
 
@@ -1050,6 +1078,60 @@ int Poll::Footer::countHeight(int innerWidth) const {
 	return computeLayout(innerWidth).totalHeight;
 }
 
+void Poll::Footer::prepareLinkRippleMask(
+		const Layout &layout,
+		int outerWidth) const {
+	if (!layout.link || layout.compact) {
+		resetLinkRipple();
+		_linkRippleMask = QImage();
+		_linkRippleLayoutSize = QSize();
+		_linkRippleMaskSize = QSize();
+		_linkRippleShift = 0;
+		return;
+	}
+	const auto linkHeight = layout.totalHeight - layout.topSkip;
+	const auto layoutSize = QSize(outerWidth, linkHeight);
+	const auto rounding = _owner->adjustedBubbleRounding();
+	if (!_linkRippleMask.isNull()
+		&& _linkRippleLayoutSize == layoutSize
+		&& _linkRippleMaskRounding == rounding) {
+		return;
+	}
+	resetLinkRipple();
+	auto mask = _owner->isRoundedInBubbleBottom()
+		? static_cast<Message*>(_owner->_parent.get())
+			->bottomRippleMask(linkHeight)
+		: BottomRippleMask{
+			Ui::RippleAnimation::RectMask(layoutSize),
+		};
+	const auto ratio = style::DevicePixelRatio();
+	_linkRippleLayoutSize = layoutSize;
+	_linkRippleMaskSize = QSize(
+		mask.image.width() / ratio,
+		mask.image.height() / ratio);
+	_linkRippleMaskRounding = rounding;
+	_linkRippleShift = mask.shift;
+	_linkRippleMask = std::move(mask.image);
+}
+
+QRect Poll::Footer::linkRippleRect(
+		const Layout &layout,
+		int outerWidth) const {
+	return _linkRippleMaskSize.isEmpty()
+		? QRect()
+		: style::rtlrect(
+			-_linkRippleShift,
+			layout.topSkip,
+			_linkRippleMaskSize.width(),
+			_linkRippleMaskSize.height(),
+			outerWidth);
+}
+
+void Poll::Footer::resetLinkRipple() const {
+	_linkRipple.reset();
+	_owner->stopRepaintGeneration(_rippleRepaint);
+}
+
 void Poll::Footer::draw(
 		Painter &p,
 		int left,
@@ -1058,10 +1140,17 @@ void Poll::Footer::draw(
 		const PaintContext &context) const {
 	const auto layout = computeLayout(innerWidth);
 	const auto stm = context.messageStyle();
-
-	if (!layout.link) {
-		_linkRipple.reset();
-	}
+	prepareLinkRippleMask(layout, outerWidth);
+	_owner->recordRepaintGeometry(
+		_contentRepaint,
+		p,
+		context,
+		QRegion(QRect(0, 0, outerWidth, layout.totalHeight)));
+	_owner->recordRepaintGeometry(
+		_rippleRepaint,
+		p,
+		context,
+		QRegion(linkRippleRect(layout, outerWidth)));
 
 	if (_linkRipple && !layout.compact) {
 		p.setOpacity(st::historyPollRippleOpacity);
@@ -1072,7 +1161,7 @@ void Poll::Footer::draw(
 			outerWidth,
 			&stm->msgWaveformInactive->c);
 		if (_linkRipple->empty()) {
-			_linkRipple.reset();
+			resetLinkRipple();
 		}
 		p.setOpacity(1.);
 	}
@@ -1221,25 +1310,27 @@ void Poll::Footer::toggleLinkRipple(bool pressed) {
 			- st::msgPadding.left()
 			- st::msgPadding.right();
 		const auto layout = computeLayout(innerWidth);
-		const auto rippleTop = layout.topSkip;
-		const auto linkHeight = layout.totalHeight - rippleTop;
+		prepareLinkRippleMask(layout, outerWidth);
+		const auto rippleRect = linkRippleRect(layout, outerWidth);
+		if (_linkRippleMask.isNull() || rippleRect.isEmpty()) {
+			return;
+		}
 		if (!_linkRipple) {
-			auto mask = _owner->isRoundedInBubbleBottom()
-				? static_cast<Message*>(_owner->_parent.get())
-					->bottomRippleMask(linkHeight)
-				: BottomRippleMask{
-					Ui::RippleAnimation::RectMask(
-						{ outerWidth, linkHeight }),
-				};
+			const auto generation = _owner->startRepaintGeneration(
+				_rippleRepaint);
+			const auto weak = base::make_weak(_owner.get());
 			_linkRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
-				std::move(mask.image),
-				[owner = _owner] { owner->repaint(); });
-			_linkRippleShift = mask.shift;
+				_linkRippleMask,
+				[=] {
+					if (const auto strong = weak.get()) {
+						strong->repaintGeometry(
+							strong->_footerPart->_rippleRepaint,
+							generation);
+					}
+				});
 		}
-		_linkRipple->add(
-			_owner->_lastLinkPoint
-				+ QPoint(_linkRippleShift, -rippleTop));
+		_linkRipple->add(_owner->_lastLinkPoint - rippleRect.topLeft());
 	} else if (_linkRipple) {
 		_linkRipple->lastStop();
 	}
@@ -1296,9 +1387,12 @@ struct Poll::AddOption : public Poll::Part {
 
 	ClickHandlerPtr _addOptionLink;
 	mutable std::unique_ptr<Ui::RippleAnimation> _addOptionRipple;
+	mutable QSize _addOptionRippleMaskSize;
+	mutable RepaintState _rippleRepaint;
 
 private:
 	[[nodiscard]] int rowHeight() const;
+	void resetRipple() const;
 	void toggleRipple(bool pressed);
 };
 
@@ -1340,8 +1434,20 @@ void Poll::AddOption::draw(
 		int innerWidth,
 		int outerWidth,
 		const PaintContext &context) const {
-	if (!_owner->canAddOption() || _owner->_addOptionActive) {
+	const auto visible = _owner->canAddOption()
+		&& !_owner->_addOptionActive;
+	const auto maskSize = QSize(outerWidth, rowHeight());
+	_owner->recordRepaintGeometry(
+		_rippleRepaint,
+		p,
+		context,
+		visible ? QRegion(QRect(QPoint(), maskSize)) : QRegion());
+	if (!visible) {
+		resetRipple();
 		return;
+	}
+	if (_addOptionRipple && _addOptionRippleMaskSize != maskSize) {
+		resetRipple();
 	}
 	const auto stm = context.messageStyle();
 	const auto &padding = st::historyPollAnswerPaddingNoMedia;
@@ -1356,7 +1462,7 @@ void Poll::AddOption::draw(
 			outerWidth,
 			&stm->msgWaveformInactive->c);
 		if (_addOptionRipple->empty()) {
-			_addOptionRipple.reset();
+			resetRipple();
 		}
 		p.setOpacity(1.);
 	}
@@ -1408,17 +1514,36 @@ void Poll::AddOption::clickHandlerPressedChanged(
 	}
 }
 
+void Poll::AddOption::resetRipple() const {
+	_addOptionRipple.reset();
+	_addOptionRippleMaskSize = QSize();
+	_owner->stopRepaintGeneration(_rippleRepaint);
+}
+
 void Poll::AddOption::toggleRipple(bool pressed) {
 	if (pressed) {
 		const auto outerWidth = _owner->width();
 		const auto h = rowHeight();
+		const auto maskSize = QSize(outerWidth, h);
+		if (_addOptionRipple && _addOptionRippleMaskSize != maskSize) {
+			resetRipple();
+		}
 		if (!_addOptionRipple) {
-			auto mask = Ui::RippleAnimation::RectMask(
-				QSize(outerWidth, h));
+			auto mask = Ui::RippleAnimation::RectMask(maskSize);
+			const auto generation = _owner->startRepaintGeneration(
+				_rippleRepaint);
+			const auto weak = base::make_weak(_owner.get());
+			_addOptionRippleMaskSize = maskSize;
 			_addOptionRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				std::move(mask),
-				[owner = _owner] { owner->repaint(); });
+				[=] {
+					if (const auto strong = weak.get()) {
+						strong->repaintGeometry(
+							strong->_addOptionPart->_rippleRepaint,
+							generation);
+					}
+				});
 		}
 		_addOptionRipple->add(_owner->_lastLinkPoint);
 	} else if (_addOptionRipple) {
@@ -1551,6 +1676,7 @@ struct Poll::Header : public Poll::Part {
 	mutable TextRepaint _descriptionRepaint;
 	mutable TextRepaint _questionRepaint;
 	mutable TextRepaint _solutionRepaint;
+	mutable RepaintState _solutionButtonRepaint;
 	mutable ClickHandlerPtr _closeSolutionLink;
 	std::unique_ptr<SolutionMedia> _solutionMedia;
 	std::unique_ptr<Media> _solutionAttach;
@@ -1945,6 +2071,15 @@ uint16 Poll::Header::selectionLength() const {
 
 struct Poll::Options : public Poll::Part {
 	using Part::Part;
+	enum class FeedbackPart {
+		Toggle,
+		Ripple,
+	};
+	struct FeedbackRepaints {
+		QByteArray option;
+		RepaintState toggle;
+		RepaintState ripple;
+	};
 
 	struct TextRepaint {
 		QByteArray option;
@@ -2056,6 +2191,33 @@ struct Poll::Options : public Poll::Part {
 		QRect rect) const;
 	void finishAnimatedThumbnailPaint() const;
 	void repaintAnimatedThumbnailRegion(const QRegion &region) const;
+	void recordAnswerFeedbackRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		FeedbackPart part,
+		QRect rect) const;
+	[[nodiscard]] FeedbackRepaints &ensureFeedbackRepaints(
+		const QByteArray &option) const;
+	[[nodiscard]] FeedbackRepaints *findFeedbackRepaints(
+		const QByteArray &option) const;
+	[[nodiscard]] RepaintState &feedbackRepaint(
+		FeedbackRepaints &repaints,
+		FeedbackPart part) const;
+	[[nodiscard]] uint64 resetFeedbackRepaint(
+		const QByteArray &option,
+		FeedbackPart part) const;
+	void repaintAnswerFeedback(
+		const QByteArray &option,
+		FeedbackPart part,
+		uint64 generation) const;
+	void repaintAnswerFeedback(
+		const QByteArray &option,
+		FeedbackPart part) const;
+	void invalidateFeedbackRepaints() const;
+	void syncFeedbackRepaints() const;
+	void finishFeedbackRepaints() const;
+	void resetAnswerRipple(const Answer &answer) const;
 	int paintAnswer(
 		Painter &p,
 		const Answer &answer,
@@ -2116,6 +2278,7 @@ struct Poll::Options : public Poll::Part {
 
 	mutable std::vector<TextRepaint> _textRepaints;
 	mutable std::vector<ThumbnailRepaint> _thumbnailRepaints;
+	mutable std::vector<FeedbackRepaints> _feedbackRepaints;
 	std::vector<Answer> _answers;
 	mutable std::unique_ptr<AnswersAnimation> _answersAnimation;
 	mutable std::unique_ptr<SendingAnimation> _sendingAnimation;
@@ -2201,6 +2364,9 @@ void Poll::Options::draw(
 	finishAnswerTextPaint();
 	finishSendingAnimationPaint();
 	finishAnswersAnimationPaint();
+	if (context.hasElementPainter(p)) {
+		finishFeedbackRepaints();
+	}
 }
 
 TextState Poll::Options::textState(
@@ -2450,6 +2616,148 @@ Poll::Poll(
 		_headerPart->updateDescription();
 	}
 	history()->owner().registerPollView(_poll, _parent);
+}
+
+void Poll::recordRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const {
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(region) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRegion(previous.united(repaint.current));
+}
+
+void Poll::recordRepaintGeometry(
+		RepaintState &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		const QRegion &rects) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto region = QRegion();
+	auto known = true;
+	for (const auto &rect : rects) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+			break;
+		}
+		region += *mapped;
+	}
+	recordRepaintGeometry(repaint, std::move(region), known);
+}
+
+void Poll::recordAnimationRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const {
+	if (repaint.generation || !repaint.stale.isEmpty()) {
+		recordRepaintGeometry(repaint, std::move(region), known);
+	} else {
+		repaint.current = known ? std::move(region) : QRegion();
+		repaint.stale = QRegion();
+		repaint.pending = false;
+		repaint.known = known;
+	}
+}
+
+void Poll::invalidateRepaintGeometry(RepaintState &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void Poll::repaintGeometry(RepaintState &repaint) const {
+	if (repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (repaint.known) {
+		repaintRegion(repaint.current);
+	} else {
+		this->repaint();
+	}
+}
+
+void Poll::repaintGeometry(
+		RepaintState &repaint,
+		uint64 generation) const {
+	if (generation != repaint.generation) {
+		return;
+	}
+	repaintGeometry(repaint);
+}
+
+uint64 Poll::startRepaintGeneration(RepaintState &repaint) const {
+	repaint.pending = false;
+	repaint.generation = ++_nextRepaintGeneration;
+	return repaint.generation;
+}
+
+void Poll::stopRepaintGeneration(RepaintState &repaint) const {
+	repaint.generation = 0;
+	repaint.pending = false;
+}
+
+void Poll::repaintRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+void Poll::invalidateFiniteRepaintGeometries() const {
+	invalidateRepaintGeometry(_fireworksRepaint);
+	invalidateRepaintGeometry(_wrongAnswerRepaint);
+	invalidateRepaintGeometry(_headerPart->_solutionButtonRepaint);
+	invalidateRepaintGeometry(_addOptionPart->_rippleRepaint);
+	invalidateRepaintGeometry(_footerPart->_contentRepaint);
+	invalidateRepaintGeometry(_footerPart->_rippleRepaint);
+	_optionsPart->invalidateFeedbackRepaints();
+}
+
+void Poll::rememberElementPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	_lastDrawPaintDevice = p.device();
+	_lastDrawCanonical = context.hasElementPainter(p);
+	if (!_lastDrawCanonical) {
+		return;
+	}
+	_elementPaintDevice = p.device();
+	_elementTransform = context.elementTransform;
+}
+
+std::optional<QRect> Poll::mapCurrentPaintToElement(
+		const Painter &p,
+		QRectF rect) const {
+	if (!_elementTransform || _elementPaintDevice != p.device()) {
+		return std::nullopt;
+	}
+	auto invertible = false;
+	const auto inverted = _elementTransform->inverted(&invertible);
+	if (!invertible) {
+		return std::nullopt;
+	}
+	return inverted.map(
+		p.transform().map(QPolygonF(rect))
+	).boundingRect().toAlignedRect();
 }
 
 QSize Poll::countOptimalSize() {
@@ -2707,6 +3015,7 @@ QSize Poll::countCurrentSize(int newWidth) {
 	_headerPart->invalidateTextRepaints();
 	_optionsPart->invalidateAnswerTextRepaints();
 	_optionsPart->invalidateAnimatedThumbnailRepaints();
+	invalidateFiniteRepaintGeometries();
 	accumulate_min(newWidth, maxWidth());
 	const auto innerWidth = newWidth
 		- st::msgPadding.left()
@@ -2730,6 +3039,7 @@ void Poll::updateTexts() {
 	}
 	const auto first = !_pollVersion;
 	_pollVersion = _poll->version;
+	invalidateFiniteRepaintGeometries();
 
 	const auto willStartAnimation = _optionsPart->checkAnimationStart();
 	const auto voted = _voted;
@@ -3276,11 +3586,29 @@ void Poll::Options::checkQuizAnswered() {
 		return;
 	}
 	if (i->correct) {
+		const auto generation = _owner->startRepaintGeneration(
+			_owner->_fireworksRepaint);
+		const auto weak = base::make_weak(_owner.get());
 		_owner->_fireworksAnimation = std::make_unique<Ui::FireworksAnimation>(
-			[=] { _owner->repaint(); });
+			[=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintGeometry(
+						strong->_fireworksRepaint,
+						generation);
+				}
+			});
 	} else {
+		const auto generation = _owner->startRepaintGeneration(
+			_owner->_wrongAnswerRepaint);
+		const auto weak = base::make_weak(_owner.get());
 		_owner->_wrongAnswerAnimation.start(
-			[=] { _owner->repaint(); },
+			[=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintGeometry(
+						strong->_wrongAnswerRepaint,
+						generation);
+				}
+			},
 			0.,
 			1.,
 			kRollDuration,
@@ -3304,16 +3632,28 @@ void Poll::Header::solutionToggled(
 		if (animated == anim::type::instant
 			&& _solutionButtonAnimation.animating()) {
 			_solutionButtonAnimation.stop();
-			_owner->repaint();
+			_owner->stopRepaintGeneration(_solutionButtonRepaint);
+			_owner->repaintGeometry(_solutionButtonRepaint);
 		}
 		return;
 	}
 	_solutionButtonVisible = visible;
 	if (animated == anim::type::instant) {
 		_solutionButtonAnimation.stop();
+		_owner->stopRepaintGeneration(_solutionButtonRepaint);
+		_owner->repaintGeometry(_solutionButtonRepaint);
 	} else {
+		const auto generation = _owner->startRepaintGeneration(
+			_solutionButtonRepaint);
+		const auto weak = base::make_weak(_owner.get());
 		_solutionButtonAnimation.start(
-			[=] { _owner->repaint(); },
+			[=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintGeometry(
+						strong->_headerPart->_solutionButtonRepaint,
+						generation);
+				}
+			},
 			visible ? 0. : 1.,
 			visible ? 1. : 0.,
 			st::fadeWrapDuration);
@@ -3358,6 +3698,7 @@ void Poll::Header::updateRecentVoters() {
 void Poll::Options::updateAnswers() {
 	invalidateAnswerTextRepaints();
 	invalidateAnimatedThumbnailRepaints();
+	invalidateFeedbackRepaints();
 	const auto paused = [=] {
 		return _owner->_parent->delegate()->elementAnimationsPaused();
 	};
@@ -3406,6 +3747,7 @@ void Poll::Options::updateAnswers() {
 		});
 		syncAnswerTextRepaints();
 		syncAnimatedThumbnailRepaints();
+		syncFeedbackRepaints();
 		return;
 	}
 	_answers = ranges::views::all(options) | ranges::views::transform([&](
@@ -3445,6 +3787,7 @@ void Poll::Options::updateAnswers() {
 	});
 	syncAnswerTextRepaints();
 	syncAnimatedThumbnailRepaints();
+	syncFeedbackRepaints();
 
 	resetAnswersAnimation();
 }
@@ -3499,8 +3842,19 @@ void Poll::Options::toggleMultiOption(const QByteArray &option) {
 	if (i != end(_answers)) {
 		const auto selected = i->selected;
 		i->selected = !selected;
+		const auto generation = resetFeedbackRepaint(
+			option,
+			FeedbackPart::Toggle);
+		const auto weak = base::make_weak(_owner.get());
 		i->selectedAnimation.start(
-			[=] { _owner->repaint(); },
+			[=] {
+				if (const auto strong = weak.get()) {
+					strong->_optionsPart->repaintAnswerFeedback(
+						option,
+						FeedbackPart::Toggle,
+						generation);
+				}
+			},
 			selected ? 1. : 0.,
 			selected ? 0. : 1.,
 			st::defaultCheck.duration);
@@ -3513,13 +3867,16 @@ void Poll::Options::toggleMultiOption(const QByteArray &option) {
 		} else {
 			_hasSelected = true;
 		}
-		_owner->repaint();
+		repaintAnswerFeedback(option, FeedbackPart::Toggle);
+		_owner->repaintGeometry(_owner->_footerPart->_contentRepaint);
 	}
 }
 
 void Poll::Options::clearSelected() {
 	auto changed = false;
 	for (auto &answer : _answers) {
+		const auto repaint = answer.selected
+			|| answer.selectedAnimation.animating();
 		if (answer.selected) {
 			answer.selected = false;
 			changed = true;
@@ -3527,13 +3884,21 @@ void Poll::Options::clearSelected() {
 		if (answer.selectedAnimation.animating()) {
 			answer.selectedAnimation.stop();
 		}
+		if (repaint) {
+			if (const auto repaints = findFeedbackRepaints(answer.option)) {
+				_owner->stopRepaintGeneration(repaints->toggle);
+			}
+			repaintAnswerFeedback(
+				answer.option,
+				FeedbackPart::Toggle);
+		}
 	}
 	if (_hasSelected) {
 		_hasSelected = false;
 		changed = true;
 	}
 	if (changed) {
-		_owner->repaint();
+		_owner->repaintGeometry(_owner->_footerPart->_contentRepaint);
 	}
 }
 
@@ -3731,7 +4096,37 @@ void Poll::Options::updateAnswerVotes() {
 }
 
 void Poll::draw(Painter &p, const PaintContext &context) const {
-	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
+	rememberElementPaint(p, context);
+	if (_repaintLayoutSize != currentSize()) {
+		invalidateFiniteRepaintGeometries();
+		_repaintLayoutSize = currentSize();
+	}
+	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		if (context.hasElementPainter(p)) {
+			recordRepaintGeometry(
+				_headerPart->_solutionButtonRepaint,
+				QRegion(),
+				true);
+			recordRepaintGeometry(
+				_addOptionPart->_rippleRepaint,
+				QRegion(),
+				true);
+			recordRepaintGeometry(
+				_footerPart->_contentRepaint,
+				QRegion(),
+				true);
+			recordRepaintGeometry(
+				_footerPart->_rippleRepaint,
+				QRegion(),
+				true);
+			for (auto &repaints : _optionsPart->_feedbackRepaints) {
+				recordRepaintGeometry(repaints.toggle, QRegion(), true);
+				recordRepaintGeometry(repaints.ripple, QRegion(), true);
+			}
+			_optionsPart->finishFeedbackRepaints();
+		}
+		return;
+	}
 	auto paintw = width();
 
 	if (_poll->checkResultsReload(context.now)) {
@@ -3750,12 +4145,10 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 	auto tshift = 0;
 	for (const auto part : parts) {
 		const auto h = part->countHeight(paintw);
-		if (h > 0) {
-			const auto saved = p.transform();
-			p.translate(0, tshift);
-			part->draw(p, padding.left(), paintw, width(), context);
-			p.setTransform(saved);
-		}
+		const auto saved = p.transform();
+		p.translate(0, tshift);
+		part->draw(p, padding.left(), paintw, width(), context);
+		p.setTransform(saved);
 		tshift += h;
 	}
 }
@@ -4251,6 +4644,122 @@ void Poll::Options::repaintAnimatedThumbnailRegion(
 	}
 }
 
+void Poll::Options::recordAnswerFeedbackRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		FeedbackPart part,
+		QRect rect) const {
+	_owner->recordRepaintGeometry(
+		feedbackRepaint(ensureFeedbackRepaints(answer.option), part),
+		p,
+		context,
+		QRegion(rect));
+}
+
+Poll::Options::FeedbackRepaints &Poll::Options::ensureFeedbackRepaints(
+		const QByteArray &option) const {
+	const auto i = ranges::find(
+		_feedbackRepaints,
+		option,
+		&FeedbackRepaints::option);
+	if (i != end(_feedbackRepaints)) {
+		return *i;
+	}
+	_feedbackRepaints.push_back({ .option = option });
+	return _feedbackRepaints.back();
+}
+
+Poll::Options::FeedbackRepaints *Poll::Options::findFeedbackRepaints(
+		const QByteArray &option) const {
+	const auto i = ranges::find(
+		_feedbackRepaints,
+		option,
+		&FeedbackRepaints::option);
+	return (i == end(_feedbackRepaints)) ? nullptr : &*i;
+}
+
+Poll::RepaintState &Poll::Options::feedbackRepaint(
+		FeedbackRepaints &repaints,
+		FeedbackPart part) const {
+	switch (part) {
+	case FeedbackPart::Toggle: return repaints.toggle;
+	case FeedbackPart::Ripple: return repaints.ripple;
+	}
+	Unexpected("Feedback part in Poll::Options::feedbackRepaint.");
+}
+
+uint64 Poll::Options::resetFeedbackRepaint(
+		const QByteArray &option,
+		FeedbackPart part) const {
+	return _owner->startRepaintGeneration(
+		feedbackRepaint(ensureFeedbackRepaints(option), part));
+}
+
+void Poll::Options::repaintAnswerFeedback(
+		const QByteArray &option,
+		FeedbackPart part,
+		uint64 generation) const {
+	if (const auto repaints = findFeedbackRepaints(option)) {
+		_owner->repaintGeometry(
+			feedbackRepaint(*repaints, part),
+			generation);
+	}
+}
+
+void Poll::Options::repaintAnswerFeedback(
+		const QByteArray &option,
+		FeedbackPart part) const {
+	_owner->repaintGeometry(
+		feedbackRepaint(ensureFeedbackRepaints(option), part));
+}
+
+void Poll::Options::invalidateFeedbackRepaints() const {
+	for (auto &repaints : _feedbackRepaints) {
+		_owner->invalidateRepaintGeometry(repaints.toggle);
+		_owner->invalidateRepaintGeometry(repaints.ripple);
+	}
+}
+
+void Poll::Options::syncFeedbackRepaints() const {
+	for (auto &repaints : _feedbackRepaints) {
+		if (ranges::find(
+				_answers,
+				repaints.option,
+				&Answer::option) == end(_answers)) {
+			_owner->stopRepaintGeneration(repaints.toggle);
+			_owner->stopRepaintGeneration(repaints.ripple);
+		}
+	}
+	for (const auto &answer : _answers) {
+		ensureFeedbackRepaints(answer.option);
+	}
+}
+
+void Poll::Options::finishFeedbackRepaints() const {
+	for (auto i = begin(_feedbackRepaints);
+			i != end(_feedbackRepaints);) {
+		if (ranges::find(
+				_answers,
+				i->option,
+				&Answer::option) != end(_answers)) {
+			++i;
+			continue;
+		}
+		_owner->recordRepaintGeometry(i->toggle, QRegion(), true);
+		_owner->recordRepaintGeometry(i->ripple, QRegion(), true);
+		i = _feedbackRepaints.erase(i);
+	}
+}
+
+void Poll::Options::resetAnswerRipple(const Answer &answer) const {
+	if (const auto repaints = findFeedbackRepaints(answer.option)) {
+		_owner->stopRepaintGeneration(repaints->ripple);
+	}
+	answer.ripple.reset();
+	answer.rippleMaskSize = QSize();
+}
+
 void Poll::Header::paintRecentVoters(
 		Painter &p,
 		int left,
@@ -4310,26 +4819,45 @@ void Poll::Header::paintShowSolution(
 		const PaintContext &context) const {
 	const auto shown = _solutionButtonAnimation.value(
 		_solutionButtonVisible ? 1. : 0.);
+	const auto stm = context.messageStyle();
+	const auto &icon = stm->historyQuizExplain;
+	const auto x = right - icon.width();
+	const auto y = top + (st::normalFont->height - icon.height()) / 2;
+	const auto target = style::rtlrect(
+		x,
+		y,
+		icon.width(),
+		icon.height(),
+		_owner->width());
+	_owner->recordRepaintGeometry(
+		_solutionButtonRepaint,
+		p,
+		context,
+		QRegion(target));
 	if (!shown) {
+		if (!_solutionButtonAnimation.animating()) {
+			_owner->stopRepaintGeneration(_solutionButtonRepaint);
+		}
 		return;
 	}
 	if (!_showSolutionLink) {
 		_showSolutionLink = std::make_shared<LambdaClickHandler>(
 			crl::guard(_owner, [=] { _owner->_headerPart->showSolution(); }));
 	}
-	const auto stm = context.messageStyle();
-	const auto &icon = stm->historyQuizExplain;
-	const auto x = right - icon.width();
-	const auto y = top + (st::normalFont->height - icon.height()) / 2;
 	if (shown == 1.) {
 		icon.paint(p, x, y, _owner->width());
 	} else {
 		p.save();
-		p.translate(x + icon.width() / 2, y + icon.height() / 2);
+		const auto center = QRectF(target).center();
+		p.translate(center);
 		p.scale(shown, shown);
+		p.translate(-center);
 		p.setOpacity(shown);
-		icon.paint(p, -icon.width() / 2, -icon.height() / 2, _owner->width());
+		icon.paint(p, x, y, _owner->width());
 		p.restore();
+	}
+	if (!_solutionButtonAnimation.animating()) {
+		_owner->stopRepaintGeneration(_solutionButtonRepaint);
 	}
 }
 
@@ -4468,6 +4996,30 @@ int Poll::Options::paintAnswer(
 		int outerWidth,
 		const PaintContext &context) const {
 	const auto height = countAnswerHeight(answer, width);
+	const auto rippleSize = QSize(outerWidth, height);
+	if (answer.ripple && answer.rippleMaskSize != rippleSize) {
+		resetAnswerRipple(answer);
+	}
+	const auto &answerPadding = answer.thumbnail
+		? st::historyPollAnswerPadding
+		: st::historyPollAnswerPaddingNoMedia;
+	recordAnswerFeedbackRect(
+		p,
+		context,
+		answer,
+		FeedbackPart::Ripple,
+		QRect(0, top, outerWidth, height));
+	recordAnswerFeedbackRect(
+		p,
+		context,
+		answer,
+		FeedbackPart::Toggle,
+		QRect(
+			left,
+			top + answerPadding.top(),
+			st::historyPollRadio.diameter,
+			st::historyPollRadio.diameter).marginsAdded(
+				Margins(st::lineWidth)));
 	recordAnswerTextRect(
 		p,
 		context,
@@ -4514,9 +5066,6 @@ int Poll::Options::paintAnswer(
 		}
 	}
 	const auto stm = context.messageStyle();
-	const auto &answerPadding = answer.thumbnail
-		? st::historyPollAnswerPadding
-		: st::historyPollAnswerPaddingNoMedia;
 	const auto aleft = left + st::historyPollAnswerPadding.left();
 	const auto awidth = width
 		- st::historyPollAnswerPadding.left()
@@ -4546,7 +5095,7 @@ int Poll::Options::paintAnswer(
 			outerWidth,
 			&stm->msgWaveformInactive->c);
 		if (answer.ripple->empty()) {
-			answer.ripple.reset();
+			resetAnswerRipple(answer);
 		}
 		p.setOpacity(1.);
 	}
@@ -4797,6 +5346,11 @@ void Poll::Options::paintRadio(
 	const auto checkmark = chosen
 		? 1.
 		: answer.selectedAnimation.value(answer.selected ? 1. : 0.);
+	if (!answer.selectedAnimation.animating()) {
+		if (const auto repaints = findFeedbackRepaints(answer.option)) {
+			_owner->stopRepaintGeneration(repaints->toggle);
+		}
+	}
 
 	const auto o = p.opacity();
 	if (checkmark < 1.) {
@@ -5227,19 +5781,48 @@ QMargins Poll::bubbleRollRepaintMargins() const {
 	if (!_wrongAnswerAnimated) {
 		return QMargins();
 	}
-	static const auto kAdd = int(std::ceil(
-		st::msgMaxWidth * std::sin(kRotateAmplitude * M_PI / 180.)));
-	return QMargins(kAdd, kAdd, kAdd, kAdd);
+	return PollBubbleRollRepaintMargins(_parent->currentSize());
 }
 
 void Poll::paintBubbleFireworks(
 		Painter &p,
 		const QRect &bubble,
 		crl::time ms) const {
-	if (!_fireworksAnimation || _fireworksAnimation->paint(p, bubble)) {
+	if (_lastDrawCanonical && _lastDrawPaintDevice == p.device()) {
+		auto fireworks = QRegion();
+		auto wrongAnswer = QRegion();
+		auto known = true;
+		if (!bubble.isEmpty()) {
+			const auto mapped = mapCurrentPaintToElement(p, QRectF(bubble));
+			if (!mapped || mapped->isEmpty()) {
+				known = false;
+			} else {
+				fireworks += *mapped;
+				wrongAnswer += mapped->marginsAdded(
+					PollBubbleRollRepaintMargins(bubble.size()));
+			}
+		}
+		recordAnimationRepaintGeometry(
+			_fireworksRepaint,
+			std::move(fireworks),
+			known);
+		recordAnimationRepaintGeometry(
+			_wrongAnswerRepaint,
+			std::move(wrongAnswer),
+			known);
+	}
+	if (!_wrongAnswerAnimation.animating()) {
+		stopRepaintGeneration(_wrongAnswerRepaint);
+	}
+	if (!_fireworksAnimation) {
+		stopRepaintGeneration(_fireworksRepaint);
+		return;
+	}
+	if (_fireworksAnimation->paint(p, bubble)) {
 		return;
 	}
 	_fireworksAnimation = nullptr;
+	stopRepaintGeneration(_fireworksRepaint);
 }
 
 void Poll::clickHandlerActiveChanged(
@@ -5288,17 +5871,32 @@ void Poll::Options::toggleRipple(Answer &answer, bool pressed) {
 		const auto innerWidth = outerWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		const auto maskSize = QSize(
+			outerWidth,
+			countAnswerHeight(answer, innerWidth));
+		if (answer.ripple && answer.rippleMaskSize != maskSize) {
+			resetAnswerRipple(answer);
+		}
 		if (!answer.ripple) {
-			auto mask = Ui::RippleAnimation::RectMask(QSize(
-				outerWidth,
-				countAnswerHeight(answer, innerWidth)));
+			auto mask = Ui::RippleAnimation::RectMask(maskSize);
+			const auto option = answer.option;
+			const auto generation = resetFeedbackRepaint(
+				option,
+				FeedbackPart::Ripple);
+			const auto weak = base::make_weak(_owner.get());
+			answer.rippleMaskSize = maskSize;
 			answer.ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				std::move(mask),
-				[=] { _owner->repaint(); });
+				[=] {
+					if (const auto strong = weak.get()) {
+						strong->_optionsPart->repaintAnswerFeedback(
+							option,
+							FeedbackPart::Ripple,
+							generation);
+					}
+				});
 		}
-		// _owner->_lastLinkPoint is Options-local, compute answer's
-		// position within Options (sum of heights above it).
 		auto answerTop = 0;
 		for (const auto &a : _answers) {
 			if (&a == &answer) {
@@ -5326,7 +5924,12 @@ bool Poll::Header::inShowSolution(
 	const auto &icon = st::historyQuizExplainIn;
 	const auto x = right - icon.width();
 	const auto y = top + (st::normalFont->height - icon.height()) / 2;
-	return QRect(x, y, icon.width(), icon.height()).contains(point);
+	return style::rtlrect(
+		x,
+		y,
+		icon.width(),
+		icon.height(),
+		_owner->width()).contains(point);
 }
 
 QString Poll::Footer::closeTimerText() const {
