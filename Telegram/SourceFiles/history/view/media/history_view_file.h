@@ -67,6 +67,12 @@ protected:
 	void setStatusSize(int64 newSize, int64 fullSize, TimeId duration, TimeId realDuration) const;
 
 	void radialAnimationCallback(crl::time now) const;
+	void repaintRadialAnimation() const;
+	void recordRadialAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void clearRadialAnimationRepaintRect() const;
 
 	void ensureAnimation() const;
 	void checkAnimationFinished() const;
@@ -102,6 +108,8 @@ protected:
 
 		Ui::Animations::Simple a_thumbOver;
 		Ui::RadialAnimation radial;
+		QRect radialRepaintRect;
+		bool radialRepaintPending = false;
 	};
 	mutable std::unique_ptr<AnimationData> _animation;
 

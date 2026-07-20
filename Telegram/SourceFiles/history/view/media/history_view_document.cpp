@@ -491,6 +491,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 }
 
 QSize Document::countOptimalSize() {
+	clearRadialAnimationRepaintRect();
 	auto hasTranscribe = false;
 	const auto voice = Get<HistoryDocumentVoice>();
 	if (voice) {
@@ -645,6 +646,7 @@ QSize Document::countOptimalSize() {
 }
 
 QSize Document::countCurrentSize(int newWidth) {
+	clearRadialAnimationRepaintRect();
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
@@ -713,6 +715,10 @@ QSize Document::countCurrentSize(int newWidth) {
 
 void Document::draw(Painter &p, const PaintContext &context) const {
 	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
+	recordRadialAnimationRepaintRect(
+		p,
+		context,
+		QRect(0, 0, width(), height()));
 }
 
 void Document::draw(
@@ -1179,6 +1185,7 @@ bool Document::hasHeavyPart() const {
 }
 
 void Document::unloadHeavyPart() {
+	clearRadialAnimationRepaintRect();
 	_dataMedia = nullptr;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		captioned->caption.unloadPersistentAnimation();
@@ -1764,6 +1771,7 @@ void Document::refreshCaption(bool last) {
 }
 
 int Document::widenGroupingMaxWidth(int current, bool last) {
+	clearRadialAnimationRepaintRect();
 	refreshCaption(last);
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	if (!captioned) {
@@ -1781,6 +1789,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 }
 
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
+	clearRadialAnimationRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -1794,6 +1803,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 }
 
 QSize Document::sizeForGrouping(int width) const {
+	clearRadialAnimationRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -1838,6 +1848,7 @@ void Document::drawGrouped(
 		context.highlightPathCache->translate(geometry.topLeft());
 	}
 	p.translate(-geometry.topLeft());
+	recordRadialAnimationRepaintRect(p, context, geometry);
 }
 
 TextState Document::getStateGrouped(
@@ -1989,6 +2000,7 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 }
 
 void Document::parentTextUpdated() {
+	clearRadialAnimationRepaintRect();
 	RemoveComponents(HistoryDocumentCaptioned::Bit());
 }
 

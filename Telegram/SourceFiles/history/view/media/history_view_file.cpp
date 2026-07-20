@@ -7,14 +7,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_file.h"
 
-#include "lang/lang_keys.h"
-#include "ui/text/format_values.h"
-#include "history/history_item.h"
-#include "history/history.h"
-#include "history/view/history_view_element.h"
 #include "data/data_document.h"
 #include "data/data_file_click_handler.h"
 #include "data/data_session.h"
+#include "history/view/history_view_element.h"
+#include "history/history.h"
+#include "history/history_item.h"
+#include "lang/lang_keys.h"
+#include "ui/chat/chat_style.h"
+#include "ui/text/format_values.h"
+#include "ui/painter.h"
+
 #include "styles/style_chat.h"
 
 namespace HistoryView {
@@ -93,10 +96,46 @@ void File::radialAnimationCallback(crl::time now) const {
 			now);
 	}();
 	if (!anim::Disabled() || updated) {
-		repaint();
+		repaintRadialAnimation();
 	}
 	if (!_animation->radial.animating()) {
 		checkAnimationFinished();
+	}
+}
+
+void File::repaintRadialAnimation() const {
+	if (_animation->radialRepaintRect.isEmpty()) {
+		repaint();
+	} else if (!_animation->radialRepaintPending) {
+		_animation->radialRepaintPending = true;
+		_parent->repaint(_animation->radialRepaintRect);
+	}
+}
+
+void File::recordRadialAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!_animation) {
+		return;
+	} else if (context.hasElementPainter(p)) {
+		_animation->radialRepaintRect = QRect();
+		_animation->radialRepaintPending = false;
+	} else {
+		if (_animation->radialRepaintRect.isEmpty()) {
+			_animation->radialRepaintPending = false;
+		}
+		return;
+	}
+	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+		_animation->radialRepaintRect = *mapped;
+	}
+}
+
+void File::clearRadialAnimationRepaintRect() const {
+	if (_animation) {
+		_animation->radialRepaintRect = QRect();
+		_animation->radialRepaintPending = false;
 	}
 }
 
