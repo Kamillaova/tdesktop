@@ -624,7 +624,6 @@ void StickersListFooter::leaveToChildEvent(QEvent *e, QWidget *child) {
 void StickersListFooter::paintEvent(QPaintEvent *e) {
 	auto p = Painter(this);
 
-	_repaintScheduled = false;
 	paint(p, {});
 }
 
@@ -1187,13 +1186,6 @@ void StickersListFooter::paintStickerSettingsIcon(QPainter &p) const {
 		width());
 }
 
-void StickersListFooter::customEmojiRepaint() {
-	if (!_repaintScheduled) {
-		_repaintScheduled = true;
-		update();
-	}
-}
-
 void StickersListFooter::validateIconLottieAnimation(
 		const StickerIcon &icon) {
 	icon.ensureMediaCreated();
@@ -1250,10 +1242,11 @@ void StickersListFooter::validateIconAnimation(
 	if (emoji && emoji->sticker()->setType == Data::StickersType::Emoji) {
 		if (!icon.custom) {
 			const auto tag = Data::CustomEmojiManager::SizeTag::SetIcon;
+			const auto id = icon.setId;
 			auto &manager = emoji->owner().customEmojiManager();
 			icon.custom = manager.create(
 				emoji->id,
-				[=] { customEmojiRepaint(); },
+				[=] { updateSetIcon(id); },
 				tag);
 		}
 		return;

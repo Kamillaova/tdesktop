@@ -228,7 +228,6 @@ private:
 	void validateIconLottieAnimation(const StickerIcon &icon);
 	void validateIconWebmAnimation(const StickerIcon &icon);
 	void validateIconAnimation(const StickerIcon &icon);
-	void customEmojiRepaint();
 
 	void refreshIconsGeometry(
 		uint64 activeSetId,
@@ -314,7 +313,6 @@ private:
 	Ui::Animations::Simple _subiconsWidthAnimation;
 	int _subiconsWidth = 0;
 	bool _subiconsExpanded = false;
-	bool _repaintScheduled = false;
 	bool _forceFirstFrame = false;
 
 	rpl::event_stream<> _openSettingsRequests;
