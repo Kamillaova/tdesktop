@@ -98,6 +98,13 @@ private:
 		uint32 pending : 1 = 0;
 		uint32 known : 1 = 0;
 	};
+	struct RippleRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	void playAnimation(bool autoplay) override;
 	[[nodiscard]] QSize countOptimalSize() override;
@@ -121,12 +128,22 @@ private:
 		int removeFromEnd) const;
 	void invalidateDescriptionRepaint() const;
 	void repaintDescriptionRegion(const QRegion &region) const;
+	void repaintRipple(uint64 generation) const;
+	void recordRippleRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void invalidateRippleRepaint() const;
+	void repaintRippleRegion(const QRegion &region) const;
+	[[nodiscard]] uint64 resetRippleRepaint() const;
 
 	const style::QuoteStyle &_st;
 	const not_null<GameData*> _data;
 	std::shared_ptr<ReplyMarkupClickHandler> _openl;
 	std::unique_ptr<Media> _attach;
 	mutable std::unique_ptr<Ui::RippleAnimation> _ripple;
+	mutable QSize _rippleSize;
+	mutable RippleRepaint _rippleRepaint;
 
 	mutable QPoint _lastPoint;
 	int _gameTagWidth = 0;

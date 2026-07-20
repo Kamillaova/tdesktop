@@ -58,6 +58,7 @@ Game::Game(
 
 QSize Game::countOptimalSize() {
 	invalidateDescriptionRepaint();
+	invalidateRippleRepaint();
 	auto lineHeight = UnitedLineHeight();
 
 	const auto item = _parent->data();
@@ -157,6 +158,7 @@ void Game::refreshParentId(not_null<HistoryItem*> realParent) {
 
 QSize Game::countCurrentSize(int newWidth) {
 	invalidateDescriptionRepaint();
+	invalidateRippleRepaint();
 	accumulate_min(newWidth, maxWidth());
 	const auto padding = inBubblePadding() + innerMargin();
 	auto innerWidth = newWidth - padding.left() - padding.right();
@@ -215,6 +217,7 @@ TextSelection Game::fromDescriptionSelection(
 void Game::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		recordDescriptionRepaintRect(p, context, QRect(), 0, 0);
+		recordRippleRepaintRect(p, context, QRect());
 		return;
 	}
 
@@ -226,6 +229,14 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 	const auto full = QRect(0, 0, width(), height());
 	auto outer = full.marginsRemoved(inBubblePadding());
 	auto inner = outer.marginsRemoved(innerMargin());
+	if (context.hasElementPainter(p)
+		&& _ripple
+		&& _rippleSize != outer.size()) {
+		_ripple = nullptr;
+		_rippleSize = QSize();
+		++_rippleRepaint.generation;
+	}
+	recordRippleRepaintRect(p, context, outer);
 	auto tshift = inner.top();
 	auto paintw = inner.width();
 	const auto selected = context.selected();
@@ -245,9 +256,14 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 	Ui::Text::FillQuotePaint(p, outer, *cache, _st);
 
 	if (_ripple) {
-		_ripple->paint(p, outer.x(), outer.y(), width(), &cache->bg);
+		p.save();
+		p.translate(outer.topLeft());
+		_ripple->paint(p, 0, 0, _rippleSize.width(), &cache->bg);
+		p.restore();
 		if (_ripple->empty()) {
 			_ripple = nullptr;
+			_rippleSize = QSize();
+			++_rippleRepaint.generation;
 		}
 	}
 
@@ -445,12 +461,19 @@ void Game::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed) {
 			if (!_ripple) {
 				const auto full = QRect(0, 0, width(), height());
 				const auto outer = full.marginsRemoved(inBubblePadding());
+				const auto weak = base::make_weak(this);
+				const auto generation = resetRippleRepaint();
+				_rippleSize = outer.size();
 				_ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
-						outer.size(),
+						_rippleSize,
 						_st.radius),
-					[=] { repaint(); });
+					[weak, generation] {
+						if (const auto strong = weak.get()) {
+							strong->repaintRipple(generation);
+						}
+					});
 			}
 			_ripple->add(_lastPoint);
 		} else if (_ripple) {
@@ -690,6 +713,76 @@ void Game::repaintDescriptionRegion(const QRegion &region) const {
 	}
 }
 
+void Game::repaintRipple(uint64 generation) const {
+	if (_rippleRepaint.generation != generation
+		|| _rippleRepaint.pending
+		|| (_rippleRepaint.known && _rippleRepaint.current.isEmpty())) {
+		return;
+	}
+	_rippleRepaint.pending = true;
+	if (!_rippleRepaint.known) {
+		this->repaint();
+	} else {
+		repaintRippleRegion(_rippleRepaint.current);
+	}
+}
+
+void Game::recordRippleRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(_rippleRepaint.stale);
+	const auto previous = stale.united(
+		base::take(_rippleRepaint.current));
+	_rippleRepaint.pending = false;
+	_rippleRepaint.current = known ? std::move(current) : QRegion();
+	_rippleRepaint.known = known;
+	if (!known) {
+		_rippleRepaint.stale = previous;
+		if (!previous.isEmpty()) {
+			_rippleRepaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == _rippleRepaint.current)) {
+		return;
+	}
+	_rippleRepaint.pending = true;
+	repaintRippleRegion(previous.united(_rippleRepaint.current));
+}
+
+void Game::invalidateRippleRepaint() const {
+	_rippleRepaint.stale = _rippleRepaint.stale.united(
+		base::take(_rippleRepaint.current));
+	_rippleRepaint.pending = false;
+	_rippleRepaint.known = false;
+}
+
+void Game::repaintRippleRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+uint64 Game::resetRippleRepaint() const {
+	_rippleRepaint.pending = false;
+	return ++_rippleRepaint.generation;
+}
+
 bool Game::hasHeavyPart() const {
 	return _attach ? _attach->hasHeavyPart() : false;
 }
@@ -704,6 +797,8 @@ void Game::unloadHeavyPart() {
 Game::~Game() {
 	invalidateDescriptionRepaint();
 	++_descriptionRepaint.generation;
+	invalidateRippleRepaint();
+	++_rippleRepaint.generation;
 	history()->owner().unregisterGameView(_data, _parent);
 }
 
