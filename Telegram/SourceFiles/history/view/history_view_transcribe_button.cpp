@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/click_handler_types.h" // ClickHandlerContext
 #include "history/history.h"
 #include "history/history_item.h"
+#include "history/view/history_view_element.h"
 #include "data/data_document.h"
 #include "data/data_session.h"
 #include "main/main_session.h"
@@ -53,10 +54,12 @@ void ClipPainterForLock(QPainter &p, bool roundview, const QRect &r) {
 } // namespace
 
 TranscribeButton::TranscribeButton(
+	not_null<const Element*> owner,
 	not_null<HistoryItem*> item,
 	bool roundview,
 	bool summarize)
-: _item(item)
+: _owner(owner)
+, _item(item)
 , _roundview(roundview)
 , _summarize(summarize)
 , _size(!roundview && !_summarize
@@ -76,18 +79,8 @@ void TranscribeButton::setLoading(bool loading) {
 	}
 	_loading = loading;
 	if (_loading) {
-		const auto session = &_item->history()->session();
 		_animation = std::make_unique<Ui::InfiniteRadialAnimation>(
-			[=, itemId = _item->fullId()] {
-				if (const auto item = session->data().message(itemId)) {
-					session->data().requestItemRepaint(
-						item,
-						_lastPaintedPoint.isNull()
-							? QRect()
-							: (QRect(_lastPaintedPoint, size()))
-								+ Margins(st::lineWidth));
-				}
-			},
+			[=] { repaintAnimation(); },
 			st::historyTranscribeRadialAnimation);
 		_animation->start();
 	} else if (_animation) {
@@ -99,17 +92,61 @@ bool TranscribeButton::loading() const {
 	return _loading;
 }
 
+void TranscribeButton::repaintAnimation() {
+	if (_animationRepaintPending) {
+		return;
+	}
+	_animationRepaintPending = true;
+	if (_animationRepaintRect.isEmpty()) {
+		_owner->repaint();
+	} else {
+		_owner->repaint(_animationRepaintRect);
+	}
+}
+
+void TranscribeButton::recordAnimationRepaintRect(
+		const QPainter &p,
+		const PaintContext &context,
+		QRect rect) {
+	if (!context.hasElementPainter(p)) {
+		if (_animationRepaintRect.isEmpty()) {
+			_animationRepaintPending = false;
+		}
+		return;
+	}
+	_animationRepaintPending = false;
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto current = mapped ? *mapped : QRect();
+	const auto previous = _animationRepaintRect;
+	_animationRepaintRect = current;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	_animationRepaintPending = true;
+	_owner->repaint(previous.united(current));
+}
+
 void TranscribeButton::paint(
 		QPainter &p,
 		int x,
 		int y,
 		const PaintContext &context) {
 	auto hq = PainterHighQualityEnabler(p);
+	const auto r = QRect(QPoint(x, y), size());
+	const auto outlineThickness = (!_roundview && !_summarize)
+		? style::ConvertScaleExact(2.)
+		: 0.;
+	const auto repaintMargin = std::max(
+		st::lineWidth,
+		int(std::ceil(outlineThickness / 2.)));
+	recordAnimationRepaintRect(
+		p,
+		context,
+		r + Margins(repaintMargin));
 	const auto opened = _openedAnimation.value(_opened ? 1. : 0.);
 	const auto stm = context.messageStyle();
 	if (_roundview || _summarize) {
-		_lastPaintedPoint = { x, y };
-		const auto r = QRect(QPoint(x, y), size());
+		_lastHitTestPoint = { x, y };
 
 		if (_ripple) {
 			const auto colorOverride = &stm->msgWaveformInactive->c;
@@ -146,14 +183,8 @@ void TranscribeButton::paint(
 					->session().api().transcribes().summary(_item).shown;
 				if (_summaryShown != shown) {
 					_summaryShown = shown;
-					const auto session = &_item->history()->session();
 					_openedAnimation.start(
-						[=, itemId = _item->fullId()] {
-							if (const auto i = session->data().message(
-									itemId)) {
-								session->data().requestItemRepaint(i);
-							}
-						},
+						[=] { repaintAnimation(); },
 						shown ? 0. : 1.,
 						shown ? 1. : 0.,
 						st::fadeWrapDuration);
@@ -268,16 +299,19 @@ void TranscribeButton::paint(
 		auto fg = stm->msgWaveformActive->c;
 		fg.setAlphaF(fg.alphaF() * state.shown * (1. - opened));
 		auto pen = QPen(fg);
-		const auto thickness = style::ConvertScaleExact(2.);
 		const auto widthNoRadius = size().width() - 2 * radius;
 		const auto heightNoRadius = size().height() - 2 * radius;
 		const auto length = 2 * (widthNoRadius + heightNoRadius)
 			+ 2 * M_PI * radius;
-		pen.setWidthF(thickness);
+		pen.setWidthF(outlineThickness);
 		pen.setCapStyle(Qt::RoundCap);
-		const auto ratio = length / (Ui::RadialState::kFull * thickness);
+		const auto ratio = length
+			/ (Ui::RadialState::kFull * outlineThickness);
 		const auto filled = ratio * state.arcLength;
-		pen.setDashPattern({ filled, (length / thickness) - filled });
+		pen.setDashPattern({
+			filled,
+			(length / outlineThickness) - filled,
+		});
 		pen.setDashOffset(ratio * (state.arcFrom + state.arcLength));
 		p.setPen(pen);
 	} else {
@@ -286,7 +320,6 @@ void TranscribeButton::paint(
 			_animation = nullptr;
 		}
 	}
-	const auto r = QRect{ QPoint(x, y), size() };
 	p.drawRoundedRect(r, radius, radius);
 	if (opened > 0.) {
 		if (opened != 1.) {
@@ -348,14 +381,14 @@ bool TranscribeButton::hasLock() const {
 	return true;
 }
 
-void TranscribeButton::setOpened(bool opened, Fn<void()> update) {
+void TranscribeButton::setOpened(bool opened, bool animated) {
 	if (_opened == opened) {
 		return;
 	}
 	_opened = opened;
-	if (update) {
+	if (animated) {
 		_openedAnimation.start(
-			std::move(update),
+			[=] { repaintAnimation(); },
 			_opened ? 0. : 1.,
 			_opened ? 1. : 0.,
 			st::fadeWrapDuration);
@@ -420,12 +453,12 @@ ClickHandlerPtr TranscribeButton::link() {
 }
 
 bool TranscribeButton::contains(const QPoint &p) {
-	_lastStatePoint = p - _lastPaintedPoint;
+	_lastStatePoint = p - _lastHitTestPoint;
 	if (_summarize) {
-		_summarizeHovered = QRect(_lastPaintedPoint, size()).contains(p);
+		_summarizeHovered = QRect(_lastHitTestPoint, size()).contains(p);
 		return _summarizeHovered;
 	} else {
-		return QRect(_lastPaintedPoint, size()).contains(p);
+		return QRect(_lastHitTestPoint, size()).contains(p);
 	}
 }
 

@@ -7000,7 +7000,11 @@ void Message::ensureSummarizeButton() const {
 		/*&& item->originalText().text.size() >= kSummarizeThreshold*/) {
 		if (!_summarize) {
 			_summarize
-				= std::make_unique<TranscribeButton>(data(), false, true);
+				= std::make_unique<TranscribeButton>(
+					this,
+					data(),
+					false,
+					true);
 		}
 	} else {
 		_summarize = nullptr;

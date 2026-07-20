@@ -2673,6 +2673,7 @@ void Gif::ensureTranscribeButton() const {
 			|| _data->session().api().transcribes().trialsSupport())) {
 		if (!_transcribe) {
 			_transcribe = std::make_unique<TranscribeButton>(
+				_parent,
 				_realParent,
 				true);
 		}

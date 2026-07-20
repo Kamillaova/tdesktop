@@ -19,9 +19,12 @@ namespace HistoryView {
 
 using PaintContext = Ui::ChatPaintContext;
 
+class Element;
+
 class TranscribeButton final {
 public:
 	explicit TranscribeButton(
+		not_null<const Element*> owner,
 		not_null<HistoryItem*> item,
 		bool roundview,
 		bool summarize = false);
@@ -29,7 +32,7 @@ public:
 
 	[[nodiscard]] QSize size() const;
 
-	void setOpened(bool opened, Fn<void()> update);
+	void setOpened(bool opened, bool animated);
 	void setLoading(bool loading);
 	[[nodiscard]] bool loading() const;
 	void paint(QPainter &p, int x, int y, const PaintContext &context);
@@ -41,7 +44,13 @@ public:
 
 private:
 	[[nodiscard]] bool hasLock() const;
+	void repaintAnimation();
+	void recordAnimationRepaintRect(
+		const QPainter &p,
+		const PaintContext &context,
+		QRect rect);
 
+	const not_null<const Element*> _owner;
 	const not_null<HistoryItem*> _item;
 	const bool _roundview = false;
 	const bool _summarize = false;
@@ -52,8 +61,10 @@ private:
 	std::unique_ptr<Ui::RippleAnimation> _ripple;
 	Ui::Animations::Simple _openedAnimation;
 	QString _text;
-	QPoint _lastPaintedPoint;
+	QRect _animationRepaintRect;
+	QPoint _lastHitTestPoint;
 	QPoint _lastStatePoint;
+	bool _animationRepaintPending = false;
 	bool _summarizeHovered = false;
 	bool _loading = false;
 	bool _opened = false;
