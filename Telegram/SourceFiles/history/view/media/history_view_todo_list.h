@@ -12,6 +12,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_todo_list.h"
 #include "base/weak_ptr.h"
 
+#include <QtGui/QRegion>
+#include <QtGui/QTransform>
+
 namespace Ui {
 class RippleAnimation;
 class FireworksAnimation;
@@ -70,6 +73,24 @@ public:
 
 private:
 	struct Task;
+	enum class TaskRepaintPart {
+		Text,
+		Toggle,
+		Ripple,
+	};
+	struct RepaintState {
+		uint64 generation = 0;
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+	struct TaskRepaints {
+		int id = 0;
+		RepaintState text;
+		RepaintState toggle;
+		RepaintState ripple;
+	};
 
 	QSize countOptimalSize() override;
 	QSize countCurrentSize(int newWidth) override;
@@ -84,6 +105,7 @@ private:
 		int innerWidth) const;
 	[[nodiscard]] ClickHandlerPtr createTaskClickHandler(
 		const Task &task);
+	void fillTaskData(Task &task, const TodoListItem &original);
 	void updateTexts();
 	void updateTasks(bool skipAnimations);
 	void startToggleAnimation(Task &task);
@@ -122,6 +144,47 @@ private:
 		int top,
 		int height,
 		const PaintContext &context) const;
+	void recordTextRepaint(
+		RepaintState &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		const Ui::Text::String &text,
+		QRect rect) const;
+	void recordTaskRepaint(
+		int id,
+		TaskRepaintPart part,
+		const Painter &p,
+		const PaintContext &context,
+		const QRegion &region) const;
+	void recordRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const;
+	void invalidateRepaintGeometry(RepaintState &repaint) const;
+	void invalidateRepaintGeometries() const;
+	void repaintTitle(uint64 generation) const;
+	void repaintTask(
+		int id,
+		TaskRepaintPart part,
+		uint64 generation) const;
+	void repaintFireworks(uint64 generation) const;
+	void repaintRegion(const QRegion &region) const;
+	[[nodiscard]] TaskRepaints &ensureTaskRepaints(int id) const;
+	[[nodiscard]] TaskRepaints *findTaskRepaints(int id) const;
+	[[nodiscard]] RepaintState &taskRepaint(
+		TaskRepaints &repaints,
+		TaskRepaintPart part) const;
+	[[nodiscard]] uint64 resetTaskRepaint(
+		int id,
+		TaskRepaintPart part);
+	void resetTaskRipple(const Task &task) const;
+	void removeMissingTaskRepaints() const;
+	void rememberElementPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	[[nodiscard]] std::optional<QRect> mapCurrentPaintToElement(
+		const Painter &p,
+		QRectF rect) const;
 
 	void radialAnimationCallback() const;
 
@@ -135,6 +198,16 @@ private:
 	int _total = 0;
 	int _incompleted = 0;
 	TodoListData::Flags _flags = TodoListData::Flags();
+
+	mutable RepaintState _titleRepaint;
+	mutable RepaintState _fireworksRepaint;
+	mutable std::vector<TaskRepaints> _taskRepaints;
+	uint64 _nextRepaintGeneration = 0;
+	mutable QSize _repaintLayoutSize;
+	mutable const QPaintDevice *_elementPaintDevice = nullptr;
+	mutable std::optional<QTransform> _elementTransform;
+	mutable const QPaintDevice *_lastDrawPaintDevice = nullptr;
+	mutable uint32 _lastDrawCanonical : 1 = 0;
 
 	Ui::Text::String _title;
 	Ui::Text::String _subtitle;

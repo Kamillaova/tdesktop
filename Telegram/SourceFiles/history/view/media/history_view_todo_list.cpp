@@ -21,6 +21,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "calls/calls_instance.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/chat/chat_style.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/text/format_values.h"
@@ -47,6 +48,81 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_window.h"
 
 namespace HistoryView {
+namespace {
+
+[[nodiscard]] bool HasTodoTextAnimation(const Ui::Text::String &text) {
+	return text.hasCustomEmoji() || text.hasSpoilers();
+}
+
+[[nodiscard]] QMargins TodoTextRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
+[[nodiscard]] bool AddTodoTextRepaintRegion(
+		QRegion &region,
+		const Painter &p,
+		const PaintContext &context,
+		const Ui::Text::String &text,
+		QRect rect) {
+	const auto customEmoji = text.hasCustomEmoji();
+	if (!HasTodoTextAnimation(text)) {
+		return true;
+	} else if (rect.isEmpty()) {
+		return true;
+	}
+	const auto layoutWidth = std::min(rect.width(), text.maxWidth());
+	const auto lines = text.countLinesGeometry(layoutWidth);
+	if (lines.empty()) {
+		return true;
+	}
+	const auto margins = customEmoji
+		? TodoTextRepaintMargins()
+		: QMargins();
+	auto mappedRegion = QRegion();
+	auto lineTop = 0;
+	for (const auto &line : lines) {
+		const auto lineBottom = std::clamp(
+			line.bottom,
+			lineTop,
+			rect.height());
+		auto lineLeft = std::clamp(line.left, 0, layoutWidth);
+		const auto lineWidth = std::clamp(
+			line.width,
+			0,
+			layoutWidth - lineLeft);
+		if (line.rtl) {
+			lineLeft = layoutWidth - lineLeft - lineWidth;
+		}
+		if (lineWidth > 0 && lineBottom > lineTop) {
+			auto lineRect = QRectF(
+				rect.x() + lineLeft,
+				rect.y() + lineTop,
+				lineWidth,
+				lineBottom - lineTop);
+			if (customEmoji) {
+				lineRect = lineRect.marginsAdded(QMarginsF(margins));
+			}
+			const auto mapped = context.mapToElement(p, lineRect);
+			if (!mapped || mapped->isEmpty()) {
+				return false;
+			}
+			mappedRegion += *mapped;
+		}
+		lineTop = lineBottom;
+		if (lineTop == rect.height()) {
+			break;
+		}
+	}
+	region += mappedRegion;
+	return true;
+}
+
+} // namespace
 
 struct TodoList::Task {
 	Task();
@@ -67,6 +143,7 @@ struct TodoList::Task {
 	ClickHandlerPtr handler;
 	Ui::Animations::Simple selectedAnimation;
 	mutable std::unique_ptr<Ui::RippleAnimation> ripple;
+	mutable QSize rippleMaskSize;
 };
 
 TodoList::Task::Task()
@@ -215,17 +292,250 @@ int TodoList::countTaskHeight(
 		+ st::historyChecklistTaskPadding.bottom();
 }
 
+TodoList::TaskRepaints &TodoList::ensureTaskRepaints(int id) const {
+	const auto existing = findTaskRepaints(id);
+	if (existing) {
+		return *existing;
+	}
+	return _taskRepaints.emplace_back(TaskRepaints{ .id = id });
+}
+
+TodoList::TaskRepaints *TodoList::findTaskRepaints(int id) const {
+	const auto i = ranges::find(_taskRepaints, id, &TaskRepaints::id);
+	return (i == end(_taskRepaints)) ? nullptr : &*i;
+}
+
+TodoList::RepaintState &TodoList::taskRepaint(
+		TaskRepaints &repaints,
+		TaskRepaintPart part) const {
+	switch (part) {
+	case TaskRepaintPart::Text: return repaints.text;
+	case TaskRepaintPart::Toggle: return repaints.toggle;
+	case TaskRepaintPart::Ripple: return repaints.ripple;
+	}
+	Unexpected("Task repaint part in TodoList::taskRepaint.");
+}
+
+uint64 TodoList::resetTaskRepaint(
+		int id,
+		TaskRepaintPart part) {
+	auto &repaint = taskRepaint(ensureTaskRepaints(id), part);
+	repaint.pending = false;
+	repaint.generation = ++_nextRepaintGeneration;
+	return repaint.generation;
+}
+
+void TodoList::resetTaskRipple(const Task &task) const {
+	if (const auto repaints = findTaskRepaints(task.id)) {
+		repaints->ripple.generation = 0;
+		repaints->ripple.pending = false;
+	}
+	task.ripple.reset();
+	task.rippleMaskSize = QSize();
+}
+
+void TodoList::invalidateRepaintGeometry(RepaintState &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void TodoList::invalidateRepaintGeometries() const {
+	invalidateRepaintGeometry(_titleRepaint);
+	invalidateRepaintGeometry(_fireworksRepaint);
+	for (auto &repaints : _taskRepaints) {
+		invalidateRepaintGeometry(repaints.text);
+		invalidateRepaintGeometry(repaints.toggle);
+		invalidateRepaintGeometry(repaints.ripple);
+	}
+}
+
+void TodoList::repaintRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
+void TodoList::recordRepaintGeometry(
+		RepaintState &repaint,
+		QRegion region,
+		bool known) const {
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(
+		base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(region) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRegion(previous.united(repaint.current));
+}
+
+void TodoList::recordTextRepaint(
+		RepaintState &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		const Ui::Text::String &text,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto region = QRegion();
+	const auto known = AddTodoTextRepaintRegion(
+		region,
+		p,
+		context,
+		text,
+		rect);
+	recordRepaintGeometry(repaint, std::move(region), known);
+}
+
+void TodoList::recordTaskRepaint(
+		int id,
+		TaskRepaintPart part,
+		const Painter &p,
+		const PaintContext &context,
+		const QRegion &rects) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto region = QRegion();
+	auto known = true;
+	for (const auto &rect : rects) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+			break;
+		}
+		region += *mapped;
+	}
+	recordRepaintGeometry(
+		taskRepaint(ensureTaskRepaints(id), part),
+		std::move(region),
+		known);
+}
+
+void TodoList::repaintTitle(uint64 generation) const {
+	auto &repaint = _titleRepaint;
+	if (generation != repaint.generation
+		|| repaint.pending
+		|| _parent->delegate()->elementAnimationsPaused()
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (repaint.known) {
+		repaintRegion(repaint.current);
+	} else {
+		this->repaint();
+	}
+}
+
+void TodoList::repaintTask(
+		int id,
+		TaskRepaintPart part,
+		uint64 generation) const {
+	const auto repaints = findTaskRepaints(id);
+	if (!repaints) {
+		return;
+	}
+	auto &repaint = taskRepaint(*repaints, part);
+	if (generation != repaint.generation
+		|| repaint.pending
+		|| ((part == TaskRepaintPart::Text)
+			&& _parent->delegate()->elementAnimationsPaused())
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (repaint.known) {
+		repaintRegion(repaint.current);
+	} else {
+		this->repaint();
+	}
+}
+
+void TodoList::repaintFireworks(uint64 generation) const {
+	auto &repaint = _fireworksRepaint;
+	if (generation != repaint.generation
+		|| repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (repaint.known) {
+		repaintRegion(repaint.current);
+	} else {
+		this->repaint();
+	}
+}
+
+void TodoList::removeMissingTaskRepaints() const {
+	for (auto i = begin(_taskRepaints); i != end(_taskRepaints);) {
+		if (ranges::find(_tasks, i->id, &Task::id) != end(_tasks)) {
+			++i;
+			continue;
+		}
+		recordRepaintGeometry(i->text, QRegion(), true);
+		recordRepaintGeometry(i->toggle, QRegion(), true);
+		recordRepaintGeometry(i->ripple, QRegion(), true);
+		i = _taskRepaints.erase(i);
+	}
+}
+
+void TodoList::rememberElementPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	_lastDrawPaintDevice = p.device();
+	_lastDrawCanonical = context.hasElementPainter(p);
+	if (!_lastDrawCanonical) {
+		return;
+	}
+	_elementPaintDevice = p.device();
+	_elementTransform = context.elementTransform;
+}
+
+std::optional<QRect> TodoList::mapCurrentPaintToElement(
+		const Painter &p,
+		QRectF rect) const {
+	if (!_elementTransform || _elementPaintDevice != p.device()) {
+		return std::nullopt;
+	}
+	auto invertible = false;
+	const auto inverted = _elementTransform->inverted(&invertible);
+	if (!invertible) {
+		return std::nullopt;
+	}
+	return inverted.map(
+		p.transform().map(QPolygonF(rect))
+	).boundingRect().toAlignedRect();
+}
+
 QSize TodoList::countCurrentSize(int newWidth) {
 	accumulate_min(newWidth, maxWidth());
 	const auto innerWidth = newWidth
 		- st::msgPadding.left()
 		- st::msgPadding.right();
 
-	const auto tasksHeight = ranges::accumulate(ranges::views::all(
-		_tasks
-	) | ranges::views::transform([&](const Task &task) {
-		return countTaskHeight(task, innerWidth);
-	}), 0);
+	auto tasksHeight = 0;
+	for (const auto &task : _tasks) {
+		const auto taskHeight = countTaskHeight(task, innerWidth);
+		tasksHeight += taskHeight;
+		if (task.ripple
+			&& task.rippleMaskSize != QSize(newWidth, taskHeight)) {
+			resetTaskRipple(task);
+		}
+	}
 
 	const auto bottomButtonHeight = st::historyPollBottomButtonSkip;
 	auto newHeight = st::historyPollQuestionTop
@@ -241,17 +551,26 @@ QSize TodoList::countCurrentSize(int newWidth) {
 	if (!isBubbleTop()) {
 		newHeight -= st::msgFileTopMinus;
 	}
-	return { newWidth, newHeight };
+	const auto result = QSize(newWidth, newHeight);
+	if (_repaintLayoutSize != result) {
+		invalidateRepaintGeometries();
+		_repaintLayoutSize = result;
+	}
+	return result;
 }
 
 void TodoList::updateTexts() {
 	if (_todoListVersion == _todolist->version) {
 		return;
 	}
+	invalidateRepaintGeometries();
 	const auto skipAnimations = _tasks.empty();
 	_todoListVersion = _todolist->version;
 
 	if (_title.toTextWithEntities() != _todolist->title) {
+		_titleRepaint.generation = ++_nextRepaintGeneration;
+		const auto generation = _titleRepaint.generation;
+		const auto weak = base::make_weak(this);
 		auto options = Ui::WebpageTextTitleOptions();
 		options.maxw = options.maxh = 0;
 		_title.setMarkedText(
@@ -260,7 +579,11 @@ void TodoList::updateTexts() {
 			options,
 			Core::TextContext({
 				.session = &_todolist->session(),
-				.repaint = [=] { repaint(); },
+				.repaint = [=] {
+					if (const auto strong = weak.get()) {
+						strong->repaintTitle(generation);
+					}
+				},
 				.customEmojiLoopLimit = 2,
 			}));
 		InitElementTextPart(_parent, _title);
@@ -278,12 +601,41 @@ void TodoList::updateTexts() {
 	updateTasks(skipAnimations);
 }
 
+void TodoList::fillTaskData(
+		Task &task,
+		const TodoListItem &original) {
+	auto &repaint = ensureTaskRepaints(original.id).text;
+	const auto textChanged = task.text.isEmpty()
+		|| task.text.toTextWithEntities() != original.text;
+	if (textChanged && task.ripple) {
+		resetTaskRipple(task);
+	}
+	if (textChanged || !repaint.generation) {
+		invalidateRepaintGeometry(repaint);
+		repaint.generation = ++_nextRepaintGeneration;
+	}
+	const auto id = original.id;
+	const auto generation = repaint.generation;
+	const auto weak = base::make_weak(this);
+	task.fillData(
+		_parent,
+		_todolist,
+		original,
+		Core::TextContext({
+			.session = &_todolist->session(),
+			.repaint = [=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintTask(
+						id,
+						TaskRepaintPart::Text,
+						generation);
+				}
+			},
+			.customEmojiLoopLimit = 2,
+		}));
+}
+
 void TodoList::updateTasks(bool skipAnimations) {
-	const auto context = Core::TextContext({
-		.session = &_todolist->session(),
-		.repaint = [=] { repaint(); },
-		.customEmojiLoopLimit = 2,
-	});
 	const auto changed = !ranges::equal(
 		_tasks,
 		_todolist->items,
@@ -295,7 +647,7 @@ void TodoList::updateTasks(bool skipAnimations) {
 		auto &&tasks = ranges::views::zip(_tasks, _todolist->items);
 		for (auto &&[task, original] : tasks) {
 			const auto wasDate = task.completionDate;
-			task.fillData(_parent, _todolist, original, context);
+			fillTaskData(task, original);
 			if (!skipAnimations && (!wasDate != !task.completionDate)) {
 				startToggleAnimation(task);
 				animated = true;
@@ -308,12 +660,20 @@ void TodoList::updateTasks(bool skipAnimations) {
 		return;
 	}
 	const auto has = hasHeavyPart();
+	for (auto &repaints : _taskRepaints) {
+		invalidateRepaintGeometry(repaints.text);
+		invalidateRepaintGeometry(repaints.toggle);
+		invalidateRepaintGeometry(repaints.ripple);
+		repaints.text.generation = 0;
+		repaints.toggle.generation = 0;
+		repaints.ripple.generation = 0;
+	}
 	_tasks = ranges::views::all(
 		_todolist->items
 	) | ranges::views::transform([&](const TodoListItem &item) {
 		auto result = Task();
 		result.id = item.id;
-		result.fillData(_parent, _todolist, item, context);
+		fillTaskData(result, item);
 		return result;
 	}) | ranges::to_vector;
 
@@ -340,8 +700,20 @@ ClickHandlerPtr TodoList::createTaskClickHandler(
 
 void TodoList::startToggleAnimation(Task &task) {
 	const auto selected = (task.completionDate != 0);
+	const auto id = task.id;
+	const auto generation = resetTaskRepaint(
+		id,
+		TaskRepaintPart::Toggle);
+	const auto weak = base::make_weak(this);
 	task.selectedAnimation.start(
-		[=] { repaint(); },
+		[=] {
+			if (const auto strong = weak.get()) {
+				strong->repaintTask(
+					id,
+					TaskRepaintPart::Toggle,
+					generation);
+			}
+		},
 		selected ? 0. : 1.,
 		selected ? 1. : 0.,
 		st::defaultCheck.duration);
@@ -373,6 +745,9 @@ void TodoList::toggleCompletion(int id) {
 		&Task::id);
 	if (i == end(_tasks)) {
 		return;
+	}
+	if (const auto repaints = findTaskRepaints(id)) {
+		invalidateRepaintGeometry(repaints->text);
 	}
 
 	const auto selected = (i->completionDate != 0);
@@ -406,8 +781,16 @@ void TodoList::toggleCompletion(int id) {
 void TodoList::maybeStartFireworks() {
 	if (!ranges::contains(_tasks, TimeId(), &Task::completionDate)
 		&& !_fireworksAnimation) {
+		_fireworksRepaint.pending = false;
+		_fireworksRepaint.generation = ++_nextRepaintGeneration;
+		const auto generation = _fireworksRepaint.generation;
+		const auto weak = base::make_weak(this);
 		_fireworksAnimation = std::make_unique<Ui::FireworksAnimation>(
-			[=] { repaint(); });
+			[=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintFireworks(generation);
+				}
+			});
 	}
 }
 
@@ -437,7 +820,23 @@ void TodoList::updateCompletionStatus() {
 }
 
 void TodoList::draw(Painter &p, const PaintContext &context) const {
-	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
+	rememberElementPaint(p, context);
+	if (_repaintLayoutSize != currentSize()) {
+		invalidateRepaintGeometries();
+		_repaintLayoutSize = currentSize();
+	}
+	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		if (context.hasElementPainter(p)) {
+			recordRepaintGeometry(_titleRepaint, QRegion(), true);
+			for (auto &repaints : _taskRepaints) {
+				recordRepaintGeometry(repaints.text, QRegion(), true);
+				recordRepaintGeometry(repaints.toggle, QRegion(), true);
+				recordRepaintGeometry(repaints.ripple, QRegion(), true);
+			}
+			removeMissingTaskRepaints();
+		}
+		return;
+	}
 	auto paintw = width();
 
 	const auto stm = context.messageStyle();
@@ -448,7 +847,22 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 	}
 	paintw -= padding.left() + padding.right();
 
+	recordTextRepaint(
+		_titleRepaint,
+		p,
+		context,
+		_title,
+		QRect(
+			padding.left(),
+			tshift,
+			paintw,
+			_title.countHeight(paintw)));
 	p.setPen(stm->historyTextFg);
+	_parent->prepareCustomEmojiPaint(
+		p,
+		context,
+		_title,
+		CustomEmojiRepaintReset::No);
 	_title.draw(p, {
 		.position = { padding.left(), tshift },
 		.availableWidth = paintw,
@@ -492,6 +906,9 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 		history()->owner().registerHeavyViewPart(_parent);
 	}
 	paintBottom(p, padding.left(), tshift, paintw, context);
+	if (context.hasElementPainter(p)) {
+		removeMissingTaskRepaints();
+	}
 }
 
 void TodoList::paintBottom(
@@ -529,6 +946,70 @@ int TodoList::paintTask(
 	const auto awidth = width
 		- st::historyChecklistTaskPadding.left()
 		- st::historyChecklistTaskPadding.right();
+	const auto textTop = top + (task.completionDate
+		? st::historyChecklistCheckedTop
+		: st::historyChecklistTaskPadding.top());
+	const auto radioTop = top + st::historyChecklistTaskPadding.top();
+	const auto rippleMaskSize = QSize(outerWidth, height);
+	if (task.ripple && task.rippleMaskSize != rippleMaskSize) {
+		resetTaskRipple(task);
+	}
+	const auto radio = QRect(
+		left,
+		radioTop,
+		st::historyPollRadio.diameter,
+		st::historyPollRadio.diameter);
+	const auto radioAdd = st::lineWidth * 3;
+	const auto aaAdd = st::lineWidth;
+	const auto margins = [](int add) {
+		return QMargins(add, add, add, add);
+	};
+	const auto skip = st::lineWidth;
+	const auto userpic = QRect(
+		left + st::historyPollRadio.diameter / 2 + skip,
+		radioTop + skip,
+		st::historyPollRadio.diameter - 2 * skip,
+		st::historyPollRadio.diameter - 2 * skip
+	).marginsAdded(margins(aaAdd));
+	const auto &chosen = stm->historyPollChosen;
+	const auto chosenLeft = left
+		+ (st::historyPollRadio.diameter - chosen.width()) / 2;
+	const auto chosenTop = radioTop
+		+ (st::historyPollRadio.diameter - chosen.height()) / 2;
+	auto toggleRegion = QRegion(radio.marginsAdded(margins(radioAdd)));
+	toggleRegion += userpic;
+	toggleRegion += style::rtlrect(
+		chosenLeft,
+		chosenTop,
+		chosen.width(),
+		chosen.height(),
+		outerWidth).marginsAdded(margins(aaAdd));
+	recordTaskRepaint(
+		task.id,
+		TaskRepaintPart::Ripple,
+		p,
+		context,
+		QRegion(QRect(
+			left - st::msgPadding.left(),
+			top,
+			outerWidth,
+			height)));
+	recordTaskRepaint(
+		task.id,
+		TaskRepaintPart::Toggle,
+		p,
+		context,
+		toggleRegion);
+	recordTextRepaint(
+		ensureTaskRepaints(task.id).text,
+		p,
+		context,
+		task.text,
+		QRect(
+			aleft,
+			textTop,
+			awidth,
+			task.text.countHeight(awidth)));
 
 	if (task.ripple) {
 		p.setOpacity(st::historyPollRippleOpacity);
@@ -539,7 +1020,7 @@ int TodoList::paintTask(
 			outerWidth,
 			&stm->msgWaveformInactive->c);
 		if (task.ripple->empty()) {
-			task.ripple.reset();
+			resetTaskRipple(task);
 		}
 		p.setOpacity(1.);
 	}
@@ -550,10 +1031,13 @@ int TodoList::paintTask(
 		paintStatus(p, task, left, top, context);
 	}
 
-	top += task.completionDate
-		? st::historyChecklistCheckedTop
-		: st::historyChecklistTaskPadding.top();
+	top = textTop;
 	p.setPen(stm->historyTextFg);
+	_parent->prepareCustomEmojiPaint(
+		p,
+		context,
+		task.text,
+		CustomEmojiRepaintReset::No);
 	task.text.draw(p, {
 		.position = { aleft, top },
 		.availableWidth = awidth,
@@ -808,10 +1292,42 @@ void TodoList::paintBubbleFireworks(
 		Painter &p,
 		const QRect &bubble,
 		crl::time ms) const {
-	if (!_fireworksAnimation || _fireworksAnimation->paint(p, bubble)) {
+	if (_lastDrawCanonical && _lastDrawPaintDevice == p.device()) {
+		auto region = QRegion();
+		auto known = true;
+		if (!bubble.isEmpty()) {
+			const auto mapped = mapCurrentPaintToElement(
+				p,
+				QRectF(bubble));
+			if (!mapped || mapped->isEmpty()) {
+				known = false;
+			} else {
+				region += *mapped;
+			}
+		}
+		if (_fireworksAnimation) {
+			recordRepaintGeometry(
+				_fireworksRepaint,
+				std::move(region),
+				known);
+		} else {
+			_fireworksRepaint.current = known
+				? std::move(region)
+				: QRegion();
+			_fireworksRepaint.stale = QRegion();
+			_fireworksRepaint.pending = false;
+			_fireworksRepaint.known = known;
+		}
+	}
+	if (!_fireworksAnimation) {
 		return;
 	}
+	if (_fireworksAnimation->paint(p, bubble)) {
+		return;
+	}
+	_fireworksRepaint.generation = 0;
 	_fireworksAnimation = nullptr;
+	_fireworksRepaint.pending = false;
 }
 
 void TodoList::clickHandlerPressedChanged(
@@ -829,8 +1345,10 @@ void TodoList::clickHandlerPressedChanged(
 }
 
 void TodoList::unloadHeavyPart() {
+	_title.unloadPersistentAnimation();
 	for (auto &task : _tasks) {
 		task.userpic = {};
+		task.text.unloadPersistentAnimation();
 	}
 }
 
@@ -873,14 +1391,31 @@ void TodoList::toggleRipple(Task &task, bool pressed) {
 		const auto innerWidth = outerWidth
 			- st::msgPadding.left()
 			- st::msgPadding.right();
+		const auto maskSize = QSize(
+			outerWidth,
+			countTaskHeight(task, innerWidth));
+		if (task.ripple && task.rippleMaskSize != maskSize) {
+			resetTaskRipple(task);
+		}
 		if (!task.ripple) {
-			auto mask = Ui::RippleAnimation::RectMask(QSize(
-				outerWidth,
-				countTaskHeight(task, innerWidth)));
+			auto mask = Ui::RippleAnimation::RectMask(maskSize);
+			const auto id = task.id;
+			const auto generation = resetTaskRepaint(
+				id,
+				TaskRepaintPart::Ripple);
+			const auto weak = base::make_weak(this);
+			task.rippleMaskSize = maskSize;
 			task.ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				std::move(mask),
-				[=] { repaint(); });
+				[=] {
+					if (const auto strong = weak.get()) {
+						strong->repaintTask(
+							id,
+							TaskRepaintPart::Ripple,
+							generation);
+					}
+				});
 		}
 		const auto top = countTaskTop(task, innerWidth);
 		task.ripple->add(_lastLinkPoint - QPoint(0, top));
@@ -902,6 +1437,13 @@ int TodoList::bottomButtonHeight() const {
 }
 
 TodoList::~TodoList() {
+	_titleRepaint.generation = 0;
+	_fireworksRepaint.generation = 0;
+	for (auto &repaints : _taskRepaints) {
+		repaints.text.generation = 0;
+		repaints.toggle.generation = 0;
+		repaints.ripple.generation = 0;
+	}
 	history()->owner().unregisterTodoListView(_todolist, _parent);
 	if (hasHeavyPart()) {
 		unloadHeavyPart();
