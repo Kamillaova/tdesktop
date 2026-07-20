@@ -67,8 +67,8 @@ public:
 
 protected:
 	struct AnimationRepaint {
-		QRegion current;
-		QRegion stale;
+		QRect current;
+		QRect stale;
 		uint32 pending : 1 = 0;
 		uint32 known : 1 = 0;
 	};
@@ -81,7 +81,8 @@ protected:
 		const Painter &p,
 		const PaintContext &context,
 		AnimationRepaint &repaint,
-		QRectF rect) const;
+		QRectF rect,
+		bool known = true) const;
 	void invalidateAnimationRepaint(AnimationRepaint &repaint) const;
 	void resetAnimationRepaint(AnimationRepaint &repaint) const;
 
@@ -184,7 +185,8 @@ public:
 		const style::TextStyle &st = st::defaultTextStyle,
 		const base::flat_map<uint16, ClickHandlerPtr> &links = {},
 		const Ui::Text::MarkedContext &context = {},
-		style::align align = style::al_top);
+		style::align align = style::al_top,
+		Element *repaintParent = nullptr);
 
 	void draw(
 		Painter &p,
@@ -214,9 +216,14 @@ protected:
 	virtual int elisionLines() const;
 
 private:
+	Element *_repaintParent = nullptr;
 	Ui::Text::String _text;
 	QMargins _margins;
 	style::align _align = {};
+	bool _customEmoji = false;
+	bool _spoilers = false;
+	bool _animated = false;
+	mutable AnimationRepaint _textRepaint;
 
 };
 

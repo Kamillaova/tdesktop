@@ -56,15 +56,6 @@ constexpr auto kVoiceBlobMinorScale = 0.88;
 constexpr auto kVoiceBlobMajorScale = 0.85;
 constexpr auto kVoiceBlobIdleLevel = 0.45;
 
-[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
-	const auto inner = st::emojiSize;
-	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
-	const auto skip = (inner - outer) / 2;
-	const auto before = std::max(-skip, 0);
-	const auto after = std::max(skip + outer - inner, 0);
-	return { before, before, after, after };
-}
-
 [[nodiscard]] std::vector<Ui::Paint::Blobs::BlobData> VoicePlaybackBlobs() {
 	return {
 		{
@@ -798,7 +789,10 @@ QRect Document::draw(
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		recordTtlAnimationRepaintRegion(p, context, QRegion());
 		recordVoiceInteractionRepaintRegion(p, context, QRegion());
-		recordCaptionRepaintRect(p, context, QRectF());
+		recordCaptionRepaintRect(
+			p,
+			context,
+			Ui::Text::CustomEmojiPaintedBounds());
 		return QRect();
 	}
 
@@ -1186,22 +1180,16 @@ QRect Document::draw(
 	}
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		const auto captionHeight = captioned->caption.countHeight(captionw);
-		auto captionRect = QRectF(
+		const auto captionRect = QRectF(
 			st::msgPadding.left(),
 			captiontop,
 			captionw,
 			captionHeight);
-		if (captioned->caption.hasCustomEmoji()) {
-			captionRect = captionRect.marginsAdded(
-				QMarginsF(CustomEmojiRepaintMargins()));
-		}
-		recordCaptionRepaintRect(
-			p,
-			context,
-			captionRect);
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 
+		auto customEmojiPaintedBounds
+			= Ui::Text::CustomEmojiPaintedBounds();
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
 			.position = { st::msgPadding.left(), captiontop },
@@ -1219,9 +1207,24 @@ QRect Document::draw(
 			.selection = selection,
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		customEmojiPaintedBounds.complete
+			= customEmojiPaintedBounds.repaintRectKnown();
+		customEmojiPaintedBounds.rect
+			= customEmojiPaintedBounds.repaintRect();
+		customEmojiPaintedBounds.repaintFallback = QRectF();
+		if (customEmojiPaintedBounds.complete
+			&& captioned->caption.hasSpoilers()) {
+			customEmojiPaintedBounds.rect
+				= customEmojiPaintedBounds.rect.united(captionRect);
+		}
+		recordCaptionRepaintRect(p, context, customEmojiPaintedBounds);
 	} else {
-		recordCaptionRepaintRect(p, context, QRectF());
+		recordCaptionRepaintRect(
+			p,
+			context,
+			Ui::Text::CustomEmojiPaintedBounds());
 	}
 	return playbackBlobs;
 }
@@ -2258,8 +2261,11 @@ void Document::repaintCaption(uint64 generation) const {
 	if (_captionGeneration != generation || _captionRepaintPending) {
 		return;
 	}
+	if (_captionRepaintKnown && _captionRepaintRect.isEmpty()) {
+		return;
+	}
 	_captionRepaintPending = true;
-	if (_captionRepaintRect.isEmpty()) {
+	if (!_captionRepaintKnown) {
 		_parent->customEmojiRepaint();
 	} else {
 		_parent->repaint(_captionRepaintRect);
@@ -2269,20 +2275,35 @@ void Document::repaintCaption(uint64 generation) const {
 void Document::recordCaptionRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		QRectF rect) const {
+		const Ui::Text::CustomEmojiPaintedBounds &bounds) const {
 	if (!context.hasElementPainter(p)) {
-		if (_captionRepaintRect.isEmpty()) {
+		if (!_captionRepaintKnown || _captionRepaintRect.isEmpty()) {
 			_captionRepaintPending = false;
 		}
 		return;
 	}
 	_captionRepaintPending = false;
-	const auto current = rect.isEmpty()
-		? QRect()
-		: context.mapToElement(p, rect).value_or(QRect());
+	auto current = QRect();
+	auto known = bounds.complete;
+	if (known && !bounds.rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, bounds.rect);
+		known = mapped.has_value() && !mapped->isEmpty();
+		if (known) {
+			current = *mapped;
+		}
+	}
 	const auto stale = base::take(_captionStaleRepaintRect);
 	const auto previous = stale.united(base::take(_captionRepaintRect));
-	_captionRepaintRect = current;
+	_captionRepaintRect = known ? current : QRect();
+	_captionRepaintKnown = known;
+	if (!known) {
+		_captionStaleRepaintRect = previous;
+		if (stale.isEmpty() && !previous.isEmpty()) {
+			_captionRepaintPending = true;
+			_parent->repaint(previous);
+		}
+		return;
+	}
 	if (previous.isEmpty()
 		|| (stale.isEmpty() && previous == current)) {
 		return;
@@ -2295,6 +2316,7 @@ void Document::invalidateCaptionRepaintRect() const {
 	_captionStaleRepaintRect = _captionStaleRepaintRect.united(
 		base::take(_captionRepaintRect));
 	_captionRepaintPending = false;
+	_captionRepaintKnown = false;
 }
 
 bool Document::voiceProgressAnimationCallback(crl::time now) {

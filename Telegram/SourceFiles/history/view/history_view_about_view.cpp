@@ -494,7 +494,8 @@ auto GenerateNewPeerInfo(
 			st::newPeerSubtitleMargin,
 			fadedFg,
 			normalFg,
-			copy));
+			copy,
+			parent));
 
 		const auto details = user->botVerifyDetails();
 		const auto text = details
@@ -510,7 +511,8 @@ auto GenerateNewPeerInfo(
 			fadedFg,
 			st::defaultTextStyle,
 			base::flat_map<uint16, ClickHandlerPtr>(),
-			context));
+			context,
+			parent));
 	};
 }
 

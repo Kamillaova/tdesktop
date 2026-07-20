@@ -54,25 +54,31 @@ namespace {
 	return text.hasCustomEmoji() || text.hasSpoilers();
 }
 
-[[nodiscard]] QMargins TodoTextRepaintMargins() {
-	const auto inner = st::emojiSize;
-	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
-	const auto skip = (inner - outer) / 2;
-	const auto before = std::max(-skip, 0);
-	const auto after = std::max(skip + outer - inner, 0);
-	return { before, before, after, after };
-}
-
 [[nodiscard]] bool AddTodoTextRepaintRegion(
 		QRegion &region,
 		const Painter &p,
 		const PaintContext &context,
 		const Ui::Text::String &text,
-		QRect rect) {
-	const auto customEmoji = text.hasCustomEmoji();
+		QRect rect,
+		const Ui::Text::CustomEmojiPaintedBounds
+			&customEmojiPaintedBounds) {
 	if (!HasTodoTextAnimation(text)) {
 		return true;
-	} else if (rect.isEmpty()) {
+	}
+	if (!customEmojiPaintedBounds.repaintRectKnown()) {
+		return false;
+	}
+	const auto repaintRect = customEmojiPaintedBounds.repaintRect();
+	if (!repaintRect.isEmpty()) {
+		const auto mapped = context.mapToElement(
+			p,
+			repaintRect);
+		if (!mapped || mapped->isEmpty()) {
+			return false;
+		}
+		region += *mapped;
+	}
+	if (!text.hasSpoilers() || rect.isEmpty()) {
 		return true;
 	}
 	const auto layoutWidth = std::min(rect.width(), text.maxWidth());
@@ -80,9 +86,6 @@ namespace {
 	if (lines.empty()) {
 		return true;
 	}
-	const auto margins = customEmoji
-		? TodoTextRepaintMargins()
-		: QMargins();
 	auto mappedRegion = QRegion();
 	auto lineTop = 0;
 	for (const auto &line : lines) {
@@ -99,14 +102,11 @@ namespace {
 			lineLeft = layoutWidth - lineLeft - lineWidth;
 		}
 		if (lineWidth > 0 && lineBottom > lineTop) {
-			auto lineRect = QRectF(
+			const auto lineRect = QRectF(
 				rect.x() + lineLeft,
 				rect.y() + lineTop,
 				lineWidth,
 				lineBottom - lineTop);
-			if (customEmoji) {
-				lineRect = lineRect.marginsAdded(QMarginsF(margins));
-			}
 			const auto mapped = context.mapToElement(p, lineRect);
 			if (!mapped || mapped->isEmpty()) {
 				return false;
@@ -368,7 +368,7 @@ void TodoList::recordRepaintGeometry(
 	repaint.known = known;
 	if (!known) {
 		repaint.stale = previous;
-		if (!previous.isEmpty()) {
+		if (stale.isEmpty() && !previous.isEmpty()) {
 			repaint.pending = true;
 			this->repaint();
 		}
@@ -386,17 +386,20 @@ void TodoList::recordTextRepaint(
 		const Painter &p,
 		const PaintContext &context,
 		const Ui::Text::String &text,
-		QRect rect) const {
+		QRect rect,
+		const Ui::Text::CustomEmojiPaintedBounds
+			&customEmojiPaintedBounds) const {
 	if (!context.hasElementPainter(p)) {
 		return;
 	}
 	auto region = QRegion();
-	const auto known = AddTodoTextRepaintRegion(
+	auto known = AddTodoTextRepaintRegion(
 		region,
 		p,
 		context,
 		text,
-		rect);
+		rect,
+		customEmojiPaintedBounds);
 	recordRepaintGeometry(repaint, std::move(region), known);
 }
 
@@ -847,22 +850,14 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 	}
 	paintw -= padding.left() + padding.right();
 
-	recordTextRepaint(
-		_titleRepaint,
-		p,
-		context,
-		_title,
-		QRect(
-			padding.left(),
-			tshift,
-			paintw,
-			_title.countHeight(paintw)));
 	p.setPen(stm->historyTextFg);
 	_parent->prepareCustomEmojiPaint(
 		p,
 		context,
 		_title,
 		CustomEmojiRepaintReset::No);
+	auto titleCustomEmojiPaintedBounds
+		= Ui::Text::CustomEmojiPaintedBounds();
 	_title.draw(p, {
 		.position = { padding.left(), tshift },
 		.availableWidth = paintw,
@@ -872,7 +867,19 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.selection = context.selection,
+		.customEmojiPaintedBounds = &titleCustomEmojiPaintedBounds,
 	});
+	recordTextRepaint(
+		_titleRepaint,
+		p,
+		context,
+		_title,
+		QRect(
+			padding.left(),
+			tshift,
+			paintw,
+			_title.countHeight(paintw)),
+		titleCustomEmojiPaintedBounds);
 	tshift += _title.countHeight(paintw) + st::historyPollSubtitleSkip;
 
 	p.setPen(stm->msgDateFg);
@@ -1000,17 +1007,6 @@ int TodoList::paintTask(
 		p,
 		context,
 		toggleRegion);
-	recordTextRepaint(
-		ensureTaskRepaints(task.id).text,
-		p,
-		context,
-		task.text,
-		QRect(
-			aleft,
-			textTop,
-			awidth,
-			task.text.countHeight(awidth)));
-
 	if (task.ripple) {
 		p.setOpacity(st::historyPollRippleOpacity);
 		task.ripple->paint(
@@ -1038,6 +1034,8 @@ int TodoList::paintTask(
 		context,
 		task.text,
 		CustomEmojiRepaintReset::No);
+	auto customEmojiPaintedBounds
+		= Ui::Text::CustomEmojiPaintedBounds();
 	task.text.draw(p, {
 		.position = { aleft, top },
 		.availableWidth = awidth,
@@ -1046,7 +1044,19 @@ int TodoList::paintTask(
 		.now = context.now,
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 	});
+	recordTextRepaint(
+		ensureTaskRepaints(task.id).text,
+		p,
+		context,
+		task.text,
+		QRect(
+			aleft,
+			textTop,
+			awidth,
+			task.text.countHeight(awidth)),
+		customEmojiPaintedBounds);
 	if (task.completionDate) {
 		const auto nameTop = top
 			+ height

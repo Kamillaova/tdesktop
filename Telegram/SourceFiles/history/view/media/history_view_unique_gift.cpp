@@ -867,8 +867,16 @@ TextPartColored::TextPartColored(
 	Fn<QColor(const PaintContext &)> color,
 	const style::TextStyle &st,
 	const base::flat_map<uint16, ClickHandlerPtr> &links,
-	const Ui::Text::MarkedContext &context)
-: MediaGenericTextPart(text, margins, st, links, context)
+	const Ui::Text::MarkedContext &context,
+	Element *repaintParent)
+: MediaGenericTextPart(
+	text,
+	margins,
+	st,
+	links,
+	context,
+	style::al_top,
+	repaintParent)
 , _color(std::move(color)) {
 }
 
@@ -884,10 +892,20 @@ AttributeTable::AttributeTable(
 	QMargins margins,
 	Fn<QColor(const PaintContext &)> labelColor,
 	Fn<QColor(const PaintContext &)> valueColor,
-	const Ui::Text::MarkedContext &context)
-: _margins(margins)
+	const Ui::Text::MarkedContext &context,
+	Element *repaintParent)
+: _repaintParent(repaintParent)
+, _margins(margins)
 , _labelColor(std::move(labelColor))
 , _valueColor(std::move(valueColor)) {
+	auto adjusted = context;
+	if (_repaintParent) {
+		adjusted.repaint = [this] {
+			requestAnimationRepaint(
+				not_null(_repaintParent),
+				_textRepaint);
+		};
+	}
 	for (const auto &entry : entries) {
 		_parts.emplace_back();
 		auto &part = _parts.back();
@@ -896,7 +914,10 @@ AttributeTable::AttributeTable(
 			st::chatUniqueTextStyle,
 			entry.value,
 			kMarkupTextOptions,
-			context);
+			adjusted);
+		_animated = _animated
+			|| part.value.hasCustomEmoji()
+			|| part.value.hasSpoilers();
 	}
 }
 
@@ -912,7 +933,8 @@ void AttributeTable::draw(
 			const Ui::Text::String &text,
 			int left,
 			int availableWidth,
-			style::align align) {
+			style::align align,
+			Ui::Text::CustomEmojiPaintedBounds *customEmojiBounds = nullptr) {
 		text.draw(p, {
 			.position = { left, top },
 			.outerWidth = outerWidth,
@@ -924,16 +946,58 @@ void AttributeTable::draw(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = customEmojiBounds,
 		});
 	};
 	const auto forLabel = labelRight - _margins.left();
 	const auto forValue = width() - _valueLeft - _margins.right();
+	auto animationRect = QRectF();
+	auto animationKnown = true;
 	for (const auto &part : _parts) {
 		p.setPen(_labelColor(context));
 		paint(part.label, _margins.left(), forLabel, style::al_topright);
 		p.setPen(_valueColor(context));
-		paint(part.value, _valueLeft, forValue, style::al_topleft);
+		const auto customEmoji = part.value.hasCustomEmoji();
+		auto customEmojiBounds = Ui::Text::CustomEmojiPaintedBounds();
+		paint(
+			part.value,
+			_valueLeft,
+			forValue,
+			style::al_topleft,
+			customEmoji ? &customEmojiBounds : nullptr);
+		const auto spoilers = part.value.hasSpoilers();
+		if (customEmoji || spoilers) {
+			const auto textRect = QRectF(
+				_valueLeft,
+				top,
+				std::max(
+					std::min(forValue, part.value.maxWidth()),
+					0),
+				st::normalFont->height);
+			auto rect = customEmojiBounds.repaintRect();
+			if (customEmoji) {
+				animationKnown = animationKnown
+					&& customEmojiBounds.repaintRectKnown();
+			}
+			if (spoilers) {
+				rect = rect.isEmpty()
+					? textRect
+					: rect.united(textRect);
+			}
+			animationRect = animationRect.isEmpty()
+				? rect
+				: animationRect.united(rect);
+		}
 		top += st::normalFont->height + st::chatUniqueRowSkip;
+	}
+	if (_repaintParent && _animated) {
+		recordAnimationRepaint(
+			not_null(_repaintParent),
+			p,
+			context,
+			_textRepaint,
+			animationRect,
+			animationKnown);
 	}
 }
 

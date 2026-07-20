@@ -181,7 +181,7 @@ private:
 	void recordCaptionRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		QRectF rect) const;
+		const Ui::Text::CustomEmojiPaintedBounds &bounds) const;
 	void invalidateCaptionRepaintRect() const;
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,
@@ -237,6 +237,7 @@ private:
 	mutable QRect _captionRepaintRect;
 	mutable QRect _captionStaleRepaintRect;
 	mutable bool _captionRepaintPending = false;
+	mutable bool _captionRepaintKnown = false;
 
 	bool _transcribedRound = false;
 

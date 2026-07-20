@@ -88,7 +88,8 @@ public:
 		Fn<QColor(const PaintContext &)> color,
 		const style::TextStyle &st = st::defaultTextStyle,
 		const base::flat_map<uint16, ClickHandlerPtr> &links = {},
-		const Ui::Text::MarkedContext &context = {});
+		const Ui::Text::MarkedContext &context = {},
+		Element *repaintParent = nullptr);
 
 private:
 	void setupPen(
@@ -112,7 +113,8 @@ public:
 		QMargins margins,
 		Fn<QColor(const PaintContext &)> labelColor,
 		Fn<QColor(const PaintContext &)> valueColor,
-		const Ui::Text::MarkedContext &context = {});
+		const Ui::Text::MarkedContext &context = {},
+		Element *repaintParent = nullptr);
 
 	void draw(
 		Painter &p,
@@ -134,10 +136,13 @@ private:
 	};
 
 	std::vector<Part> _parts;
+	Element *_repaintParent = nullptr;
 	QMargins _margins;
 	Fn<QColor(const PaintContext &)> _labelColor;
 	Fn<QColor(const PaintContext &)> _valueColor;
 	int _valueLeft = 0;
+	bool _animated = false;
+	mutable AnimationRepaint _textRepaint;
 
 };
 

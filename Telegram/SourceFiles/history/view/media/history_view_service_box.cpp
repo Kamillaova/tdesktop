@@ -34,29 +34,28 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
-[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
-	const auto inner = st::emojiSize;
-	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
-	const auto skip = (inner - outer) / 2;
-	const auto before = std::max(-skip, 0);
-	const auto after = std::max(skip + outer - inner, 0);
-	return { before, before, after, after };
-}
-
-[[nodiscard]] bool AddTextRepaintRect(
+[[nodiscard]] bool AddTextRepaintBounds(
 		QRegion &region,
 		const Painter &p,
 		const PaintContext &context,
 		const Ui::Text::String &text,
-		QRectF rect) {
-	const auto customEmoji = text.hasCustomEmoji();
-	if (!customEmoji && !text.hasSpoilers()) {
+		QRectF textRect,
+		const Ui::Text::CustomEmojiPaintedBounds &customEmojiBounds) {
+	if (!customEmojiBounds.repaintRectKnown()) {
+		return false;
+	}
+	const auto repaintRect = customEmojiBounds.repaintRect();
+	if (!repaintRect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, repaintRect);
+		if (!mapped || mapped->isEmpty()) {
+			return false;
+		}
+		region += *mapped;
+	}
+	if (!text.hasSpoilers() || textRect.isEmpty()) {
 		return true;
 	}
-	if (customEmoji) {
-		rect = rect.marginsAdded(QMarginsF(CustomEmojiRepaintMargins()));
-	}
-	const auto mapped = context.mapToElement(p, rect);
+	const auto mapped = context.mapToElement(p, textRect);
 	if (!mapped || mapped->isEmpty()) {
 		return false;
 	}
@@ -306,18 +305,9 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		top += padding.top();
 		if (!_title.isEmpty()) {
 			const auto titleHeight = _title.countHeight(_maxWidth);
-			titleRepaintKnown = titleRepaintKnown
-				&& AddTextRepaintRect(
-					titleRepaintRegion,
-					p,
-					context,
-					_title,
-					QRectF(
-						st::msgPadding.left(),
-						top,
-						_maxWidth,
-						titleHeight));
 			_parent->prepareCustomEmojiPaint(p, context, _title);
+			auto customEmojiPaintedBounds
+				= Ui::Text::CustomEmojiPaintedBounds();
 			_title.draw(p, {
 				.position = QPoint(st::msgPadding.left(), top),
 				.availableWidth = _maxWidth,
@@ -327,7 +317,20 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 				.now = context.now,
 				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+				.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 			});
+			titleRepaintKnown = titleRepaintKnown
+				&& AddTextRepaintBounds(
+					titleRepaintRegion,
+					p,
+					context,
+					_title,
+					QRectF(
+						st::msgPadding.left(),
+						top,
+						_maxWidth,
+						titleHeight),
+					customEmojiPaintedBounds);
 			top += titleHeight + padding.bottom();
 		}
 		finishTextRepaint(
@@ -370,18 +373,9 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		auto subtitleRepaintRegion = QRegion();
 		auto subtitleRepaintKnown = context.hasElementPainter(p);
 		const auto subtitleHeight = _subtitle.countHeight(_maxWidth);
-		subtitleRepaintKnown = subtitleRepaintKnown
-			&& AddTextRepaintRect(
-				subtitleRepaintRegion,
-				p,
-				context,
-				_subtitle,
-				QRectF(
-					st::msgPadding.left(),
-					top,
-					_maxWidth,
-					subtitleHeight));
 		_parent->prepareCustomEmojiPaint(p, context, _subtitle);
+		auto customEmojiPaintedBounds
+			= Ui::Text::CustomEmojiPaintedBounds();
 		_subtitle.draw(p, {
 			.position = QPoint(st::msgPadding.left(), top),
 			.availableWidth = _maxWidth,
@@ -391,7 +385,20 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 			.now = context.now,
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		subtitleRepaintKnown = subtitleRepaintKnown
+			&& AddTextRepaintBounds(
+				subtitleRepaintRegion,
+				p,
+				context,
+				_subtitle,
+				QRectF(
+					st::msgPadding.left(),
+					top,
+					_maxWidth,
+					subtitleHeight),
+				customEmojiPaintedBounds);
 		top += subtitleHeight + padding.bottom();
 		finishTextRepaint(
 			_subtitleRepaint,
@@ -607,13 +614,18 @@ void ServiceBox::finishTextRepaint(
 		return;
 	}
 	repaint.pending = false;
-	if (!geometryKnown) {
-		region = QRegion();
-	}
 	const auto stale = base::take(repaint.stale);
 	const auto previous = stale.united(base::take(repaint.current));
-	repaint.current = std::move(region);
+	repaint.current = geometryKnown ? std::move(region) : QRegion();
 	repaint.known = geometryKnown;
+	if (!geometryKnown) {
+		repaint.stale = previous;
+		if (stale.isEmpty() && !previous.isEmpty()) {
+			repaint.pending = true;
+			repaintTextRegion(previous);
+		}
+		return;
+	}
 	if (previous.isEmpty()
 		|| (stale.isEmpty() && previous == repaint.current)) {
 		return;

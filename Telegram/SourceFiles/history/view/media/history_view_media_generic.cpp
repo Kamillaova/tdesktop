@@ -85,9 +85,7 @@ void MediaGenericPart::requestAnimationRepaint(
 		parent->repaint();
 		return;
 	}
-	for (const auto &rect : repaint.current) {
-		parent->repaint(rect);
-	}
+	parent->repaint(repaint.current);
 }
 
 void MediaGenericPart::recordAnimationRepaint(
@@ -95,28 +93,28 @@ void MediaGenericPart::recordAnimationRepaint(
 		const Painter &p,
 		const PaintContext &context,
 		AnimationRepaint &repaint,
-		QRectF rect) const {
+		QRectF rect,
+		bool known) const {
 	if (!context.hasElementPainter(p)) {
 		return;
 	}
-	auto current = QRegion();
-	auto known = true;
-	if (!rect.isEmpty()) {
+	auto current = QRect();
+	if (known && !rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, rect);
 		if (!mapped || mapped->isEmpty()) {
 			known = false;
 		} else {
-			current = QRegion(*mapped);
+			current = *mapped;
 		}
 	}
 	const auto stale = base::take(repaint.stale);
 	const auto previous = stale.united(base::take(repaint.current));
 	repaint.pending = 0;
-	repaint.current = known ? std::move(current) : QRegion();
+	repaint.current = known ? current : QRect();
 	repaint.known = known ? 1 : 0;
 	if (!known) {
 		repaint.stale = previous;
-		if (!previous.isEmpty()) {
+		if (stale.isEmpty() && !previous.isEmpty()) {
 			repaint.pending = 1;
 			parent->repaint();
 		}
@@ -126,9 +124,7 @@ void MediaGenericPart::recordAnimationRepaint(
 		return;
 	}
 	repaint.pending = 1;
-	for (const auto &area : previous.united(repaint.current)) {
-		parent->repaint(area);
-	}
+	parent->repaint(previous.united(repaint.current));
 }
 
 void MediaGenericPart::invalidateAnimationRepaint(
@@ -433,15 +429,28 @@ MediaGenericTextPart::MediaGenericTextPart(
 	const style::TextStyle &st,
 	const base::flat_map<uint16, ClickHandlerPtr> &links,
 	const Ui::Text::MarkedContext &context,
-	style::align align)
-: _text(st::msgMinWidth)
+	style::align align,
+	Element *repaintParent)
+: _repaintParent(repaintParent)
+, _text(st::msgMinWidth)
 , _margins(margins)
 , _align(align) {
+	auto adjusted = context;
+	if (_repaintParent) {
+		adjusted.repaint = [this] {
+			requestAnimationRepaint(
+				not_null(_repaintParent),
+				_textRepaint);
+		};
+	}
 	_text.setMarkedText(
 		st,
 		text,
 		kMarkupTextOptions,
-		context);
+		adjusted);
+	_customEmoji = _text.hasCustomEmoji();
+	_spoilers = _text.hasSpoilers();
+	_animated = _customEmoji || _spoilers;
 	for (const auto &[index, link] : links) {
 		_text.setLink(index, link);
 	}
@@ -454,13 +463,14 @@ void MediaGenericTextPart::draw(
 		int outerWidth) const {
 	const auto use = (width() - _margins.left() - _margins.right());
 	setupPen(p, owner, context);
+	const auto position = QPoint(
+		(_align == style::al_top)
+			? ((outerWidth - use) / 2)
+			: _margins.left(),
+		_margins.top());
+	auto customEmojiBounds = Ui::Text::CustomEmojiPaintedBounds();
 	_text.draw(p, {
-		.position = {
-			((_align == style::al_top)
-				? ((outerWidth - use) / 2)
-				: _margins.left()),
-			_margins.top(),
-		},
+		.position = position,
 		.outerWidth = outerWidth,
 		.availableWidth = use,
 		.align = _align,
@@ -473,7 +483,28 @@ void MediaGenericTextPart::draw(
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.selection = context.selection,
 		.elisionLines = elisionLines(),
+		.customEmojiPaintedBounds = (_repaintParent && _customEmoji)
+			? &customEmojiBounds
+			: nullptr,
 	});
+	if (_repaintParent && _animated) {
+		const auto textRect = QRectF(
+			position,
+			QSize(use, height() - _margins.top() - _margins.bottom()));
+		auto rect = customEmojiBounds.repaintRect();
+		const auto known = !_customEmoji
+			|| customEmojiBounds.repaintRectKnown();
+		if (_spoilers) {
+			rect = rect.isEmpty() ? textRect : rect.united(textRect);
+		}
+		recordAnimationRepaint(
+			not_null(_repaintParent),
+			p,
+			context,
+			_textRepaint,
+			rect,
+			known);
+	}
 }
 
 void MediaGenericTextPart::setupPen(
