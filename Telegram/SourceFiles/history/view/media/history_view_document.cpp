@@ -106,7 +106,27 @@ constexpr auto kVoiceBlobIdleLevel = 0.45;
 		st::dialogsTTLBadgeSize);
 }
 
-[[nodiscard]] HistoryView::TtlPaintCallback CreateTtlPaintCallback(
+[[nodiscard]] int TtlIconSize() {
+	return std::min(
+		st::historyFileInPause.width(),
+		st::historyFileInPause.height());
+}
+
+[[nodiscard]] QRect TtlIconRect(const QRect &inner) {
+	const auto size = TtlIconSize();
+	return QRect(
+		inner.x() + (inner.width() - size) / 2,
+		inner.y() + (inner.height() - size) / 2,
+		size,
+		size);
+}
+
+struct TtlPaintCallbacks {
+	HistoryView::TtlPaintCallback paint;
+	Fn<void()> unload;
+};
+
+[[nodiscard]] TtlPaintCallbacks CreateTtlPaintCallbacks(
 		std::shared_ptr<rpl::lifetime> lifetime,
 		Fn<void()> update) {
 	struct State final {
@@ -114,9 +134,7 @@ constexpr auto kVoiceBlobIdleLevel = 0.45;
 		std::unique_ptr<Lottie::Icon> idle;
 		bool started = false;
 	};
-	const auto iconSize = Size(std::min(
-		st::historyFileInPause.width(),
-		st::historyFileInPause.height()));
+	const auto iconSize = Size(TtlIconSize());
 	const auto state = lifetime->make_state<State>();
 	//state->start = Lottie::MakeIcon({
 	//	.name = u"voice_ttl_start"_q,
@@ -130,36 +148,50 @@ constexpr auto kVoiceBlobIdleLevel = 0.45;
 	});
 
 	const auto weak = std::weak_ptr(lifetime);
-	return [=](QPainter &p, QRect r, QColor c) {
-		if (weak.expired()) {
-			return;
-		}
-		{
-			const auto &icon = state->idle;
-			if (icon) {
-				icon->paintInCenter(p, r, c);
-				if (!icon->animating()) {
-					icon->animate(update, 0, icon->framesCount());
-				}
+	return {
+		.paint = [=](QPainter &p, QRect r, QColor c) {
+			if (weak.expired()) {
 				return;
 			}
-		}
-		{
-			const auto &icon = state->start;
-			icon->paintInCenter(p, r, c);
-			if (!icon->animating()) {
-				if (!state->started) {
-					icon->animate(update, 0, icon->framesCount());
-					state->started = true;
-				} else {
-					state->idle = Lottie::MakeIcon({
-						.name = u"voice_ttl_idle"_q,
-						.color = &st::historyFileInIconFg,
-						.sizeOverride = iconSize,
-					});
+			{
+				const auto &icon = state->idle;
+				if (icon) {
+					icon->paintInCenter(p, r, c);
+					if (!icon->animating()) {
+						icon->animate(update, 0, icon->framesCount());
+					}
+					return;
 				}
 			}
-		}
+			{
+				const auto &icon = state->start;
+				icon->paintInCenter(p, r, c);
+				if (!icon->animating()) {
+					if (!state->started) {
+						icon->animate(update, 0, icon->framesCount());
+						state->started = true;
+					} else {
+						state->idle = Lottie::MakeIcon({
+							.name = u"voice_ttl_idle"_q,
+							.color = &st::historyFileInIconFg,
+							.sizeOverride = iconSize,
+						});
+					}
+				}
+			}
+		},
+		.unload = [=] {
+			if (weak.expired()) {
+				return;
+			}
+			if (state->start) {
+				state->start->jumpTo(0, nullptr);
+			}
+			if (state->idle) {
+				state->idle->jumpTo(0, nullptr);
+			}
+			state->started = false;
+		},
 	};
 }
 
@@ -401,7 +433,15 @@ Document::Document(
 					base::take(lifetime)->destroy();
 				}
 			}, *lifetime);
-			_drawTtl = CreateTtlPaintCallback(lifetime, [=] { repaint(); });
+			const auto generation = ++_ttlAnimationGeneration;
+			const auto weak = base::make_weak(this);
+			auto callbacks = CreateTtlPaintCallbacks(lifetime, [=] {
+				if (const auto strong = weak.get()) {
+					strong->repaintTtlAnimation(generation);
+				}
+			});
+			_drawTtl = std::move(callbacks.paint);
+			_unloadTtl = std::move(callbacks.unload);
 		} else if (!_parent->data()->out()) {
 			const auto &data = &_parent->data()->history()->owner();
 			_parent->data()->removeFromSharedMediaIndex();
@@ -432,6 +472,7 @@ Document::Document(
 }
 
 Document::~Document() {
+	++_ttlAnimationGeneration;
 	if (_dataMedia) {
 		_data->owner().keepAlive(base::take(_dataMedia));
 		_parent->checkHeavyPart();
@@ -501,6 +542,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 
 QSize Document::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
@@ -659,6 +701,7 @@ QSize Document::countOptimalSize() {
 
 QSize Document::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
@@ -753,6 +796,7 @@ QRect Document::draw(
 		LayoutMode mode,
 		Ui::BubbleRounding outsideRounding) const {
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordTtlAnimationRepaintRegion(p, context, QRegion());
 		recordVoiceInteractionRepaintRegion(p, context, QRegion());
 		recordCaptionRepaintRect(p, context, QRectF());
 		return QRect();
@@ -794,6 +838,10 @@ QRect Document::draw(
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
+	recordTtlAnimationRepaintRegion(
+		p,
+		context,
+		_drawTtl ? QRegion(TtlIconRect(inner)) : QRegion());
 	auto playbackBlobs = QRect();
 	const auto radialOpacity = radial ? _animation->radial.opacity() : 1.;
 	if (thumbed) {
@@ -1253,6 +1301,10 @@ bool Document::hasHeavyPart() const {
 
 void Document::unloadHeavyPart() {
 	clearRadialAnimationRepaintRect();
+	suspendTtlAnimationRepaint();
+	if (_unloadTtl) {
+		_unloadTtl();
+	}
 	clearVoiceProgressAnimationRepaintRect();
 	_dataMedia = nullptr;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
@@ -1841,6 +1893,7 @@ void Document::refreshCaption(bool last) {
 
 int Document::widenGroupingMaxWidth(int current, bool last) {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	refreshCaption(last);
@@ -1861,6 +1914,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
@@ -1878,6 +1932,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 QSize Document::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
@@ -1943,6 +1998,83 @@ TextState Document::getStateGrouped(
 		geometry.size(),
 		request,
 		LayoutMode::Grouped);
+}
+
+void Document::repaintTtlAnimation(uint64 generation) const {
+	auto &repaint = _ttlAnimationRepaint;
+	if (_ttlAnimationGeneration != generation
+		|| repaint.suspended
+		|| repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		this->repaint();
+	} else {
+		repaintTtlAnimationRegion(repaint.current);
+	}
+}
+
+void Document::recordTtlAnimationRepaintRegion(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	for (const auto &rect : region) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+			break;
+		}
+		current += *mapped;
+	}
+	auto &repaint = _ttlAnimationRepaint;
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.suspended = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintTtlAnimationRegion(previous.united(repaint.current));
+}
+
+void Document::invalidateTtlAnimationRepaint() const {
+	auto &repaint = _ttlAnimationRepaint;
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void Document::suspendTtlAnimationRepaint() const {
+	auto &repaint = _ttlAnimationRepaint;
+	repaint.current = QRegion();
+	repaint.stale = QRegion();
+	repaint.pending = false;
+	repaint.known = true;
+	repaint.suspended = true;
+}
+
+void Document::repaintTtlAnimationRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
 }
 
 QRect Document::paintPlaybackBlobs(
@@ -2244,6 +2376,7 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 
 void Document::parentTextUpdated() {
 	clearRadialAnimationRepaintRect();
+	invalidateTtlAnimationRepaint();
 	clearVoiceProgressAnimationRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();

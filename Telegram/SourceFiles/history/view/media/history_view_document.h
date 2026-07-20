@@ -152,6 +152,14 @@ private:
 		const PaintContext &context,
 		int width,
 		LayoutMode mode) const;
+	void repaintTtlAnimation(uint64 generation) const;
+	void recordTtlAnimationRepaintRegion(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region) const;
+	void invalidateTtlAnimationRepaint() const;
+	void suspendTtlAnimationRepaint() const;
+	void repaintTtlAnimationRegion(const QRegion &region) const;
 	[[nodiscard]] QRect paintPlaybackBlobs(
 		Painter &p,
 		const PaintContext &context,
@@ -203,7 +211,18 @@ private:
 
 	mutable TooltipFilename _tooltipFilename;
 
+	struct TtlAnimationRepaint {
+		QRegion current;
+		QRegion stale;
+		bool pending = false;
+		bool known = false;
+		bool suspended = false;
+	};
+
+	uint64 _ttlAnimationGeneration = 0;
+	mutable TtlAnimationRepaint _ttlAnimationRepaint;
 	TtlPaintCallback _drawTtl;
+	Fn<void()> _unloadTtl;
 
 	struct VoiceInteractionRepaint {
 		QRegion current;
