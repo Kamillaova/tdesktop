@@ -111,6 +111,12 @@ private:
 	[[nodiscard]] QRect buttonRect() const;
 	[[nodiscard]] QRect contentRect() const;
 
+	void repaintButtonMinistars() const;
+	void recordButtonMinistarsRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+
 	void applyContentChanges();
 
 	const not_null<Element*> _parent;
@@ -133,6 +139,8 @@ private:
 		std::unique_ptr<QColor> lastFg;
 
 		mutable QPoint lastPoint;
+		mutable QRect starsRepaintRect;
+		mutable bool starsRepaintPending = false;
 	} _button;
 
 	const int _maxWidth = 0;

@@ -121,7 +121,7 @@ ServiceBox::ServiceBox(
 	}
 	if (const auto type = _content->buttonMinistars()) {
 		_button.stars = std::make_unique<Ui::Premium::ColoredMiniStars>(
-			[=](const QRect &) { repaint(); },
+			[=](const QRect &) { repaintButtonMinistars(); },
 			*type);
 		_button.lastFg = std::make_unique<QColor>();
 	}
@@ -285,6 +285,10 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		p.setPen(Qt::NoPen);
 		p.setBrush(context.st->msgServiceBg()); // ?
 		if (const auto stars = _button.stars.get()) {
+			recordButtonMinistarsRepaintRect(
+				p,
+				context,
+				Rect(_button.size).marginsAdded(Margins(st::lineWidth)));
 			stars->setPaused(context.paused);
 		}
 		_button.drawBg(p);
@@ -444,6 +448,40 @@ QRect ServiceBox::contentRect() const {
 	const auto size = _content->size();
 	const auto top = _content->top();
 	return QRect(QPoint((width() - size.width()) / 2, top), size);
+}
+
+void ServiceBox::repaintButtonMinistars() const {
+	if (_button.starsRepaintPending) {
+		return;
+	}
+	_button.starsRepaintPending = true;
+	if (_button.starsRepaintRect.isEmpty()) {
+		repaint();
+	} else {
+		_parent->repaint(_button.starsRepaintRect);
+	}
+}
+
+void ServiceBox::recordButtonMinistarsRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		if (_button.starsRepaintRect.isEmpty()) {
+			_button.starsRepaintPending = false;
+		}
+		return;
+	}
+	_button.starsRepaintPending = false;
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto current = mapped ? *mapped : QRect();
+	const auto previous = _button.starsRepaintRect;
+	_button.starsRepaintRect = current;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	_button.starsRepaintPending = true;
+	_parent->repaint(previous.united(current));
 }
 
 void ServiceBox::Button::toggleRipple(bool pressed) {
