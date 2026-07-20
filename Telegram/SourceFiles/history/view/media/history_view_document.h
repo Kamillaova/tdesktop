@@ -110,7 +110,7 @@ private:
 		Grouped,
 	};
 
-	void draw(
+	[[nodiscard]] QRect draw(
 		Painter &p,
 		const PaintContext &context,
 		int width,
@@ -150,10 +150,16 @@ private:
 		const PaintContext &context,
 		int width,
 		LayoutMode mode) const;
-	void paintPlaybackBlobs(
+	[[nodiscard]] QRect paintPlaybackBlobs(
 		Painter &p,
 		const PaintContext &context,
 		QRect inner) const;
+	void repaintVoiceProgressAnimation() const;
+	void recordVoiceProgressAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void clearVoiceProgressAnimationRepaintRect() const;
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,
 		StateRequest request,

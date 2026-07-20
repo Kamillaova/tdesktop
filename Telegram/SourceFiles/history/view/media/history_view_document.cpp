@@ -492,6 +492,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 
 QSize Document::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	auto hasTranscribe = false;
 	const auto voice = Get<HistoryDocumentVoice>();
 	if (voice) {
@@ -647,6 +648,7 @@ QSize Document::countOptimalSize() {
 
 QSize Document::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
 	const auto hasTranscribe = voice && !voice->transcribeText.isEmpty();
@@ -714,20 +716,32 @@ QSize Document::countCurrentSize(int newWidth) {
 }
 
 void Document::draw(Painter &p, const PaintContext &context) const {
-	draw(p, context, width(), LayoutMode::Full, adjustedBubbleRounding());
+	const auto playbackBlobs = draw(
+		p,
+		context,
+		width(),
+		LayoutMode::Full,
+		adjustedBubbleRounding());
+	const auto geometry = QRect(0, 0, width(), height());
 	recordRadialAnimationRepaintRect(
 		p,
 		context,
-		QRect(0, 0, width(), height()));
+		geometry);
+	recordVoiceProgressAnimationRepaintRect(
+		p,
+		context,
+		geometry.united(playbackBlobs));
 }
 
-void Document::draw(
+QRect Document::draw(
 		Painter &p,
 		const PaintContext &context,
 		int width,
 		LayoutMode mode,
 		Ui::BubbleRounding outsideRounding) const {
-	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) return;
+	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		return QRect();
+	}
 
 	ensureDataMediaCreated();
 
@@ -765,6 +779,7 @@ void Document::draw(
 	const auto rthumb = style::rtlrect(st.padding.left(), st.padding.top() - topMinus, st.thumbSize, st.thumbSize, width);
 	const auto innerSize = st::msgFileLayout.thumbSize;
 	const auto inner = QRect(rthumb.x() + (rthumb.width() - innerSize) / 2, rthumb.y() + (rthumb.height() - innerSize) / 2, innerSize, innerSize);
+	auto playbackBlobs = QRect();
 	const auto radialOpacity = radial ? _animation->radial.opacity() : 1.;
 	if (thumbed) {
 		const auto rounding = thumbRounding(mode, outsideRounding);
@@ -825,7 +840,7 @@ void Document::draw(
 			&& _openl;
 		const auto ttlRect = hasTtlBadge ? TTLRectFromInner(inner) : QRect();
 
-		paintPlaybackBlobs(p, context, inner);
+		playbackBlobs = paintPlaybackBlobs(p, context, inner);
 
 		const auto coverDrawn = _data->isSongWithCover()
 			&& DrawThumbnailAsSongCover(
@@ -1109,6 +1124,7 @@ void Document::draw(
 			.useFullWidth = true,
 		});
 	}
+	return playbackBlobs;
 }
 
 Ui::BubbleRounding Document::thumbRounding(
@@ -1186,6 +1202,7 @@ bool Document::hasHeavyPart() const {
 
 void Document::unloadHeavyPart() {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	_dataMedia = nullptr;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		captioned->caption.unloadPersistentAnimation();
@@ -1772,6 +1789,7 @@ void Document::refreshCaption(bool last) {
 
 int Document::widenGroupingMaxWidth(int current, bool last) {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	refreshCaption(last);
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	if (!captioned) {
@@ -1790,6 +1808,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -1804,6 +1823,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 
 QSize Document::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	auto height = st.padding.top() + st.thumbSize + st.padding.bottom();
@@ -1837,7 +1857,7 @@ void Document::drawGrouped(
 #endif // defined(Q_OS_WIN) && defined(_M_ARM64)
 	const auto forigin = QPointF(origin);
 	p.translate(forigin);
-	draw(
+	const auto playbackBlobs = draw(
 		p,
 		context.translated(-geometry.topLeft()),
 		geometry.width(),
@@ -1849,6 +1869,10 @@ void Document::drawGrouped(
 	}
 	p.translate(-geometry.topLeft());
 	recordRadialAnimationRepaintRect(p, context, geometry);
+	recordVoiceProgressAnimationRepaintRect(
+		p,
+		context,
+		geometry.united(playbackBlobs.translated(geometry.topLeft())));
 }
 
 TextState Document::getStateGrouped(
@@ -1864,22 +1888,22 @@ TextState Document::getStateGrouped(
 		LayoutMode::Grouped);
 }
 
-void Document::paintPlaybackBlobs(
+QRect Document::paintPlaybackBlobs(
 		Painter &p,
 		const PaintContext &context,
 		QRect inner) const {
 	if (anim::Disabled() || _drawTtl) {
-		return;
+		return QRect();
 	}
 	const auto voice = Get<HistoryDocumentVoice>();
 	if (!voice || !voice->playback) {
-		return;
+		return QRect();
 	}
 	const auto voiceData = _transcribedRound
 		? _data->round()
 		: _data->voice();
 	if (!voiceData) {
-		return;
+		return QRect();
 	}
 	auto &playback = *voice->playback;
 	if (!playback.blobs) {
@@ -1920,6 +1944,61 @@ void Document::paintPlaybackBlobs(
 	auto hq = PainterHighQualityEnabler(p);
 	playback.blobs->paint(p, QBrush(context.messageStyle()->msgFileBg->c));
 	p.restore();
+
+	const auto center = QRectF(inner).center();
+	const auto radius = playback.blobs->maxRadius();
+	return QRectF(
+		center.x() - radius,
+		center.y() - radius,
+		2 * radius,
+		2 * radius
+	).toAlignedRect();
+}
+
+void Document::repaintVoiceProgressAnimation() const {
+	const auto voice = Get<HistoryDocumentVoice>();
+	if (!voice || !voice->playback) {
+		return;
+	}
+	auto &playback = *voice->playback;
+	if (_parent->delegate()->elementContext() == Context::TTLViewer
+		|| playback.progressRepaintRect.isEmpty()) {
+		repaint();
+	} else if (!playback.progressRepaintPending) {
+		playback.progressRepaintPending = true;
+		_parent->repaint(playback.progressRepaintRect);
+	}
+}
+
+void Document::recordVoiceProgressAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	const auto voice = Get<HistoryDocumentVoice>();
+	if (!voice || !voice->playback) {
+		return;
+	}
+	auto &playback = *voice->playback;
+	if (context.hasElementPainter(p)) {
+		playback.progressRepaintRect = QRect();
+		playback.progressRepaintPending = false;
+	} else {
+		if (playback.progressRepaintRect.isEmpty()) {
+			playback.progressRepaintPending = false;
+		}
+		return;
+	}
+	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+		playback.progressRepaintRect = *mapped;
+	}
+}
+
+void Document::clearVoiceProgressAnimationRepaintRect() const {
+	const auto voice = Get<HistoryDocumentVoice>();
+	if (voice && voice->playback) {
+		voice->playback->progressRepaintRect = QRect();
+		voice->playback->progressRepaintPending = false;
+	}
 }
 
 bool Document::voiceProgressAnimationCallback(crl::time now) {
@@ -1936,7 +2015,7 @@ bool Document::voiceProgressAnimationCallback(crl::time now) {
 			} else {
 				voice->playback->progress.update(qMin(dt, 1.), anim::linear);
 			}
-			repaint();
+			repaintVoiceProgressAnimation();
 			return (dt < 1.);
 		}
 	}
@@ -2001,6 +2080,7 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 
 void Document::parentTextUpdated() {
 	clearRadialAnimationRepaintRect();
+	clearVoiceProgressAnimationRepaintRect();
 	RemoveComponents(HistoryDocumentCaptioned::Bit());
 }
 
