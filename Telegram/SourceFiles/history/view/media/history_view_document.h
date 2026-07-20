@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_file.h"
 #include "base/runtime_composer.h"
 
+#include <QtGui/QRegion>
+
 struct HistoryDocumentNamed;
 struct HistoryDocumentThumbed;
 
@@ -160,6 +162,13 @@ private:
 		const PaintContext &context,
 		QRect rect) const;
 	void clearVoiceProgressAnimationRepaintRect() const;
+	void repaintVoiceInteraction() const;
+	void recordVoiceInteractionRepaintRegion(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region) const;
+	void invalidateVoiceInteractionRepaint() const;
+	void repaintVoiceInteractionRegion(const QRegion &region) const;
 	void repaintCaption(uint64 generation) const;
 	void recordCaptionRepaintRect(
 		const Painter &p,
@@ -196,7 +205,15 @@ private:
 
 	TtlPaintCallback _drawTtl;
 
+	struct VoiceInteractionRepaint {
+		QRegion current;
+		QRegion stale;
+		bool pending = false;
+		bool known = false;
+	};
+
 	mutable float64 _voiceHoverProgress = -1;
+	mutable VoiceInteractionRepaint _voiceInteractionRepaint;
 	uint64 _captionGeneration = 0;
 	mutable QRect _captionRepaintRect;
 	mutable QRect _captionStaleRepaintRect;

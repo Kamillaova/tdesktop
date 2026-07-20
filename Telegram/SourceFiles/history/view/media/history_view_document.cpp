@@ -502,6 +502,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 QSize Document::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	auto hasTranscribe = false;
 	const auto voice = Get<HistoryDocumentVoice>();
@@ -659,6 +660,7 @@ QSize Document::countOptimalSize() {
 QSize Document::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	const auto voice = Get<HistoryDocumentVoice>();
@@ -751,6 +753,7 @@ QRect Document::draw(
 		LayoutMode mode,
 		Ui::BubbleRounding outsideRounding) const {
 	if (width < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordVoiceInteractionRepaintRegion(p, context, QRegion());
 		recordCaptionRepaintRect(p, context, QRectF());
 		return QRect();
 	}
@@ -1009,6 +1012,7 @@ QRect Document::draw(
 	}
 	auto namewidth = width - nameleft - nameright;
 	auto statuswidth = namewidth;
+	auto voiceInteractionRepaintRegion = QRegion();
 
 	auto voiceStatusOverride = QString();
 	const auto voice = Get<HistoryDocumentVoice>();
@@ -1075,6 +1079,11 @@ QRect Document::draw(
 			_voiceHoverProgress,
 			inTTLViewer ? &voice->once->waveform : nullptr);
 		p.restore();
+		voiceInteractionRepaintRegion += QRect(
+			nameleft,
+			st.padding.top() - topMinus,
+			namewidth + st::msgWaveformSkip,
+			st::msgWaveformMax + st::msgWaveformMin);
 	} else if (const auto named = Get<HistoryDocumentNamed>()) {
 		p.setPen(stm->historyFileNameFg);
 		named->name.draw(p, {
@@ -1104,6 +1113,20 @@ QRect Document::draw(
 			}
 		}
 	}
+	if (voice) {
+		voiceInteractionRepaintRegion += style::rtlrect(
+			nameleft,
+			statustop,
+			statuswidth,
+			std::max(
+				st::normalFont->height,
+				st::mediaUnreadTop + st::mediaUnreadSize),
+			width);
+	}
+	recordVoiceInteractionRepaintRegion(
+		p,
+		context,
+		std::move(voiceInteractionRepaintRegion));
 
 	auto selection = context.selection;
 	auto captiontop = bottom;
@@ -1457,7 +1480,7 @@ TextState Document::textState(
 					1.);
 				if (_voiceHoverProgress != hover) {
 					_voiceHoverProgress = hover;
-					repaint();
+					repaintVoiceInteraction();
 				}
 				if (!voice->seeking()) {
 					voice->setSeekingStart((point.x() - nameleft) / float64(namewidth));
@@ -1468,7 +1491,7 @@ TextState Document::textState(
 		}
 		if (_voiceHoverProgress >= 0) {
 			_voiceHoverProgress = -1;
-			repaint();
+			repaintVoiceInteraction();
 		}
 		transcribeLength = voice->transcribeText.length();
 		if (transcribeLength > 0) {
@@ -1545,7 +1568,7 @@ void Document::updatePressed(QPoint point) {
 				/ float64(width() - transcribeWidth - nameleft - nameright),
 			0.,
 			1.));
-		repaint();
+		repaintVoiceInteraction();
 	}
 }
 
@@ -1819,6 +1842,7 @@ void Document::refreshCaption(bool last) {
 int Document::widenGroupingMaxWidth(int current, bool last) {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	refreshCaption(last);
 	const auto captioned = Get<HistoryDocumentCaptioned>();
 	if (!captioned) {
@@ -1838,6 +1862,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
@@ -1854,6 +1879,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
 	const auto &st = (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
@@ -2032,6 +2058,70 @@ void Document::clearVoiceProgressAnimationRepaintRect() const {
 	}
 }
 
+void Document::repaintVoiceInteraction() const {
+	auto &repaint = _voiceInteractionRepaint;
+	if (repaint.pending || (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		this->repaint();
+	} else {
+		repaintVoiceInteractionRegion(repaint.current);
+	}
+}
+
+void Document::recordVoiceInteractionRepaintRegion(
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	for (const auto &rect : region) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+			break;
+		}
+		current += *mapped;
+	}
+	auto &repaint = _voiceInteractionRepaint;
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintVoiceInteractionRegion(previous.united(repaint.current));
+}
+
+void Document::invalidateVoiceInteractionRepaint() const {
+	auto &repaint = _voiceInteractionRepaint;
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void Document::repaintVoiceInteractionRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
 void Document::repaintCaption(uint64 generation) const {
 	if (_captionGeneration != generation || _captionRepaintPending) {
 		return;
@@ -2101,7 +2191,7 @@ void Document::clickHandlerActiveChanged(const ClickHandlerPtr &p, bool active) 
 		if (const auto voice = Get<HistoryDocumentVoice>()) {
 			if (p == voice->seekl) {
 				_voiceHoverProgress = -1;
-				repaint();
+				repaintVoiceInteraction();
 			}
 		}
 	}
@@ -2155,6 +2245,7 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 void Document::parentTextUpdated() {
 	clearRadialAnimationRepaintRect();
 	clearVoiceProgressAnimationRepaintRect();
+	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	++_captionGeneration;
 	RemoveComponents(HistoryDocumentCaptioned::Bit());
