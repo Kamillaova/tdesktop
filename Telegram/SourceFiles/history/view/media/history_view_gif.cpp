@@ -380,6 +380,7 @@ QSize Gif::countOptimalSize() {
 }
 
 QSize Gif::countCurrentSize(int newWidth) {
+	clearStreamedContentRect();
 	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
 		; !forced.isEmpty()) {
 		return forced;
@@ -631,6 +632,7 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		: _streamed
 		? &_streamed->instance
 		: nullptr;
+	recordStreamedContentRect(p, context, rthumb);
 
 	if (displayLoading
 		&& (!streamedForWaiting
@@ -1717,6 +1719,7 @@ QSize Gif::sizeForGroupingOptimal(int maxWidth, bool last) const {
 }
 
 QSize Gif::sizeForGrouping(int width) const {
+	clearStreamedContentRect();
 	return sizeForAspectRatio();
 }
 
@@ -1774,6 +1777,7 @@ void Gif::drawGrouped(
 	const auto streamedForWaiting = _streamed
 		? &_streamed->instance
 		: nullptr;
+	recordStreamedContentRect(p, context, geometry);
 
 	if (displayLoading
 		&& (!streamedForWaiting
@@ -2275,6 +2279,7 @@ bool Gif::hasHeavyPart() const {
 }
 
 void Gif::unloadHeavyPart() {
+	clearStreamedContentRect();
 	stopAnimation();
 	_dataMedia = nullptr;
 	if (_spoiler) {
@@ -2511,6 +2516,7 @@ void Gif::setStreamed(std::unique_ptr<Streamed> value) {
 		history()->owner().registerHeavyViewPart(_parent);
 		togglePollingStory(true);
 	} else if (removed) {
+		clearStreamedContentRect();
 		_videoPosition = 0;
 		_parent->checkHeavyPart();
 	}
@@ -2543,8 +2549,42 @@ void Gif::repaintStreamedContent() {
 	} else if (_parent->delegate()->elementAnimationsPaused()
 		&& !activeRoundStreamed()) {
 		return;
+	} else if (_streamedContentRepaintPending) {
+		return;
 	}
-	repaint();
+	_streamedContentRepaintPending = true;
+	if (_streamedContentRect.isEmpty()) {
+		repaint();
+	} else {
+		_parent->repaint(_streamedContentRect);
+	}
+}
+
+void Gif::recordStreamedContentRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (context.hasElementPainter(p)) {
+		_streamedContentRect = QRect();
+		_streamedContentRepaintPending = false;
+	} else {
+		if (_streamedContentRect.isEmpty()) {
+			_streamedContentRepaintPending = false;
+		}
+		return;
+	}
+	if (_data->isVideoMessage() && _parent->media() != this) {
+		return;
+	}
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	if (mapped) {
+		_streamedContentRect = *mapped;
+	}
+}
+
+void Gif::clearStreamedContentRect() const {
+	_streamedContentRect = QRect();
+	_streamedContentRepaintPending = false;
 }
 
 void Gif::streamingReady(::Media::Streaming::Information &&info) {

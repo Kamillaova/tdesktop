@@ -169,6 +169,11 @@ private:
 	void handleStreamingError(::Media::Streaming::Error &&error);
 	void streamingReady(::Media::Streaming::Information &&info);
 	void repaintStreamedContent();
+	void recordStreamedContentRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void clearStreamedContentRect() const;
 	void ensureTranscribeButton() const;
 
 	void paintTranscribe(
@@ -254,6 +259,7 @@ private:
 	} _ephemeral;
 	mutable QImage _thumbCache;
 	mutable QImage _roundingMask;
+	mutable QRect _streamedContentRect;
 	mutable crl::time _videoPosition = 0;
 	std::shared_ptr<VoiceSeekClickHandler> _seekl;
 	mutable Ui::Animations::Simple _seekAnimation;
@@ -268,6 +274,7 @@ private:
 	mutable bool _purchasedPriceTag : 1 = false;
 	mutable bool _seeking : 1 = false;
 	mutable bool _smallGroupPart : 1 = false;
+	mutable bool _streamedContentRepaintPending : 1 = false;
 	const bool _sensitiveSpoiler : 1 = false;
 	const bool _hasVideoCover : 1 = false;
 
