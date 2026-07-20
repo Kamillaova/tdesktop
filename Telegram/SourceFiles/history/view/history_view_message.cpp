@@ -3509,7 +3509,7 @@ void Message::clickHandlerPressedChanged(
 		toggleSummaryHeaderRipple(pressed);
 	} else if (_summarize && (handler == _summarize->link())) {
 		if (pressed) {
-			_summarize->addRipple([=] { repaint(); });
+			_summarize->addRipple();
 		} else {
 			_summarize->stopRipple();
 		}

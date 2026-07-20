@@ -1654,7 +1654,7 @@ void Gif::clickHandlerPressedChanged(
 		return;
 	} else if (_transcribe && (handler == _transcribe->link())) {
 		if (pressed) {
-			_transcribe->addRipple([=] { repaint(); });
+			_transcribe->addRipple();
 		} else {
 			_transcribe->stopRipple();
 		}

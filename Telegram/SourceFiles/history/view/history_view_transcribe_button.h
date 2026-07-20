@@ -36,7 +36,7 @@ public:
 	void setLoading(bool loading);
 	[[nodiscard]] bool loading() const;
 	void paint(QPainter &p, int x, int y, const PaintContext &context);
-	void addRipple(Fn<void()> callback);
+	void addRipple();
 	void stopRipple() const;
 
 	[[nodiscard]] ClickHandlerPtr link();

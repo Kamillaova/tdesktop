@@ -462,12 +462,12 @@ bool TranscribeButton::contains(const QPoint &p) {
 	}
 }
 
-void TranscribeButton::addRipple(Fn<void()> callback) {
+void TranscribeButton::addRipple() {
 	if (!_ripple) {
 		_ripple = std::make_unique<Ui::RippleAnimation>(
 			st::defaultRippleAnimation,
 			Ui::RippleAnimation::EllipseMask(size()),
-			std::move(callback));
+			[=] { repaintAnimation(); });
 	}
 	_ripple->add(_lastStatePoint);
 }
