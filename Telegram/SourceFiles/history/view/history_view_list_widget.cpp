@@ -4824,6 +4824,13 @@ void ListWidget::repaintItem(const Element *view, QRect rect) {
 	}
 	const auto top = itemTopForRepaint(view);
 	update(rect.translated(0, top));
+	const auto id = view->data()->fullId();
+	const auto area = _reactionsManager
+		? _reactionsManager->lookupEffectArea(id)
+		: std::nullopt;
+	if (area) {
+		update(*area);
+	}
 }
 
 void ListWidget::repaintItem(FullMsgId itemId) {

@@ -78,6 +78,11 @@ void PaintTagShape(QPainter &p, QSizeF size, const QColor &color) {
 
 } // namespace
 
+enum class InlineList::AnimationPart : uchar {
+	Fly,
+	Ripple,
+};
+
 struct InlineList::Button {
 	QRect geometry;
 	mutable std::unique_ptr<Ui::ReactionFlyAnimation> animation;
@@ -90,6 +95,10 @@ struct InlineList::Button {
 	int textWidth = 0;
 	int count = 0;
 	uint64 customGeneration = 0;
+	mutable uint64 flyGeneration = 0;
+	mutable uint64 rippleGeneration = 0;
+	mutable QRect animationRepaintRect;
+	mutable bool animationRepaintPending = false;
 	bool chosen = false;
 	bool paid = false;
 	bool tag = false;
@@ -125,10 +134,12 @@ InlineList::InlineList(
 	not_null<::Data::Reactions*> owner,
 	Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
 	Fn<void(QRect)> customEmojiRepaint,
+	Fn<void(QRect)> animationRepaint,
 	Data &&data)
 : _owner(owner)
 , _handlerFactory(std::move(handlerFactory))
 , _customEmojiRepaint(std::move(customEmojiRepaint))
+, _animationRepaint(std::move(animationRepaint))
 , _data(std::move(data)) {
 	layout();
 }
@@ -137,6 +148,7 @@ InlineList::~InlineList() = default;
 
 void InlineList::update(Data &&data, int availableWidth) {
 	invalidateCustomEmojiRepaints();
+	invalidateAnimationRepaints();
 	_data = std::move(data);
 	layout();
 	if (width() > 0) {
@@ -145,10 +157,12 @@ void InlineList::update(Data &&data, int availableWidth) {
 }
 
 void InlineList::updateSkipBlock(int width, int height) {
+	invalidateAnimationRepaints();
 	_skipBlock = { width, height };
 }
 
 void InlineList::removeSkipBlock() {
+	invalidateAnimationRepaints();
 	_skipBlock = {};
 }
 
@@ -321,6 +335,81 @@ void InlineList::repaintCustomEmojiRegion(const QRegion &region) const {
 	}
 }
 
+uint64 InlineList::startAnimationRepaint(
+		Button &button,
+		AnimationPart part) {
+	auto &generation = (part == AnimationPart::Fly)
+		? button.flyGeneration
+		: button.rippleGeneration;
+	generation = ++_animationGeneration;
+	button.animationRepaintRect = QRect();
+	button.animationRepaintPending = false;
+	return generation;
+}
+
+void InlineList::stopAnimationRepaint(
+		const Button &button,
+		AnimationPart part) const {
+	auto &generation = (part == AnimationPart::Fly)
+		? button.flyGeneration
+		: button.rippleGeneration;
+	generation = 0;
+}
+
+void InlineList::animationUpdated(
+		const ReactionId &id,
+		AnimationPart part,
+		uint64 generation) const {
+	const auto i = ranges::find(_buttons, id, &Button::id);
+	if (i == end(_buttons)) {
+		return;
+	}
+	const auto currentGeneration = (part == AnimationPart::Fly)
+		? i->flyGeneration
+		: i->rippleGeneration;
+	if (currentGeneration != generation || i->animationRepaintPending) {
+		return;
+	}
+	i->animationRepaintPending = true;
+	if (i->animationRepaintRect.isEmpty()) {
+		_animationRepaint(QRect());
+	} else {
+		_animationRepaint(i->animationRepaintRect);
+	}
+}
+
+void InlineList::invalidateAnimationRepaints() {
+	for (auto &button : _buttons) {
+		button.animationRepaintRect = QRect();
+		button.animationRepaintPending = false;
+	}
+}
+
+void InlineList::recordAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Button &button,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)
+		|| (!button.flyGeneration && !button.rippleGeneration)) {
+		return;
+	}
+	const auto previous = button.animationRepaintRect;
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto current = (mapped && !mapped->isEmpty())
+		? *mapped
+		: QRect();
+	button.animationRepaintRect = current;
+	button.animationRepaintPending = false;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	button.animationRepaintPending = true;
+	_animationRepaint(current.isEmpty()
+		? QRect()
+		: previous.united(current));
+}
+
 void InlineList::layout() {
 	layoutButtons();
 	syncCustomEmojiRepaints();
@@ -482,6 +571,7 @@ void InlineList::setButtonUserpics(
 
 QSize InlineList::countOptimalSize() {
 	invalidateCustomEmojiRepaints();
+	invalidateAnimationRepaints();
 	if (_buttons.empty()) {
 		return _skipBlock;
 	}
@@ -530,6 +620,7 @@ QSize InlineList::countOptimalSize() {
 
 QSize InlineList::countCurrentSize(int newWidth) {
 	invalidateCustomEmojiRepaints();
+	invalidateAnimationRepaints();
 	_data.flags &= ~Data::Flag::Flipped;
 	if (_buttons.empty()) {
 		return optimalSize();
@@ -596,6 +687,7 @@ int InlineList::countNiceWidth() const {
 
 void InlineList::flipToRight() {
 	invalidateCustomEmojiRepaints();
+	invalidateAnimationRepaints();
 	_data.flags |= Data::Flag::Flipped;
 	for (auto &button : _buttons) {
 		button.geometry.moveLeft(
@@ -640,6 +732,7 @@ void InlineList::paint(
 			&& button.animation->finished()) {
 			// Let the animation (and its custom emoji) live while painting.
 			finished.push_back(std::move(button.animation));
+			stopAnimationRepaint(button, AnimationPart::Fly);
 		}
 		const auto animating = (button.animation != nullptr);
 		const auto &geometry = button.geometry;
@@ -655,6 +748,20 @@ void InlineList::paint(
 			geometry.height() - geometry.width(),
 			0,
 			bubbleProgress);
+		const auto maximumBubbleSkip = std::max(
+			geometry.height() - geometry.width(),
+			0);
+		const auto animationBounds = geometry.marginsAdded({
+			flipped ? maximumBubbleSkip : 0,
+			0,
+			flipped ? 0 : maximumBubbleSkip,
+			0,
+		});
+		recordAnimationRepaintRect(
+			p,
+			context,
+			button,
+			animationBounds);
 		const auto inner = geometry.marginsRemoved(padding);
 		const auto chosen = mine
 			&& (!animating || !button.animation->flying() || skipImage);
@@ -716,6 +823,7 @@ void InlineList::paint(
 		if (_ripple && _ripple->buttonId == button.id) {
 			if (!bubbleReady || _ripple->width != geometry.width()) {
 				_ripple.reset();
+				stopAnimationRepaint(button, AnimationPart::Ripple);
 			} else {
 				const auto savedOpacity = p.opacity();
 				p.setOpacity(1.);
@@ -729,6 +837,7 @@ void InlineList::paint(
 					&rippleColor);
 				if (_ripple->empty()) {
 					_ripple.reset();
+					stopAnimationRepaint(button, AnimationPart::Ripple);
 				}
 				p.setOpacity(savedOpacity);
 			}
@@ -947,8 +1056,7 @@ bool InlineList::getState(
 
 void InlineList::clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
-		bool pressed,
-		Fn<void()> repaint) {
+		bool pressed) {
 	if (pressed) {
 		const auto id = ReactionIdOfLink(handler);
 		if (id.empty()) {
@@ -962,6 +1070,17 @@ void InlineList::clickHandlerPressedChanged(
 		if (!_ripple
 			|| _ripple->buttonId != id
 			|| _ripple->width != geometry.width()) {
+			if (_ripple) {
+				const auto previous = ranges::find(
+					_buttons,
+					_ripple->buttonId,
+					&Button::id);
+				if (previous != end(_buttons)) {
+					stopAnimationRepaint(
+						*previous,
+						AnimationPart::Ripple);
+				}
+			}
 			const auto mask = [&] {
 				if (areTags()) {
 					const auto s = geometry.size();
@@ -979,10 +1098,21 @@ void InlineList::clickHandlerPressedChanged(
 					geometry.size(),
 					geometry.height() / 2);
 			}();
+			const auto generation = startAnimationRepaint(
+				*i,
+				AnimationPart::Ripple);
+			const auto weak = base::make_weak(this);
 			_ripple = std::make_unique<RippleEffect>(
 				st::defaultRippleAnimation,
 				std::move(mask),
-				std::move(repaint),
+				[=] {
+					if (const auto strong = weak.get()) {
+						strong->animationUpdated(
+							id,
+							AnimationPart::Ripple,
+							generation);
+					}
+				},
 				id,
 				geometry.width());
 		}
@@ -995,17 +1125,27 @@ void InlineList::clickHandlerPressedChanged(
 	}
 }
 
-void InlineList::animate(
-		Ui::ReactionFlyAnimationArgs &&args,
-		Fn<void()> repaint) {
+void InlineList::animate(Ui::ReactionFlyAnimationArgs &&args) {
 	const auto i = ranges::find(_buttons, args.id, &Button::id);
 	if (i == end(_buttons)) {
 		return;
 	}
+	const auto id = args.id;
+	const auto generation = startAnimationRepaint(
+		*i,
+		AnimationPart::Fly);
+	const auto weak = base::make_weak(this);
 	i->animation = std::make_unique<Ui::ReactionFlyAnimation>(
 		_owner,
 		std::move(args),
-		std::move(repaint),
+		[=] {
+			if (const auto strong = weak.get()) {
+				strong->animationUpdated(
+					id,
+					AnimationPart::Fly,
+					generation);
+			}
+		},
 		st::reactionInlineImage);
 }
 
@@ -1064,6 +1204,7 @@ auto InlineList::takeAnimations()
 		std::unique_ptr<Ui::ReactionFlyAnimation>>();
 	for (auto &button : _buttons) {
 		if (button.animation) {
+			stopAnimationRepaint(button, AnimationPart::Fly);
 			result.emplace(button.id, std::move(button.animation));
 		}
 	}
@@ -1076,6 +1217,18 @@ void InlineList::continueAnimations(base::flat_map<
 	for (auto &[id, animation] : animations) {
 		const auto i = ranges::find(_buttons, id, &Button::id);
 		if (i != end(_buttons)) {
+			const auto generation = startAnimationRepaint(
+				*i,
+				AnimationPart::Fly);
+			const auto weak = base::make_weak(this);
+			animation->setRepaintCallback([=] {
+				if (const auto strong = weak.get()) {
+					strong->animationUpdated(
+						id,
+						AnimationPart::Fly,
+						generation);
+				}
+			});
 			i->animation = std::move(animation);
 		}
 	}

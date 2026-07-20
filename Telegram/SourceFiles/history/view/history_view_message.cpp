@@ -1303,8 +1303,6 @@ void Message::animateReaction(Ui::ReactionFlyAnimationArgs &&args) {
 	if (g.width() < 1 || isHidden()) {
 		return;
 	}
-	const auto repainter = [=] { repaint(); };
-
 	const auto bubble = drawBubble();
 	const auto reactionsInBubble = _reactions && embedReactionsInBubble();
 	const auto mediaDisplayed = media && media->isDisplayed();
@@ -1316,7 +1314,7 @@ void Message::animateReaction(Ui::ReactionFlyAnimationArgs &&args) {
 			: 0;
 		g.setHeight(g.height() - reactionsHeight);
 		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + st::mediaInBubbleSkip);
-		_reactions->animate(args.translated(-reactionsPosition), repainter);
+		_reactions->animate(args.translated(-reactionsPosition));
 		return;
 	}
 
@@ -1343,7 +1341,7 @@ void Message::animateReaction(Ui::ReactionFlyAnimationArgs &&args) {
 		if (reactionsInBubble) {
 			trect.setHeight(trect.height() - reactionsHeight);
 			const auto reactionsPosition = QPoint(trect.left(), trect.top() + trect.height() + reactionsTop);
-			_reactions->animate(args.translated(-reactionsPosition), repainter);
+			_reactions->animate(args.translated(-reactionsPosition));
 			return;
 		}
 	}
@@ -3893,10 +3891,7 @@ void Message::clickHandlerPressedChanged(
 			}
 		}
 	} else if (_reactions) {
-		_reactions->clickHandlerPressedChanged(
-			handler,
-			pressed,
-			[=] { repaint(); });
+		_reactions->clickHandlerPressedChanged(handler, pressed);
 	}
 }
 

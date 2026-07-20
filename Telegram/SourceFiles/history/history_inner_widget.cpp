@@ -898,6 +898,10 @@ void HistoryInner::repaintItem(const Element *view, QRect rect) {
 	const auto top = itemTopForRepaint(view);
 	if (top >= 0) {
 		update(rect.translated(0, top));
+		const auto id = view->data()->fullId();
+		if (const auto area = _reactionsManager->lookupEffectArea(id)) {
+			update(*area);
+		}
 	}
 }
 

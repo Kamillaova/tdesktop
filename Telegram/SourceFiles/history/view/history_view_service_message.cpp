@@ -460,14 +460,12 @@ void Service::animateReaction(Ui::ReactionFlyAnimationArgs &&args) {
 	if (g.width() < 1 || isHidden()) {
 		return;
 	}
-	const auto repainter = [=] { repaint(); };
-
 	if (_reactions) {
 		const auto reactionsHeight = st::mediaInBubbleSkip + _reactions->height();
 		const auto reactionsLeft = 0;
 		g.setHeight(g.height() - reactionsHeight);
 		const auto reactionsPosition = QPoint(reactionsLeft + g.left(), g.top() + g.height() + st::mediaInBubbleSkip);
-		_reactions->animate(args.translated(-reactionsPosition), repainter);
+		_reactions->animate(args.translated(-reactionsPosition));
 	}
 }
 

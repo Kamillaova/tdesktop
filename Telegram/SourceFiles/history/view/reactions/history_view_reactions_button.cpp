@@ -800,8 +800,15 @@ void Manager::recordCurrentReactionEffect(FullMsgId itemId, QPoint origin) {
 		_currentReactionInfo.effectOffset += origin
 			+ _currentReactionInfo.position;
 		_collectedEffects[itemId] = base::take(_currentReactionInfo);
-	} else if (!_collectedEffects.empty()) {
-		_collectedEffects.remove(itemId);
+	} else {
+		if (!_collectedEffects.empty()) {
+			_collectedEffects.remove(itemId);
+		}
+		if (!_activeEffectAreas.empty()) {
+			if (const auto area = _activeEffectAreas.take(itemId)) {
+				_buttonUpdate(*area);
+			}
+		}
 	}
 }
 

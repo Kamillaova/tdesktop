@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/weak_ptr.h"
 #include "history/view/history_view_object.h"
 #include "data/data_message_reaction_id.h"
 
@@ -52,13 +53,14 @@ struct InlineListData {
 	Flags flags = {};
 };
 
-class InlineList final : public Object {
+class InlineList final : public Object, public base::has_weak_ptr {
 public:
 	using Data = InlineListData;
 	InlineList(
 		not_null<::Data::Reactions*> owner,
 		Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
 		Fn<void(QRect)> customEmojiRepaint,
+		Fn<void(QRect)> animationRepaint,
 		Data &&data);
 	~InlineList();
 
@@ -86,12 +88,9 @@ public:
 		not_null<TextState*> outResult) const;
 	void clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
-		bool pressed,
-		Fn<void()> repaint);
+		bool pressed);
 
-	void animate(
-		Ui::ReactionFlyAnimationArgs &&args,
-		Fn<void()> repaint);
+	void animate(Ui::ReactionFlyAnimationArgs &&args);
 	[[nodiscard]] auto takeAnimations()
 	-> base::flat_map<
 		ReactionId,
@@ -116,6 +115,7 @@ private:
 	struct Button;
 	struct CustomEmojiRepaint;
 	struct RippleEffect;
+	enum class AnimationPart : uchar;
 
 	void layout();
 	void layoutButtons();
@@ -148,6 +148,22 @@ private:
 		QRect rect) const;
 	void finishCustomEmojiPaint() const;
 	void repaintCustomEmojiRegion(const QRegion &region) const;
+	[[nodiscard]] uint64 startAnimationRepaint(
+		Button &button,
+		AnimationPart part);
+	void stopAnimationRepaint(
+		const Button &button,
+		AnimationPart part) const;
+	void animationUpdated(
+		const ReactionId &id,
+		AnimationPart part,
+		uint64 generation) const;
+	void invalidateAnimationRepaints();
+	void recordAnimationRepaintRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Button &button,
+		QRect rect) const;
 	void paintSingleBg(
 		Painter &p,
 		const QRect &fill,
@@ -162,6 +178,7 @@ private:
 	const not_null<::Data::Reactions*> _owner;
 	const Fn<ClickHandlerPtr(ReactionId)> _handlerFactory;
 	const Fn<void(QRect)> _customEmojiRepaint;
+	const Fn<void(QRect)> _animationRepaint;
 	Data _data;
 	mutable std::vector<CustomEmojiRepaint> _customEmojiRepaints;
 	std::vector<Button> _buttons;
@@ -170,6 +187,7 @@ private:
 	mutable QColor _tagBgColor;
 	mutable QImage _customCache;
 	uint64 _customEmojiGeneration = 0;
+	uint64 _animationGeneration = 0;
 	bool _hasCustomEmoji = false;
 	mutable std::unique_ptr<RippleEffect> _ripple;
 	mutable QPoint _lastPoint;

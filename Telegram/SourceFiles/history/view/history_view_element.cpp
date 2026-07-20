@@ -2935,14 +2935,8 @@ void Element::setupReactions(Element *replacing) {
 		: base::flat_map<
 		Data::ReactionId,
 		std::unique_ptr<Ui::ReactionFlyAnimation>>();
-	if (!animations.empty()) {
-		const auto repainter = [=] { repaint(); };
-		for (const auto &[id, animation] : animations) {
-			animation->setRepaintCallback(repainter);
-		}
-		if (_reactions) {
-			_reactions->continueAnimations(std::move(animations));
-		}
+	if (!animations.empty() && _reactions) {
+		_reactions->continueAnimations(std::move(animations));
 	}
 }
 
@@ -3007,6 +3001,7 @@ void Element::refreshReactions() {
 				}
 			});
 		};
+		const auto weak = base::make_weak(this);
 		setReactions(std::make_unique<InlineList>(
 			&history()->owner().reactions(),
 			handlerFactory,
@@ -3015,6 +3010,15 @@ void Element::refreshReactions() {
 					customEmojiRepaint();
 				} else {
 					repaint(rect);
+				}
+			},
+			[=](QRect rect) {
+				if (const auto strong = weak.get()) {
+					if (rect.isNull()) {
+						strong->repaint();
+					} else {
+						strong->repaint(rect);
+					}
 				}
 			},
 			std::move(reactionsData)));
