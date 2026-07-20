@@ -401,6 +401,9 @@ public:
 	void notifyGiftAuctionGot(GiftAuctionGot &&update);
 	[[nodiscard]] rpl::producer<GiftAuctionGot> giftAuctionGots() const;
 	void requestItemRepaint(not_null<const HistoryItem*> item, QRect r = QRect());
+	void requestItemVisualRepaint(
+		not_null<const HistoryItem*> item,
+		QRect r = QRect());
 	[[nodiscard]] rpl::producer<not_null<const HistoryItem*>> itemRepaintRequest() const;
 	void requestDrawToReply(DrawToReplyRequest request);
 	[[nodiscard]] rpl::producer<DrawToReplyRequest> drawToReplyRequests() const;

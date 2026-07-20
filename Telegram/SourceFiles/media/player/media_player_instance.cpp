@@ -1405,7 +1405,7 @@ void Instance::requestRoundVideoResize() const {
 
 void Instance::requestRoundVideoRepaint() const {
 	if (const auto item = roundVideoItem()) {
-		item->history()->owner().requestItemRepaint(item);
+		item->history()->owner().requestItemVisualRepaint(item);
 	}
 }
 

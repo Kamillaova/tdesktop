@@ -2091,6 +2091,26 @@ rpl::producer<Session::IdChange> Session::itemIdChanged() const {
 }
 
 void Session::requestItemRepaint(not_null<const HistoryItem*> item, QRect r) {
+	requestItemVisualRepaint(item, r);
+	const auto history = item->history();
+	if (history->lastItemDialogsView().dependsOn(item)) {
+		history->updateChatListEntry();
+	}
+	if (const auto topic = item->topic()) {
+		if (topic->lastItemDialogsView().dependsOn(item)) {
+			topic->updateChatListEntry();
+		}
+	}
+	if (const auto sublist = item->savedSublist()) {
+		if (sublist->lastItemDialogsView().dependsOn(item)) {
+			sublist->updateChatListEntry();
+		}
+	}
+}
+
+void Session::requestItemVisualRepaint(
+		not_null<const HistoryItem*> item,
+		QRect r) {
 	_itemRepaintRequest.fire_copy(item);
 	auto repaintGroupLeader = false;
 	auto repaintView = [&](not_null<const ViewElement*> view) {
@@ -2107,20 +2127,6 @@ void Session::requestItemRepaint(not_null<const HistoryItem*> item, QRect r) {
 			if (leader != item) {
 				enumerateItemViews(leader, repaintView);
 			}
-		}
-	}
-	const auto history = item->history();
-	if (history->lastItemDialogsView().dependsOn(item)) {
-		history->updateChatListEntry();
-	}
-	if (const auto topic = item->topic()) {
-		if (topic->lastItemDialogsView().dependsOn(item)) {
-			topic->updateChatListEntry();
-		}
-	}
-	if (const auto sublist = item->savedSublist()) {
-		if (sublist->lastItemDialogsView().dependsOn(item)) {
-			sublist->updateChatListEntry();
 		}
 	}
 }

@@ -870,7 +870,7 @@ void MainWidget::handleAudioUpdate(const Media::Player::TrackState &state) {
 	}
 
 	if (item) {
-		session().data().requestItemRepaint(item);
+		session().data().requestItemVisualRepaint(item);
 	}
 	if (document) {
 		if (const auto items = InlineBots::Layout::documentItems()) {
