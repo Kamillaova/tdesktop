@@ -153,6 +153,8 @@ bool Sticker::webpagePart() const {
 }
 
 void Sticker::initSize(int customSize) {
+	_animationRepaintPending = false;
+	_animationRepaintRect = QRect();
 	if (customSize > 0) {
 		const auto original = Size(_data);
 		const auto proposed = QSize{ customSize, customSize };
@@ -239,6 +241,12 @@ void Sticker::draw(
 		Painter &p,
 		const PaintContext &context,
 		const QRect &r) {
+	if (context.hasElementPainter(p)) {
+		_animationRepaintPending = false;
+		_animationRepaintRect = QRect();
+	} else if (_animationRepaintRect.isEmpty()) {
+		_animationRepaintPending = false;
+	}
 	if (!customEmojiPart()) {
 		_parent->clearCustomEmojiRepaint();
 	}
@@ -350,13 +358,13 @@ void Sticker::paintAnimationFrame(
 			context.st->msgStickerOverlay()->c)
 		: image;
 	const auto size = prepared.size() / style::DevicePixelRatio();
-	p.drawImage(
-		QRect(
-			QPoint(
-				r.x() + (r.width() - size.width()) / 2,
-				r.y() + (r.height() - size.height()) / 2),
-			size),
-		prepared);
+	const auto frameRect = QRect(
+		QPoint(
+			r.x() + (r.width() - size.width()) / 2,
+			r.y() + (r.height() - size.height()) / 2),
+		size);
+	recordAnimationFrame(p, context, frameRect);
+	p.drawImage(frameRect, prepared);
 	if (!_lastFrameCached.isNull()) {
 		return;
 	}
@@ -654,7 +662,28 @@ void Sticker::playerCreated() {
 	Expects(_player != nullptr);
 
 	_parent->history()->owner().registerHeavyViewPart(_parent);
-	_player->setRepaintCallback([=] { _parent->customEmojiRepaint(); });
+	_player->setRepaintCallback([=] { repaintAnimation(); });
+}
+
+void Sticker::repaintAnimation() {
+	if (_animationRepaintPending) {
+		return;
+	}
+	_animationRepaintPending = true;
+	if (_animationRepaintRect.isEmpty()) {
+		_parent->customEmojiRepaint();
+	} else {
+		_parent->repaint(_animationRepaintRect);
+	}
+}
+
+void Sticker::recordAnimationFrame(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) {
+	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+		_animationRepaintRect = *mapped;
+	}
 }
 
 bool Sticker::hasHeavyPart() const {
@@ -670,6 +699,8 @@ void Sticker::unloadPlayer() {
 	if (!_player) {
 		return;
 	}
+	_animationRepaintPending = false;
+	_animationRepaintRect = QRect();
 	if (_stopOnLastFrame && _lastFrameCached.isNull()) {
 		_nextLastFrame = false;
 		_oncePlayed = false;

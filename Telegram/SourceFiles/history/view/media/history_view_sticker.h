@@ -122,6 +122,11 @@ private:
 
 	void setupPlayer();
 	void playerCreated();
+	void repaintAnimation();
+	void recordAnimationFrame(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect);
 	void unloadPlayer();
 	void emojiStickerClicked();
 	void premiumStickerClicked();
@@ -136,6 +141,7 @@ private:
 	QSize _size;
 	QImage _lastFrameCached;
 	QString _diceEmoji;
+	QRect _animationRepaintRect;
 	int _diceIndex = -1;
 	mutable int _frameIndex = -1;
 	mutable int _framesCount = -1;
@@ -151,6 +157,7 @@ private:
 	bool _playingOnce : 1 = false;
 	bool _stopOnLastFrame : 1 = false;
 	bool _sensitiveBlurred : 1 = false;
+	bool _animationRepaintPending : 1 = false;
 
 };
 
