@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/boxes/report_box_graphics.h" // Ui::ReportReason
+#include "ui/rect.h"
 #include "ui/text/text.h"
 #include "ui/text/text_options.h"
 #include "ui/painter.h"
@@ -200,8 +201,8 @@ TopBarWidget::TopBarWidget(
 		session().data().sendActionManager().animationUpdated(
 		) | rpl::filter([=](const AnimationUpdate &update) {
 			return (update.thread == _activeChat.key.thread());
-		}) | rpl::on_next([=] {
-			update();
+		}) | rpl::on_next([=](const AnimationUpdate &update) {
+			repaintSendAction(update.rect, update.textUpdated);
 		}, lifetime());
 	}
 
@@ -280,21 +281,150 @@ void TopBarWidget::updateConnectingState() {
 	if (state == MTP::ConnectedState || !exposed) {
 		if (_connecting) {
 			_connecting = nullptr;
-			update();
+			repaintStatus();
 		}
 	} else if (!_connecting) {
 		_connecting = std::make_unique<Ui::InfiniteRadialAnimation>(
 			[=] { connectingAnimationCallback(); },
 			st::topBarConnectingAnimation);
 		_connecting->start();
-		update();
+		repaintStatus();
 	}
 }
 
 void TopBarWidget::connectingAnimationCallback() {
 	if (!anim::Disabled()) {
+		const auto wasConnecting = (_connecting != nullptr);
 		updateConnectingState();
+		if (wasConnecting && _connecting) {
+			repaintConnecting();
+		}
+	}
+}
+
+bool TopBarWidget::topBarContentHidden() {
+	if (_animatingMode || !_activeChat.key || _narrowRatio == 1.) {
+		return true;
+	}
+	const auto selectedButtonsTop = countSelectedButtonsTop(
+		_selectedShown.value(showSelectedActions() ? 1. : 0.));
+	const auto searchFieldTop = _searchField
+		? countSelectedButtonsTop(_searchShown.value(_searchMode ? 1. : 0.))
+		: -st::topBarHeight;
+	return (std::max(selectedButtonsTop, searchFieldTop) >= 0);
+}
+
+QRect TopBarWidget::statusRect() const {
+	const auto left = _leftTaken;
+	const auto top = st::topBarHeight
+		- st::topBarArrowPadding.bottom()
+		- st::dialogsTextFont->height;
+	const auto availableWidth = std::max(
+		width() - _rightTaken - left - st::topBarNameRightPadding,
+		0);
+	return QRect(left, top, availableWidth, st::dialogsTextFont->height);
+}
+
+QRect TopBarWidget::sendActionRect(QRect rect, bool textUpdated) const {
+	const auto status = statusRect();
+	const auto add = st::lineWidth - Ui::Emoji::GetCustomSkipNormal();
+	const auto height = std::max({
+		add + rect.height() + add,
+		add + st::normalFont->height + add,
+		st::lineWidth + Ui::Emoji::GetCustomSizeNormal() + st::lineWidth,
+	});
+	const auto animation = QRect(
+		status.x() + rect.x() - add,
+		status.y() + rect.y() - add,
+		rect.width() + add + add,
+		height);
+	return textUpdated
+		? animation.united(QRect(
+			status.x() - add,
+			status.y() + rect.y() - add,
+			status.width() + add + add,
+			height))
+		: animation;
+}
+
+QRect TopBarWidget::connectingRect() const {
+	const auto position = statusRect().topLeft()
+		+ st::topBarConnectingPosition;
+	const auto thickness = st::topBarConnectingAnimation.thickness;
+	return QRect(
+		position,
+		st::topBarConnectingAnimation.size
+	).marginsAdded(QMargins(thickness, thickness, thickness, thickness));
+}
+
+void TopBarWidget::repaintStatus() {
+	if (topBarContentHidden()) {
+		return;
+	} else if (_selectedShown.animating() || _searchShown.animating()) {
 		update();
+	} else {
+		const auto status = statusRect();
+		const auto add = st::lineWidth - Ui::Emoji::GetCustomSkipNormal();
+		const auto height = std::max(
+			st::normalFont->height + add + add,
+			Ui::Emoji::GetCustomSizeNormal() + st::lineWidth + st::lineWidth);
+		const auto rect = QRect(0, status.y() - add, width(), height);
+		update(rect);
+		rtlupdate(connectingRect());
+	}
+}
+
+void TopBarWidget::repaintConnecting() {
+	if (topBarContentHidden()) {
+		return;
+	} else if (_selectedShown.animating() || _searchShown.animating()) {
+		update();
+	} else {
+		rtlupdate(connectingRect());
+	}
+}
+
+void TopBarWidget::repaintSendAction(QRect rect, bool textUpdated) {
+	if (topBarContentHidden()) {
+		return;
+	} else if (_selectedShown.animating() || _searchShown.animating()) {
+		update();
+		return;
+	}
+	const auto damage = sendActionRect(rect, textUpdated);
+	if (textUpdated) {
+		update(damage);
+		if (style::RightToLeft()) {
+			rtlupdate(damage);
+		}
+	} else {
+		update(damage);
+	}
+}
+
+void TopBarWidget::repaintTitleEmojiStatus() {
+	if (topBarContentHidden()) {
+		return;
+	} else if (_selectedShown.animating() || _searchShown.animating()) {
+		update();
+	} else if (const auto rect = _titleBadge.emojiStatusRect(); !rect.isEmpty()) {
+		update(rect);
+	}
+}
+
+void TopBarWidget::repaintTitleBotVerification() {
+	if (topBarContentHidden()) {
+		return;
+	} else if (_selectedShown.animating() || _searchShown.animating()) {
+		update();
+	} else if (const auto rect = _titleBadge.botVerifiedRect(); !rect.isEmpty()) {
+		update(rect);
+	} else {
+		const auto position = QPoint(
+			_leftTaken,
+			st::topBarArrowPadding.top()
+		) + st::dialogsVerifiedColors.position;
+		update(QRect(position, Size(st::emojiSize)));
 	}
 }
 
@@ -564,7 +694,12 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			namewidth);
 
 		p.setFont(st::dialogsTextFont);
-		if (!paintConnectingState(p, nameleft, statustop, width())
+		if (!paintConnectingState(
+				p,
+				nameleft,
+				statustop,
+				namewidth,
+				width())
 			&& !paintSendAction(
 				p,
 				nameleft,
@@ -624,7 +759,12 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			tr::lng_manage_discussion_group(tr::now));
 
 		p.setFont(st::dialogsTextFont);
-		if (!paintConnectingState(p, statusleft, statustop, width())
+		if (!paintConnectingState(
+				p,
+				statusleft,
+				statustop,
+				statuswidth,
+				width())
 			&& !paintSendAction(
 				p,
 				statusleft,
@@ -649,7 +789,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 					info,
 					namePeer->owner().customEmojiManager().factory(
 						Data::CustomEmojiSizeTag::Isolated),
-					[=] { update(); });
+					[=] { repaintTitleBotVerification(); });
 			}
 			const auto position = QPoint{ nameleft, nametop };
 			const auto skip = _titleBadge.drawVerified(p, position, st::dialogsVerifiedColors);
@@ -670,7 +810,7 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			.scam = &st::attentionButtonFg,
 			.direct = &st::windowSubTextFg,
 			.premiumFg = &st::dialogsVerifiedIconBg,
-			.customEmojiRepaint = [=] { update(); },
+			.customEmojiRepaint = [=] { repaintTitleEmojiStatus(); },
 			.now = now,
 			.bothVerifyAndStatus = true,
 			.paused = _controller->isGifPausedAtLeastFor(
@@ -686,7 +826,12 @@ void TopBarWidget::paintTopBar(Painter &p) {
 		});
 
 		p.setFont(st::dialogsTextFont);
-		if (!paintConnectingState(p, statusleft, statustop, width())
+		if (!paintConnectingState(
+				p,
+				statusleft,
+				statustop,
+				statuswidth,
+				width())
 			&& !paintSendAction(
 				p,
 				statusleft,
@@ -751,6 +896,7 @@ bool TopBarWidget::paintConnectingState(
 		Painter &p,
 		int left,
 		int top,
+		int availableWidth,
 		int outerWidth) {
 	if (!_connecting) {
 		return false;
@@ -762,11 +908,15 @@ bool TopBarWidget::paintConnectingState(
 			st::topBarConnectingPosition.y() + top
 		},
 		outerWidth);
-	left += st::topBarConnectingPosition.x()
+	const auto used = st::topBarConnectingPosition.x()
 		+ st::topBarConnectingAnimation.size.width()
 		+ st::topBarConnectingSkip;
+	left += used;
 	p.setPen(st::historyStatusFg);
-	p.drawTextLeft(left, top, outerWidth, tr::lng_status_connecting(tr::now));
+	const auto text = st::dialogsTextFont->elided(
+		tr::lng_status_connecting(tr::now),
+		std::max(availableWidth - used, 0));
+	p.drawTextLeft(left, top, outerWidth, text);
 	return true;
 }
 
@@ -965,16 +1115,17 @@ void TopBarWidget::handleEmojiInteractionSeen(const QString &emoticon) {
 					if (_emojiInteractionSeen
 						&& _emojiInteractionSeen->till <= crl::now()) {
 						_emojiInteractionSeen = nullptr;
-						update();
+						repaintStatus();
 					}
 				});
 			} else {
-				const auto skip = st::topBarArrowPadding.bottom();
-				update(
-					_leftTaken,
-					st::topBarHeight - skip - st::dialogsTextFont->height,
-					seen->animation.width(),
-					st::dialogsTextFont->height);
+				repaintSendAction(
+					QRect(
+						0,
+						0,
+						seen->animation.width(),
+						st::normalFont->height),
+					false);
 			}
 		});
 		seen->scheduler.start();
@@ -984,7 +1135,7 @@ void TopBarWidget::handleEmojiInteractionSeen(const QString &emoticon) {
 		st::dialogsTextStyle,
 		tr::lng_user_action_watching_animations(tr::now, lt_emoji, emoticon),
 		Ui::NameTextOptions());
-	update();
+	repaintStatus();
 }
 
 void TopBarWidget::setCustomTitle(const QString &title) {

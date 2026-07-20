@@ -137,8 +137,8 @@ struct PeerBadge::EmojiStatus {
 };
 
 struct PeerBadge::BotVerifiedData {
-	QImage cache;
 	std::unique_ptr<Text::CustomEmoji> icon;
+	QRect lastRect;
 };
 
 void UnreadBadge::setText(const QString &text, bool active) {
@@ -415,6 +415,10 @@ QRect PeerBadge::emojiStatusRect() const {
 		Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
 }
 
+QRect PeerBadge::botVerifiedRect() const {
+	return _botVerifiedData ? _botVerifiedData->lastRect : QRect();
+}
+
 void PeerBadge::paintEmojiStatusFrame(
 		QPainter &p,
 		crl::time now,
@@ -443,6 +447,7 @@ void PeerBadge::paintEmojiStatusFrame(
 
 void PeerBadge::unload() {
 	_emojiStatus = nullptr;
+	_botVerifiedData = nullptr;
 }
 
 bool PeerBadge::ready(const BotVerifyDetails *details) const {
@@ -454,9 +459,11 @@ bool PeerBadge::ready(const BotVerifyDetails *details) const {
 	}
 	if (!details->iconId) {
 		_botVerifiedData->icon = nullptr;
+		_botVerifiedData->lastRect = QRect();
 	} else if (!_botVerifiedData->icon
 		|| (_botVerifiedData->icon->entityData()
 			!= Data::SerializeCustomEmojiId(details->iconId))) {
+		_botVerifiedData->lastRect = QRect();
 		return false;
 	}
 	return true;
@@ -469,6 +476,8 @@ void PeerBadge::set(
 	if (!_botVerifiedData) {
 		_botVerifiedData = std::make_unique<BotVerifiedData>();
 	}
+	_botVerifiedData->icon = nullptr;
+	_botVerifiedData->lastRect = QRect();
 	if (details->iconId) {
 		const auto outer = st::emojiSize;
 		const auto inner = int(base::SafeRound(
@@ -498,11 +507,14 @@ int PeerBadge::drawVerified(
 	if (!data) {
 		return 0;
 	}
+	data->lastRect = QRect();
 	if (const auto icon = data->icon.get()) {
+		const auto iconPosition = position + st.position;
+		data->lastRect = QRect(iconPosition, Size(st::emojiSize));
 		icon->paint(p, {
 			.textColor = st.color->c,
 			.now = crl::now(),
-			.position = position + st.position,
+			.position = iconPosition,
 		});
 		return icon->width();
 	}

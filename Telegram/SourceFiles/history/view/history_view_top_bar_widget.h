@@ -176,6 +176,15 @@ private:
 	void updateAdaptiveLayout();
 	int countSelectedButtonsTop(float64 selectedShown);
 	void connectingAnimationCallback();
+	[[nodiscard]] bool topBarContentHidden();
+	[[nodiscard]] QRect statusRect() const;
+	[[nodiscard]] QRect sendActionRect(QRect rect, bool textUpdated) const;
+	[[nodiscard]] QRect connectingRect() const;
+	void repaintStatus();
+	void repaintConnecting();
+	void repaintSendAction(QRect rect, bool textUpdated);
+	void repaintTitleEmojiStatus();
+	void repaintTitleBotVerification();
 
 	void paintTopBar(Painter &p);
 	[[nodiscard]] PeerData *titleNamePeer() const;
@@ -185,7 +194,12 @@ private:
 		int top,
 		int availableWidth,
 		int outerWidth);
-	bool paintConnectingState(Painter &p, int left, int top, int outerWidth);
+	bool paintConnectingState(
+		Painter &p,
+		int left,
+		int top,
+		int availableWidth,
+		int outerWidth);
 	[[nodiscard]] QRect getMembersShowAreaGeometry() const;
 	[[nodiscard]] bool trackOnlineOf(not_null<PeerData*> user) const;
 	void updateMembersShowArea();
