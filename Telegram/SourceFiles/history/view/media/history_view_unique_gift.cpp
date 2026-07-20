@@ -78,8 +78,8 @@ public:
 	QSize countCurrentSize(int newWidth) override;
 
 private:
-	void repaintStars() const;
-	void recordStarsRepaintRect(
+	void repaintButton() const;
+	void recordButtonRepaintRect(
 		const Painter &p,
 		not_null<Element*> owner,
 		const PaintContext &context,
@@ -91,15 +91,15 @@ private:
 	QSize _size;
 
 	ClickHandlerPtr _link;
-	std::unique_ptr<Ui::RippleAnimation> _ripple;
 	Fn<void()> _repaint;
 
 	mutable QPoint _lastPoint;
-	mutable Element *_starsRepaintOwner = nullptr;
-	mutable QRect _starsRepaintRect;
-	mutable bool _starsRepaintPending = false;
+	mutable Element *_buttonRepaintOwner = nullptr;
+	mutable QRect _buttonRepaintRect;
+	mutable bool _buttonRepaintPending = false;
 	mutable Ui::Premium::ColoredMiniStars _stars;
 	mutable std::optional<QColor> _starsLastColor;
+	std::unique_ptr<Ui::RippleAnimation> _ripple;
 
 };
 
@@ -257,7 +257,7 @@ ButtonPart::ButtonPart(
 , _link(std::move(link))
 , _repaint(std::move(repaint))
 , _stars([=](const QRect &) {
-	repaintStars();
+	repaintButton();
 }, Ui::Premium::MiniStarsType::SlowStars) {
 }
 
@@ -280,7 +280,7 @@ void ButtonPart::draw(
 	const auto radius = _size.height() / 2.;
 	const auto r = Rect(_size);
 	p.drawRoundedRect(r, radius, radius);
-	recordStarsRepaintRect(
+	recordButtonRepaintRect(
 		p,
 		owner->parent(),
 		context,
@@ -316,7 +316,7 @@ void ButtonPart::draw(
 			p,
 			0,
 			0,
-			width(),
+			_size.width(),
 			&ripple);
 		p.setOpacity(opacity);
 	}
@@ -332,39 +332,48 @@ void ButtonPart::draw(
 	p.translate(-position);
 }
 
-void ButtonPart::repaintStars() const {
-	if (_starsRepaintPending) {
+void ButtonPart::repaintButton() const {
+	if (_buttonRepaintPending) {
 		return;
 	}
-	_starsRepaintPending = true;
-	if (_starsRepaintOwner && !_starsRepaintRect.isEmpty()) {
-		_starsRepaintOwner->repaint(_starsRepaintRect);
+	_buttonRepaintPending = true;
+	if (_buttonRepaintOwner && !_buttonRepaintRect.isEmpty()) {
+		_buttonRepaintOwner->repaint(_buttonRepaintRect);
 	} else {
 		_repaint();
 	}
 }
 
-void ButtonPart::recordStarsRepaintRect(
+void ButtonPart::recordButtonRepaintRect(
 		const Painter &p,
 		not_null<Element*> owner,
 		const PaintContext &context,
 		QRect rect) const {
 	if (!context.hasElementPainter(p)) {
-		if (_starsRepaintRect.isEmpty()) {
-			_starsRepaintPending = false;
+		if (_buttonRepaintRect.isEmpty()) {
+			_buttonRepaintPending = false;
 		}
 		return;
 	}
-	_starsRepaintOwner = owner;
-	_starsRepaintPending = false;
+	_buttonRepaintPending = false;
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = _starsRepaintRect;
-	_starsRepaintRect = current;
+	const auto previous = _buttonRepaintRect;
+	if (!mapped || mapped->isEmpty()) {
+		_buttonRepaintOwner = nullptr;
+		_buttonRepaintRect = QRect();
+		if (!previous.isEmpty()) {
+			_buttonRepaintPending = true;
+			_repaint();
+		}
+		return;
+	}
+	_buttonRepaintOwner = owner;
+	const auto current = *mapped;
+	_buttonRepaintRect = current;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}
-	_starsRepaintPending = true;
+	_buttonRepaintPending = true;
 	owner->repaint(previous.united(current));
 }
 
@@ -393,10 +402,15 @@ void ButtonPart::clickHandlerPressedChanged(
 	} else if (pressed) {
 		if (!_ripple) {
 			const auto radius = _size.height() / 2;
+			const auto weak = base::make_weak(this);
 			_ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				Ui::RippleAnimation::RoundRectMask(_size, radius),
-				_repaint);
+				[weak] {
+					if (const auto strong = weak.get()) {
+						strong->repaintButton();
+					}
+				});
 		}
 		_ripple->add(_lastPoint);
 	} else if (_ripple) {
