@@ -89,6 +89,69 @@ constexpr auto kLineHeightAppearDuration = crl::time(100);
 constexpr auto kLineHeightAppearFinalDuration = crl::time(60);
 constexpr auto kMinWidthAppearDuration = crl::time(160);
 
+[[nodiscard]] QRect MapRichPageRect(
+		const HistoryMessageRichPage::RepaintGeometry &geometry,
+		QRect rect) {
+	if (!geometry.known
+		|| geometry.articleSize.isEmpty()
+		|| rect.isEmpty()) {
+		return {};
+	}
+	const auto bounds = QRect(QPoint(), geometry.articleSize);
+	const auto clipped = rect.intersected(bounds);
+	return clipped.isEmpty()
+		? QRect()
+		: geometry.articleToElement.mapRect(QRectF(clipped)).toAlignedRect();
+}
+
+[[nodiscard]] std::optional<QTransform> RichPageArticleTransform(
+		const Painter &p,
+		const PaintContext &context,
+		QPoint origin) {
+	if (!context.elementTransform) {
+		return std::nullopt;
+	}
+	auto invertible = false;
+	const auto inverted = context.elementTransform->inverted(&invertible);
+	if (!invertible) {
+		return std::nullopt;
+	}
+	const auto result = QTransform::fromTranslate(origin.x(), origin.y())
+		* p.transform()
+		* inverted;
+	return result.isInvertible()
+		? std::optional<QTransform>(result)
+		: std::nullopt;
+}
+
+[[nodiscard]] uint64 SyncRichPageRepaintGeneration(
+		not_null<HistoryMessageRichPage*> rich,
+		uint64 &ownerGeneration) {
+	auto &geometry = rich->repaintGeometry;
+	const auto page = rich->page.get();
+	if (geometry.page == page) {
+		return geometry.generation;
+	}
+	geometry.stale = geometry.stale.united(
+		MapRichPageRect(geometry, geometry.pending));
+	geometry.pending = QRect();
+	geometry.known = false;
+	geometry.page = page;
+	if (!++ownerGeneration) {
+		++ownerGeneration;
+	}
+	geometry.generation = ownerGeneration;
+	return geometry.generation;
+}
+
+void InvalidateRichPageRepaintGeometry(
+		not_null<HistoryMessageRichPage*> rich) {
+	auto &geometry = rich->repaintGeometry;
+	geometry.stale = geometry.stale.united(
+		MapRichPageRect(geometry, geometry.pending));
+	geometry.known = false;
+}
+
 [[nodiscard]] QMargins TopicButtonNameRepaintMargins() {
 	const auto inner = st::emojiSize;
 	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
@@ -601,8 +664,22 @@ Message::~Message() {
 
 void HistoryMessageRichPage::Host::requestRepaint(QRect articleRect) {
 	if (const auto strong = owner.get()) {
-		crl::on_main(strong, [weak = owner, articleRect] {
-			if (const auto owner = weak.get()) {
+		const auto rich = strong->richpage();
+		if (!rich || rich->host.get() != this) {
+			return;
+		}
+		crl::on_main(strong, [
+				weak = owner,
+				alive = std::weak_ptr<bool>(lifetime),
+				host = this,
+				page = rich->page,
+				articleRect] {
+			const auto owner = weak.get();
+			const auto rich = owner ? owner->richpage() : nullptr;
+			if (!alive.expired()
+				&& rich
+				&& rich->host.get() == host
+				&& rich->page == page) {
 				owner->requestRichPageRepaint(articleRect);
 			}
 		});
@@ -611,8 +688,22 @@ void HistoryMessageRichPage::Host::requestRepaint(QRect articleRect) {
 
 void HistoryMessageRichPage::Host::requestRelayout(QRect articleRect) {
 	if (const auto strong = owner.get()) {
-		crl::on_main(strong, [weak = owner, articleRect] {
-			if (const auto owner = weak.get()) {
+		const auto rich = strong->richpage();
+		if (!rich || rich->host.get() != this) {
+			return;
+		}
+		crl::on_main(strong, [
+				weak = owner,
+				alive = std::weak_ptr<bool>(lifetime),
+				host = this,
+				page = rich->page,
+				articleRect] {
+			const auto owner = weak.get();
+			const auto rich = owner ? owner->richpage() : nullptr;
+			if (!alive.expired()
+				&& rich
+				&& rich->host.get() == host
+				&& rich->page == page) {
 				owner->requestRichPageRelayout(articleRect);
 			}
 		});
@@ -639,13 +730,53 @@ bool Message::hasRichPage() const {
 }
 
 void Message::requestRichPageRepaint(QRect articleRect) const {
-	Q_UNUSED(articleRect);
-	repaint();
+	requestRichPageRepaint(articleRect, 0);
+}
+
+void Message::requestRichPageRepaint(
+		QRect articleRect,
+		uint64 generation) const {
+	const auto rich = const_cast<Message*>(this)->richpage();
+	if (!rich || isHidden()) {
+		return;
+	}
+	const auto currentGeneration = SyncRichPageRepaintGeneration(
+		rich,
+		_richPageRepaintGeneration);
+	if (generation && generation != currentGeneration) {
+		return;
+	} else if (articleRect.isEmpty()) {
+		repaint();
+		return;
+	}
+	auto &geometry = rich->repaintGeometry;
+	if (geometry.known
+		&& geometry.layoutWidth != rich->article.lastLayoutWidth()) {
+		InvalidateRichPageRepaintGeometry(rich);
+	}
+	if (!geometry.known) {
+		geometry.pending = geometry.pending.united(articleRect);
+		repaint();
+		return;
+	}
+	const auto clipped = articleRect.intersected(
+		QRect(QPoint(), geometry.articleSize));
+	if (clipped.isEmpty()) {
+		return;
+	}
+	geometry.pending = geometry.pending.united(clipped);
+	const auto mapped = MapRichPageRect(geometry, clipped);
+	if (mapped.isEmpty()) {
+		repaint();
+		return;
+	}
+	repaint(mapped);
 }
 
 void Message::requestRichPageRelayout(QRect articleRect) {
 	Q_UNUSED(articleRect);
 	if (const auto rich = const_cast<Message*>(this)->richpage()) {
+		InvalidateRichPageRepaintGeometry(rich);
 		rich->article.invalidateLayout();
 	}
 	// The article layout was just invalidated, but textHeightFor() caches by
@@ -3394,11 +3525,73 @@ void Message::paintText(
 	}
 }
 
+uint64 Message::recordRichPageRepaintGeometry(
+		const Painter &p,
+		const PaintContext &context,
+		not_null<HistoryMessageRichPage*> rich,
+		QRect rect) const {
+	const auto generation = SyncRichPageRepaintGeneration(
+		rich,
+		_richPageRepaintGeneration);
+	if (!context.hasElementPainter(p)) {
+		return generation;
+	}
+	auto &geometry = rich->repaintGeometry;
+	const auto transform = rect.isEmpty()
+		? std::optional<QTransform>()
+		: RichPageArticleTransform(p, context, rect.topLeft());
+	if (!transform) {
+		InvalidateRichPageRepaintGeometry(rich);
+		return generation;
+	}
+	const auto layoutWidth = rich->article.lastLayoutWidth();
+	const auto moved = geometry.known
+		&& (geometry.articleSize != rect.size()
+			|| geometry.layoutWidth != layoutWidth
+			|| geometry.articleToElement != *transform);
+	auto previous = geometry.stale;
+	if (moved) {
+		previous = previous.united(
+			MapRichPageRect(geometry, geometry.pending));
+	}
+	geometry.articleToElement = *transform;
+	geometry.articleSize = rect.size();
+	geometry.layoutWidth = layoutWidth;
+	geometry.known = true;
+	const auto current = (moved || !geometry.stale.isEmpty())
+		? MapRichPageRect(geometry, geometry.pending)
+		: QRect();
+	geometry.pending = QRect();
+	geometry.stale = QRect();
+	const auto damage = previous.united(current);
+	if (!damage.isEmpty()) {
+		repaint(damage);
+	}
+	return generation;
+}
+
 void Message::paintRichText(
 		Painter &p,
 		not_null<HistoryMessageRichPage*> rich,
 		QRect rect,
 		const PaintContext &context) const {
+	const auto repaintGeneration = recordRichPageRepaintGeometry(
+		p,
+		context,
+		rich,
+		rect);
+	auto repaintRect = Fn<void(QRect)>();
+	if (context.hasElementPainter(p)) {
+		repaintRect = [
+				weak = base::make_weak(const_cast<Message*>(this)),
+				repaintGeneration](QRect articleRect) {
+			if (const auto owner = weak.get()) {
+				owner->requestRichPageRepaint(
+					articleRect,
+					repaintGeneration);
+			}
+		};
+	}
 	const auto stm = context.messageStyle();
 	const auto paletteVersion = context.st->paletteVersion();
 	if (rich->paletteVersion != paletteVersion) {
@@ -3446,17 +3639,14 @@ void Message::paintRichText(
 		.pathShiftGradient = delegate()->elementPathShiftGradient().get(),
 		.colors = context.st->highlightColors(),
 		.st = &stm->richPageStyle,
-		.repaint = [weak = base::make_weak(const_cast<Message*>(this))] {
+		.repaint = [
+				weak = base::make_weak(const_cast<Message*>(this)),
+				repaintGeneration] {
 			if (const auto owner = weak.get()) {
-				owner->requestRichPageRepaint(QRect());
+				owner->requestRichPageRepaint(QRect(), repaintGeneration);
 			}
 		},
-		.repaintRect = [weak = base::make_weak(const_cast<Message*>(this))](
-				QRect articleRect) {
-			if (const auto owner = weak.get()) {
-				owner->requestRichPageRepaint(articleRect);
-			}
-		},
+		.repaintRect = std::move(repaintRect),
 	};
 	auto revealPostprocess
 		= std::optional<Iv::Markdown::MarkdownArticleRevealPostprocess>();

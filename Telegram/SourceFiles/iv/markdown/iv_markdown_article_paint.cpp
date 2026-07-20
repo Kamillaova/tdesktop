@@ -137,10 +137,44 @@ void UpdateResolvedImage(
 	*current = next;
 }
 
+[[nodiscard]] auto RefreshBlockImageRepaint(
+		const LaidOutBlock &block,
+		const MarkdownArticlePaintContext &context)
+-> std::shared_ptr<BlockImageRepaintState> {
+	if (!block.imageRepaint) {
+		block.imageRepaint = std::make_shared<BlockImageRepaintState>();
+	}
+	block.imageRepaint->repaint = context.caches.repaint;
+	block.imageRepaint->rect = block.mediaRect;
+	if (context.caches.repaintRect) {
+		block.imageRepaint->repaintRect = context.caches.repaintRect;
+	}
+	return block.imageRepaint;
+}
+
+void SubscribeToBlockImageUpdates(
+		const std::shared_ptr<Ui::DynamicImage> &image,
+		const std::shared_ptr<BlockImageRepaintState> &repaintState) {
+	image->subscribeToUpdates([
+			weak = std::weak_ptr<BlockImageRepaintState>(repaintState)] {
+		const auto state = weak.lock();
+		if (!state) {
+			return;
+		}
+		const auto repaint = state->repaint;
+		const auto repaintRect = state->repaintRect;
+		const auto rect = state->rect;
+		if (repaintRect && !rect.isEmpty()) {
+			repaintRect(rect);
+		} else if (repaint) {
+			repaint();
+		}
+	});
+}
+
 template <typename RequestImage>
 void RefreshResolvedBlockImage(
-		const LaidOutBlock &block,
-		const MarkdownArticlePaintContext &context,
+		const std::shared_ptr<BlockImageRepaintState> &repaintState,
 		QSize size,
 		QSize *requestedSize,
 		std::shared_ptr<Ui::DynamicImage> *current,
@@ -162,16 +196,7 @@ void RefreshResolvedBlockImage(
 		return;
 	}
 	*subscribed = image;
-	const auto repaint = context.caches.repaint;
-	const auto repaintRect = context.caches.repaintRect;
-	const auto rect = block.mediaRect;
-	image->subscribeToUpdates([repaint, repaintRect, rect] {
-		if (repaintRect && !rect.isEmpty()) {
-			repaintRect(rect);
-		} else if (repaint) {
-			repaint();
-		}
-	});
+	SubscribeToBlockImageUpdates(image, repaintState);
 }
 
 [[nodiscard]] bool PaintRelatedArticleImage(
@@ -668,6 +693,7 @@ void PaintDetailsIcon(
 void RefreshBlockThumbnail(
 		const LaidOutBlock &block,
 		const MarkdownArticlePaintContext &context) {
+	const auto repaintState = RefreshBlockImageRepaint(block, context);
 	if (!block.photoRuntime || block.thumbnailRect.isEmpty()) {
 		return;
 	}
@@ -685,16 +711,7 @@ void RefreshBlockThumbnail(
 		}
 		if (image != block.subscribedThumbnailImage) {
 			block.subscribedThumbnailImage = image;
-			const auto repaint = context.caches.repaint;
-			const auto repaintRect = context.caches.repaintRect;
-			const auto rect = block.mediaRect;
-			image->subscribeToUpdates([repaint, repaintRect, rect] {
-				if (repaintRect && !rect.isEmpty()) {
-					repaintRect(rect);
-				} else if (repaint) {
-					repaint();
-				}
-			});
+			SubscribeToBlockImageUpdates(image, repaintState);
 		}
 	}
 }
@@ -702,6 +719,7 @@ void RefreshBlockThumbnail(
 void RefreshRelatedArticleImages(
 		const LaidOutBlock &block,
 		const MarkdownArticlePaintContext &context) {
+	const auto repaintState = RefreshBlockImageRepaint(block, context);
 	if (!block.photoRuntime || block.thumbnailRect.isEmpty()) {
 		return;
 	}
@@ -709,8 +727,7 @@ void RefreshRelatedArticleImages(
 		block.thumbnailRect.size(),
 		context.mediaPixelScale);
 	RefreshResolvedBlockImage(
-		block,
-		context,
+		repaintState,
 		size,
 		&block.thumbnailRequestSize,
 		&block.thumbnailImage,
@@ -720,8 +737,7 @@ void RefreshRelatedArticleImages(
 			return block.photoRuntime->thumbnail(requested);
 		});
 	RefreshResolvedBlockImage(
-		block,
-		context,
+		repaintState,
 		size,
 		&block.fullRequestSize,
 		&block.fullImage,

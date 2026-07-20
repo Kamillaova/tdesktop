@@ -12,8 +12,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "iv/markdown/iv_markdown_article.h"
 #include "ui/effects/animations.h"
 
+#include <QtGui/QTransform>
+
 class HistoryItem;
-class QTransform;
 struct HistoryMessageEdited;
 struct HistoryMessageForwarded;
 struct HistoryMessageReplyMarkup;
@@ -84,8 +85,20 @@ struct HistoryMessageRichPage
 : RuntimeComponent<HistoryMessageRichPage, Element> {
 	HistoryMessageRichPage();
 
+	struct RepaintGeometry {
+		QTransform articleToElement;
+		QSize articleSize;
+		QRect pending;
+		QRect stale;
+		const Iv::RichPage *page = nullptr;
+		uint64 generation = 0;
+		int layoutWidth = -1;
+		bool known = false;
+	};
+
 	struct Host final : Iv::Markdown::MediaBlockHost {
 		base::weak_ptr<Message> owner;
+		std::shared_ptr<bool> lifetime = std::make_shared<bool>();
 
 		void requestRepaint(QRect articleRect) override;
 		void requestRelayout(QRect articleRect) override;
@@ -102,6 +115,7 @@ struct HistoryMessageRichPage
 	Iv::Markdown::MarkdownArticle article;
 	Iv::Markdown::MarkdownArticleThinkingPaintCache thinkingPaintCache;
 	rpl::lifetime highlightReadyLifetime;
+	mutable RepaintGeometry repaintGeometry;
 	int paletteVersion = -1;
 	mutable ClickHandlerPtr handler;
 	mutable std::optional<Iv::Markdown::MarkdownArticleHorizontalScrollHit> handlerHorizontalScrollHit;
@@ -406,6 +420,14 @@ private:
 		not_null<HistoryMessageRichPage*> rich,
 		QRect rect,
 		const PaintContext &context) const;
+	void requestRichPageRepaint(
+		QRect articleRect,
+		uint64 generation) const;
+	[[nodiscard]] uint64 recordRichPageRepaintGeometry(
+		const Painter &p,
+		const PaintContext &context,
+		not_null<HistoryMessageRichPage*> rich,
+		QRect rect) const;
 
 	bool getStateCommentsButton(
 		QPoint point,
@@ -547,6 +569,7 @@ private:
 	mutable std::unique_ptr<ViewButton> _viewButton;
 	std::unique_ptr<TopicButton> _topicButton;
 	uint64 _topicButtonGeneration = 0;
+	mutable uint64 _richPageRepaintGeneration = 0;
 	mutable std::unique_ptr<TopicButtonRippleRepaint>
 		_topicButtonRippleRepaint;
 	mutable std::unique_ptr<LinkRipple> _linkRipple;

@@ -92,6 +92,12 @@ struct LaidOutBlockLogicalGeometry {
 	QPoint markerCenter;
 };
 
+struct BlockImageRepaintState {
+	Fn<void()> repaint;
+	Fn<void(QRect)> repaintRect;
+	QRect rect;
+};
+
 struct LaidOutBlock {
 	PreparedBlockKind kind = PreparedBlockKind::Paragraph;
 	Ui::Text::String leaf;
@@ -189,6 +195,7 @@ struct LaidOutBlock {
 	mutable std::shared_ptr<Ui::DynamicImage> fullImage;
 	mutable std::shared_ptr<Ui::DynamicImage> previousFullImage;
 	mutable std::shared_ptr<Ui::DynamicImage> subscribedFullImage;
+	mutable std::shared_ptr<BlockImageRepaintState> imageRepaint;
 	mutable QSize fullRequestSize;
 	mutable QImage colorizedFormulaImage;
 	mutable QColor colorizedFormulaColor;
