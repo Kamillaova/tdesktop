@@ -201,6 +201,7 @@ bool Photo::hasHeavyPart() const {
 }
 
 void Photo::unloadHeavyPart() {
+	clearRadialAnimationRepaintRect();
 	stopAnimation();
 	_dataMedia = nullptr;
 	if (_spoiler) {
@@ -232,6 +233,7 @@ void Photo::togglePollingStory(bool enabled) const {
 }
 
 QSize Photo::countOptimalSize() {
+	clearRadialAnimationRepaintRect();
 	if (_serviceWidth > 0) {
 		return { int(_serviceWidth), int(_serviceWidth) };
 	}
@@ -269,6 +271,7 @@ QSize Photo::countOptimalSize() {
 }
 
 QSize Photo::countCurrentSize(int newWidth) {
+	clearRadialAnimationRepaintRect();
 	if (_serviceWidth) {
 		return { int(_serviceWidth), int(_serviceWidth) };
 	}
@@ -341,9 +344,9 @@ int Photo::adjustHeightForLessCrop(QSize dimensions, QSize current) const {
 }
 
 void Photo::draw(Painter &p, const PaintContext &context) const {
-	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
-		return;
-	} else if (_storyId && _data->isNull()) {
+	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1
+		|| (_storyId && _data->isNull())) {
+		recordRadialAnimationRepaintRect(p, context, QRect());
 		return;
 	}
 
@@ -486,6 +489,7 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 			_parent->drawRightAction(p, context, fastShareLeft, fastShareTop, 2 * paintx + paintw);
 		}
 	}
+	recordRadialAnimationRepaintRect(p, context, rthumb);
 }
 
 void Photo::drawSpoilerTag(
@@ -788,6 +792,7 @@ TextState Photo::textState(QPoint point, StateRequest request) const {
 }
 
 QSize Photo::sizeForGroupingOptimal(int maxWidth, bool last) const {
+	clearRadialAnimationRepaintRect();
 	const auto size = photoSize();
 	return { std::max(size.width(), 1), std::max(size.height(), 1)};
 }
@@ -907,6 +912,7 @@ void Photo::drawGrouped(
 			_animation->radial.draw(p, rinner, line, sti->historyFileThumbRadialFg);
 		}
 	}
+	recordRadialAnimationRepaintRect(p, context, geometry);
 }
 
 TextState Photo::getStateGrouped(
