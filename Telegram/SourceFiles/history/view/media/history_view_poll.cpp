@@ -670,6 +670,10 @@ struct Poll::AnswerAnimation {
 struct Poll::AnswersAnimation {
 	std::vector<AnswerAnimation> data;
 	Ui::Animations::Simple progress;
+	QRegion repaintRegion;
+	QRegion collectedRepaintRegion;
+	bool repaintPending = false;
+	bool collectingRepaintRegion = false;
 };
 
 struct Poll::SendingAnimation {
@@ -1829,6 +1833,16 @@ struct Poll::Options : public Poll::Part {
 		const Answer &answer,
 		int innerWidth) const;
 	void resetAnswersAnimation() const;
+	void repaintAnswersAnimation() const;
+	void beginAnswersAnimationPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	void recordAnswersAnimationRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void finishAnswersAnimationPaint() const;
+	void repaintAnswersAnimationRegion(const QRegion &region) const;
 	void radialAnimationCallback() const;
 	void beginSendingAnimationPaint(
 		const Painter &p,
@@ -1934,6 +1948,18 @@ void Poll::Options::draw(
 	if (progress == 1.) {
 		resetAnswersAnimation();
 	}
+	beginAnswersAnimationPaint(p, context);
+	const auto choiceOverhang = (st::historyPollChoiceRight.height()
+		- st::historyPollFillingHeight) / 2;
+	recordAnswersAnimationRect(
+		p,
+		context,
+		QRect(0, 0, outerWidth, countHeight(innerWidth)).marginsAdded(
+			QMargins(
+				st::lineWidth,
+				st::lineWidth,
+				st::lineWidth,
+				choiceOverhang + 2 * st::lineWidth)));
 	beginSendingAnimationPaint(p, context);
 
 	auto tshift = 0;
@@ -1965,6 +1991,7 @@ void Poll::Options::draw(
 		tshift += height;
 	}
 	finishSendingAnimationPaint();
+	finishAnswersAnimationPaint();
 }
 
 TextState Poll::Options::textState(
@@ -3432,10 +3459,87 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 }
 
 void Poll::Options::resetAnswersAnimation() const {
-	_answersAnimation = nullptr;
+	if (_answersAnimation) {
+		const auto animation = base::take(_answersAnimation);
+		const auto repaintRegion = animation->repaintRegion.united(
+			animation->collectedRepaintRegion);
+		repaintAnswersAnimationRegion(repaintRegion);
+	}
 	if (_owner->_poll->sendingVotes.size() != 1
 		|| (_owner->_flags & PollData::Flag::MultiChoice)) {
 		resetSendingAnimation();
+	}
+}
+
+void Poll::Options::repaintAnswersAnimation() const {
+	if (!_answersAnimation) {
+		return;
+	}
+	auto &animation = *_answersAnimation;
+	if (animation.repaintPending) {
+		return;
+	}
+	animation.repaintPending = true;
+	if (animation.repaintRegion.isEmpty()) {
+		_owner->repaint();
+	} else {
+		repaintAnswersAnimationRegion(animation.repaintRegion);
+	}
+}
+
+void Poll::Options::beginAnswersAnimationPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	if (!_answersAnimation) {
+		return;
+	}
+	auto &animation = *_answersAnimation;
+	if (context.hasElementPainter(p)) {
+		animation.repaintPending = false;
+		animation.collectedRepaintRegion = QRegion();
+		animation.collectingRepaintRegion = true;
+	} else {
+		if (animation.repaintRegion.isEmpty()) {
+			animation.repaintPending = false;
+		}
+		animation.collectingRepaintRegion = false;
+	}
+}
+
+void Poll::Options::recordAnswersAnimationRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!_answersAnimation
+		|| !_answersAnimation->collectingRepaintRegion) {
+		return;
+	}
+	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+		_answersAnimation->collectedRepaintRegion += *mapped;
+	}
+}
+
+void Poll::Options::finishAnswersAnimationPaint() const {
+	if (!_answersAnimation
+		|| !_answersAnimation->collectingRepaintRegion) {
+		return;
+	}
+	auto &animation = *_answersAnimation;
+	animation.collectingRepaintRegion = false;
+	const auto previous = base::take(animation.repaintRegion);
+	animation.repaintRegion = base::take(
+		animation.collectedRepaintRegion);
+	if (previous == animation.repaintRegion || previous.isEmpty()) {
+		return;
+	}
+	animation.repaintPending = true;
+	repaintAnswersAnimationRegion(previous.united(animation.repaintRegion));
+}
+
+void Poll::Options::repaintAnswersAnimationRegion(
+		const QRegion &region) const {
+	for (const auto &rect : region) {
+		_owner->_parent->repaint(rect);
 	}
 }
 
@@ -4319,7 +4423,7 @@ void Poll::Options::startAnswersAnimation() const {
 		data.correct = data.correct || answer.correct;
 	}
 	_answersAnimation->progress.start(
-		[=] { _owner->repaint(); },
+		[=] { repaintAnswersAnimation(); },
 		0.,
 		1.,
 		st::historyPollDuration);
