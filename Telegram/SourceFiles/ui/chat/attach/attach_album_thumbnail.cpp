@@ -158,7 +158,13 @@ void AlbumThumbnail::setSpoiler(bool spoiler) {
 	Expects(_repaint != nullptr);
 
 	_spoiler = spoiler
-		? std::make_unique<SpoilerAnimation>(_repaint)
+		? std::make_unique<SpoilerAnimation>([=] {
+			if (!_lastRectOfSpoiler.isEmpty() && _repaintRect) {
+				_repaintRect(_lastRectOfSpoiler);
+			} else {
+				_repaint();
+			}
+		})
 		: nullptr;
 	_repaint();
 }
@@ -252,7 +258,8 @@ void AlbumThumbnail::paintInAlbum(
 		int top,
 		float64 shrinkProgress,
 		float64 moveProgress,
-		bool showHighQualityBadge) {
+		bool showHighQualityBadge,
+		bool rememberSpoilerRect) {
 	const auto shrink = anim::interpolate(0, _shrinkSize, shrinkProgress);
 	_lastShrinkValue = shrink;
 	const auto geometry = countCurrentGeometry(
@@ -278,6 +285,9 @@ void AlbumThumbnail::paintInAlbum(
 		if (_isVideo) {
 			paintPlayVideo(p, geometry);
 		}
+	}
+	if (rememberSpoilerRect) {
+		_lastRectOfSpoiler = _spoiler ? paintedTo : QRect();
 	}
 	if (revealed < 1.) {
 		auto corners = Images::CornersMaskRef(
@@ -499,6 +509,7 @@ void AlbumThumbnail::paintPhoto(
 		top,
 		pixmap.width() / pixmap.devicePixelRatio(),
 		pixmap.height() / pixmap.devicePixelRatio());
+	_lastRectOfSpoiler = _spoiler ? rect : QRect();
 	p.drawPixmapLeft(
 		left + (st::sendMediaPreviewSize - size.width()) / 2,
 		top,

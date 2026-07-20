@@ -54,7 +54,8 @@ public:
 		int top,
 		float64 shrinkProgress,
 		float64 moveProgress,
-		bool showHighQualityBadge);
+		bool showHighQualityBadge,
+		bool rememberSpoilerRect = true);
 	void paintPhoto(
 		Painter &p,
 		int left,
@@ -127,6 +128,7 @@ private:
 	Fn<void()> _repaint;
 	Fn<void(QRect)> _repaintRect;
 
+	QRect _lastRectOfSpoiler;
 	QRect _lastRectOfModify;
 	QRect _lastRectOfButtons;
 	QRect _lastRectOfCaption;

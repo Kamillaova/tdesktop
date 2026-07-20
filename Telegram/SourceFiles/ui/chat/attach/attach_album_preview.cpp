@@ -672,7 +672,14 @@ QImage AlbumPreview::generatePriceTagBackground() const {
 		p.translate(geometry.center());
 		p.scale(wscale, hscale);
 		p.translate(-geometry.center());
-		thumb->paintInAlbum(p, 0, 0, 1., 1., _sendWay.sendLargePhotos());
+		thumb->paintInAlbum(
+			p,
+			0,
+			0,
+			1.,
+			1.,
+			_sendWay.sendLargePhotos(),
+			false);
 		p.restore();
 	}
 	p.end();
