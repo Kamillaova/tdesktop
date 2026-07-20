@@ -248,6 +248,10 @@ public:
 	bool drawBubble() const override;
 	bool hasBubble() const override;
 	TopicButton *displayedTopicButton() const override;
+	void prepareTopicButtonNamePaint(
+		Painter &p,
+		const PaintContext &context,
+		QRect textRect) const override;
 	bool unwrapped() const override;
 	int minWidthForMedia() const override;
 	bool displayRightActionComments() const;
@@ -458,6 +462,14 @@ private:
 
 	void ensureRightAction() const;
 	void refreshTopicButton();
+	void resetTopicButton();
+	void repaintTopicButtonName(uint64 generation) const;
+	void recordTopicButtonNameRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect textRect) const;
+	void invalidateTopicButtonNameRepaint() const;
+	void repaintTopicButtonNameRegion(const QRegion &region) const;
 	void refreshInfoSkipBlock(HistoryItem *textItem);
 	[[nodiscard]] int monospaceMaxWidth() const;
 	[[nodiscard]] int bubbleTextWidth(int bubbleWidth) const;
@@ -515,6 +527,7 @@ private:
 	mutable ClickHandlerPtr _fastReplyLink;
 	mutable std::unique_ptr<ViewButton> _viewButton;
 	std::unique_ptr<TopicButton> _topicButton;
+	uint64 _topicButtonGeneration = 0;
 	mutable std::unique_ptr<LinkRipple> _linkRipple;
 	mutable QPoint _linkRippleLastPoint;
 	mutable std::unique_ptr<CommentsButton> _comments;

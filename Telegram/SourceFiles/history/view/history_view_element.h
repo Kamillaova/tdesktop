@@ -87,6 +87,11 @@ enum class OnlyEmojiAndSpaces : char {
 	No,
 };
 
+enum class CustomEmojiRepaintReset : bool {
+	No,
+	Yes,
+};
+
 struct SelectionModeResult {
 	bool inSelectionMode = false;
 	float64 progress = 0.0;
@@ -425,9 +430,18 @@ struct ViewAddedMargins : RuntimeComponent<ViewAddedMargins, Element> {
 };
 
 struct TopicButton {
+	struct NameRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	ClickHandlerPtr link;
 	Ui::Text::String name;
+	mutable NameRepaint nameRepaint;
 	QPoint lastPoint;
 	int nameVersion = 0;
 };
@@ -647,6 +661,10 @@ public:
 	[[nodiscard]] bool displayReply() const;
 	[[nodiscard]] virtual bool displayFromName() const;
 	[[nodiscard]] virtual TopicButton *displayedTopicButton() const;
+	virtual void prepareTopicButtonNamePaint(
+		Painter &p,
+		const PaintContext &context,
+		QRect textRect) const;
 	[[nodiscard]] virtual bool displayForwardedFrom() const;
 	[[nodiscard]] virtual bool hasOutLayout() const;
 	[[nodiscard]] bool hasRightLayout() const;
@@ -724,7 +742,9 @@ public:
 	void prepareCustomEmojiPaint(
 		Painter &p,
 		const PaintContext &context,
-		const Ui::Text::String &text) const;
+		const Ui::Text::String &text,
+		CustomEmojiRepaintReset repaintReset
+			= CustomEmojiRepaintReset::Yes) const;
 	void prepareCustomEmojiPaint(
 		Painter &p,
 		const PaintContext &context,

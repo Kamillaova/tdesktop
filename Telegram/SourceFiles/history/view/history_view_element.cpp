@@ -1576,11 +1576,14 @@ void Element::clearCustomEmojiRepaint() const {
 void Element::prepareCustomEmojiPaint(
 		Painter &p,
 		const PaintContext &context,
-		const Ui::Text::String &text) const {
+		const Ui::Text::String &text,
+		CustomEmojiRepaintReset repaintReset) const {
 	if (!text.hasPersistentAnimation()) {
 		return;
 	}
-	clearCustomEmojiRepaint();
+	if (repaintReset == CustomEmojiRepaintReset::Yes) {
+		clearCustomEmojiRepaint();
+	}
 	p.setInactive(context.paused);
 	if (!(_flags & Flag::HeavyCustomEmoji)) {
 		_flags |= Flag::HeavyCustomEmoji;
@@ -2814,6 +2817,12 @@ bool Element::displayFromName() const {
 
 TopicButton *Element::displayedTopicButton() const {
 	return nullptr;
+}
+
+void Element::prepareTopicButtonNamePaint(
+		Painter &,
+		const PaintContext &,
+		QRect) const {
 }
 
 bool Element::displayForwardedFrom() const {

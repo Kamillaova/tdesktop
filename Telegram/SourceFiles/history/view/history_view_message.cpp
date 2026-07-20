@@ -89,6 +89,15 @@ constexpr auto kLineHeightAppearDuration = crl::time(100);
 constexpr auto kLineHeightAppearFinalDuration = crl::time(60);
 constexpr auto kMinWidthAppearDuration = crl::time(160);
 
+[[nodiscard]] QMargins TopicButtonNameRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
 [[nodiscard]] int RevealLineRight(const Ui::Text::LineLayoutInfo &line) {
 	return line.left + line.width;
 }
@@ -564,6 +573,7 @@ Message::Message(
 }
 
 Message::~Message() {
+	resetTopicButton();
 	if (_comments || (_fromNameStatus && _fromNameStatus->custom)) {
 		_comments = nullptr;
 		_fromNameStatus = nullptr;
@@ -1279,6 +1289,7 @@ QRect Message::effectIconGeometry() const {
 }
 
 QSize Message::performCountOptimalSize() {
+	invalidateTopicButtonNameRepaint();
 	const auto item = data();
 
 	const auto replyData = item->Get<HistoryMessageReply>();
@@ -1610,10 +1621,10 @@ QSize Message::performCountOptimalSize() {
 void Message::refreshTopicButton() {
 	const auto item = data();
 	if (isAttachedToPrevious() || delegate()->elementHideTopicButton(this)) {
-		_topicButton = nullptr;
+		resetTopicButton();
 	} else if (const auto topic = item->topic()) {
 		if (topic->peer()->useSubsectionTabs()) {
-			_topicButton = nullptr;
+			resetTopicButton();
 			return;
 		}
 		if (!_topicButton) {
@@ -1622,10 +1633,18 @@ void Message::refreshTopicButton() {
 		const auto jumpToId = IsServerMsgId(item->id) ? item->id : MsgId();
 		_topicButton->link = MakeTopicButtonLink(topic, jumpToId);
 		if (_topicButton->nameVersion != topic->titleVersion()) {
+			invalidateTopicButtonNameRepaint();
 			_topicButton->nameVersion = topic->titleVersion();
+			const auto generation = ++_topicButtonGeneration;
+			_topicButton->nameRepaint.generation = generation;
+			const auto weak = base::make_weak(this);
 			const auto context = Core::TextContext({
 				.session = &history()->session(),
-				.repaint = [=] { customEmojiRepaint(); },
+				.repaint = [weak, generation] {
+					if (const auto strong = weak.get()) {
+						strong->repaintTopicButtonName(generation);
+					}
+				},
 				.customEmojiLoopLimit = 1,
 			});
 			_topicButton->name.setMarkedText(
@@ -1635,7 +1654,144 @@ void Message::refreshTopicButton() {
 				context);
 		}
 	} else {
-		_topicButton = nullptr;
+		resetTopicButton();
+	}
+}
+
+void Message::resetTopicButton() {
+	if (!_topicButton) {
+		return;
+	}
+	++_topicButtonGeneration;
+	_topicButton->nameRepaint = TopicButton::NameRepaint();
+	_topicButton = nullptr;
+}
+
+void Message::repaintTopicButtonName(uint64 generation) const {
+	const auto button = _topicButton.get();
+	if (!button
+		|| button->nameRepaint.generation != generation
+		|| _topicButtonGeneration != generation
+		|| button->nameRepaint.pending) {
+		return;
+	} else if (button->nameRepaint.known
+		&& button->nameRepaint.current.isEmpty()) {
+		return;
+	}
+	button->nameRepaint.pending = true;
+	if (!button->nameRepaint.known) {
+		repaint();
+	} else {
+		repaintTopicButtonNameRegion(button->nameRepaint.current);
+	}
+}
+
+void Message::prepareTopicButtonNamePaint(
+		Painter &p,
+		const PaintContext &context,
+		QRect textRect) const {
+	recordTopicButtonNameRepaint(p, context, textRect);
+	if (const auto button = displayedTopicButton()) {
+		prepareCustomEmojiPaint(
+			p,
+			context,
+			button->name,
+			CustomEmojiRepaintReset::No);
+	}
+}
+
+void Message::recordTopicButtonNameRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect textRect) const {
+	const auto button = _topicButton.get();
+	if (!button) {
+		return;
+	} else if (!context.hasElementPainter(p)) {
+		return;
+	}
+	button->nameRepaint.pending = false;
+	auto region = QRegion();
+	auto geometryKnown = true;
+	const auto customEmoji = button->name.hasCustomEmoji();
+	const auto animated = customEmoji || button->name.hasSpoilers();
+	if (animated && !textRect.isEmpty()) {
+		const auto lines = button->name.countLinesGeometry(textRect.width());
+		if (lines.empty()) {
+			geometryKnown = false;
+		} else {
+			const auto &line = lines.front();
+			const auto elided = (lines.size() > 1)
+				|| (button->name.maxWidth() > textRect.width());
+			auto lineLeft = std::clamp(line.left, 0, textRect.width());
+			auto lineWidth = std::clamp(line.width, 0, textRect.width());
+			if (elided) {
+				lineLeft = 0;
+				lineWidth = textRect.width();
+			} else if (line.rtl) {
+				lineLeft = textRect.width() - lineWidth;
+			} else {
+				lineWidth = std::min(
+					lineWidth,
+					textRect.width() - lineLeft);
+			}
+			const auto lineBottom = std::clamp(
+				line.bottom,
+				0,
+				textRect.height());
+			if (lineWidth <= 0 || lineBottom <= 0) {
+				geometryKnown = false;
+			} else {
+				auto lineRect = QRectF(
+					textRect.x() + lineLeft,
+					textRect.y(),
+					lineWidth,
+					lineBottom);
+				if (customEmoji) {
+					lineRect = lineRect.marginsAdded(
+						QMarginsF(TopicButtonNameRepaintMargins()));
+				}
+				const auto mapped = context.mapToElement(p, lineRect);
+				if (!mapped || mapped->isEmpty()) {
+					geometryKnown = false;
+				} else {
+					region += *mapped;
+				}
+			}
+		}
+	}
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(button->nameRepaint.stale);
+	const auto previous = stale.united(
+		base::take(button->nameRepaint.current));
+	button->nameRepaint.current = std::move(region);
+	button->nameRepaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty()
+			&& previous == button->nameRepaint.current)) {
+		return;
+	}
+	button->nameRepaint.pending = true;
+	repaintTopicButtonNameRegion(
+		previous.united(button->nameRepaint.current));
+}
+
+void Message::invalidateTopicButtonNameRepaint() const {
+	const auto button = _topicButton.get();
+	if (!button) {
+		return;
+	}
+	button->nameRepaint.stale = button->nameRepaint.stale.united(
+		base::take(button->nameRepaint.current));
+	button->nameRepaint.pending = false;
+	button->nameRepaint.known = false;
+}
+
+void Message::repaintTopicButtonNameRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		repaint(rect);
 	}
 }
 
@@ -1689,6 +1845,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	auto g = countGeometry();
 	if (g.width() < 1) {
 		recordTextRepaintRect(p, context, QRectF());
+		recordTopicButtonNameRepaint(p, context, QRect());
 		return;
 	}
 	const auto initialTransform = p.transform();
@@ -1739,6 +1896,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 
 	if (isHidden()) {
 		recordTextRepaintRect(p, context, QRectF());
+		recordTopicButtonNameRepaint(p, context, QRect());
 		return;
 	}
 
@@ -1938,6 +2096,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			trect.setHeight(trect.height() + st::msgPadding.bottom());
 		}
 		if (mediaOnTop) {
+			recordTopicButtonNameRepaint(p, context, QRect());
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
 			paintFromName(p, trect, context, initialTransform);
@@ -2744,14 +2903,19 @@ void Message::paintTopicButton(
 			button->ripple.reset();
 		}
 	}
-	clearCustomEmojiRepaint();
+	const auto textRect = QRect(
+		trect.x() + padding.left(),
+		trect.y() + padding.top(),
+		width - padding.left() - skip,
+		st::msgNameFont->height);
+	prepareTopicButtonNamePaint(p, context, textRect);
 	p.setPen(stm->msgServiceFg);
 	p.setTextPalette(stm->fwdTextPalette);
 	button->name.drawElided(
 		p,
-		trect.x() + padding.left(),
-		trect.y() + padding.top(),
-		width - padding.left() - skip);
+		textRect.x(),
+		textRect.y(),
+		textRect.width());
 
 	const auto &icon = st::topicButtonArrow;
 	icon.paint(
@@ -3751,6 +3915,10 @@ bool Message::hasHeavyPart() const {
 void Message::unloadHeavyPart() {
 	Element::unloadHeavyPart();
 	_comments = nullptr;
+	if (_topicButton) {
+		invalidateTopicButtonNameRepaint();
+		_topicButton->name.unloadPersistentAnimation();
+	}
 	if (_fromNameStatus) {
 		_fromNameStatus->custom = nullptr;
 		_fromNameStatus->id = EmojiStatusId();
@@ -6399,6 +6567,7 @@ Ui::BubbleRounding Message::countBubbleRounding() const {
 }
 
 int Message::resizeContentGetHeight(int newWidth) {
+	invalidateTopicButtonNameRepaint();
 	if (isHidden()) {
 		return marginTop() + marginBottom();
 	} else if (newWidth < st::msgMinWidth) {
