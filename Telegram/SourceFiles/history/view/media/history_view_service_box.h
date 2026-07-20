@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "history/view/media/history_view_media.h"
 
+#include <QtGui/QRegion>
+
 namespace Ui {
 class RippleAnimation;
 } // namespace Ui
@@ -108,8 +110,35 @@ public:
 	void unloadHeavyPart() override;
 
 private:
+	enum class TextPart {
+		Title,
+		Subtitle,
+	};
+
+	struct TextRepaint {
+		uint64 generation = 0;
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
 	[[nodiscard]] QRect buttonRect() const;
 	[[nodiscard]] QRect contentRect() const;
+
+	[[nodiscard]] Fn<void()> textRepaintCallback(
+		TextPart part,
+		uint64 generation);
+	void setSubtitle(const TextWithEntities &subtitle);
+	void repaintText(TextPart part, uint64 generation) const;
+	void finishTextRepaint(
+		TextRepaint &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const;
+	void invalidateTextRepaint(TextRepaint &repaint) const;
+	void repaintTextRegion(const QRegion &region) const;
 
 	void repaintButtonMinistars() const;
 	void recordButtonMinistarsRepaintRect(
@@ -143,6 +172,8 @@ private:
 		mutable bool starsRepaintPending = false;
 	} _button;
 
+	mutable TextRepaint _titleRepaint;
+	mutable TextRepaint _subtitleRepaint;
 	const int _maxWidth = 0;
 	Ui::Text::String _title;
 	Ui::Text::String _author;

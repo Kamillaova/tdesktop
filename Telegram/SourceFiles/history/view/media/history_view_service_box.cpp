@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animation_value.h"
 #include "ui/effects/premium_stars_colored.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
@@ -31,6 +32,39 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_layers.h"
 
 namespace HistoryView {
+namespace {
+
+[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
+[[nodiscard]] bool AddTextRepaintRect(
+		QRegion &region,
+		const Painter &p,
+		const PaintContext &context,
+		const Ui::Text::String &text,
+		QRectF rect) {
+	const auto customEmoji = text.hasCustomEmoji();
+	if (!customEmoji && !text.hasSpoilers()) {
+		return true;
+	}
+	if (customEmoji) {
+		rect = rect.marginsAdded(QMarginsF(CustomEmojiRepaintMargins()));
+	}
+	const auto mapped = context.mapToElement(p, rect);
+	if (!mapped || mapped->isEmpty()) {
+		return false;
+	}
+	region += *mapped;
+	return true;
+}
+
+} // namespace
 
 int ServiceBoxContent::width() {
 	return st::msgServiceGiftBoxSize.width();
@@ -53,7 +87,9 @@ ServiceBox::ServiceBox(
 	_maxWidth,
 	Core::TextContext({
 		.session = &parent->history()->session(),
-		.repaint = [parent] { parent->customEmojiRepaint(); },
+		.repaint = textRepaintCallback(
+			TextPart::Title,
+			++_titleRepaint.generation),
 	}))
 , _author(
 	st::uniqueGiftReleasedBy.style,
@@ -76,7 +112,9 @@ ServiceBox::ServiceBox(
 	_maxWidth,
 	Core::TextContext({
 		.session = &parent->history()->session(),
-		.repaint = [parent] { parent->customEmojiRepaint(); },
+		.repaint = textRepaintCallback(
+			TextPart::Subtitle,
+			++_subtitleRepaint.generation),
 	}))
 , _size(
 	_content->width(),
@@ -133,16 +171,29 @@ ServiceBox::ServiceBox(
 	}
 }
 
-ServiceBox::~ServiceBox() = default;
+ServiceBox::~ServiceBox() {
+	++_titleRepaint.generation;
+	++_subtitleRepaint.generation;
+}
 
-void ServiceBox::applyContentChanges() {
-	const auto subtitleWas = _subtitle.countHeight(_maxWidth);
+Fn<void()> ServiceBox::textRepaintCallback(
+		TextPart part,
+		uint64 generation) {
+	const auto weak = base::make_weak(this);
+	return [weak, part, generation] {
+		if (const auto strong = weak.get()) {
+			strong->repaintText(part, generation);
+		}
+	};
+}
 
-	const auto parent = _parent;
+void ServiceBox::setSubtitle(const TextWithEntities &subtitle) {
+	invalidateTextRepaint(_subtitleRepaint);
+	const auto generation = ++_subtitleRepaint.generation;
 	_subtitle = Ui::Text::String(
 		st::premiumPreviewAbout.style,
 		Ui::Text::Filtered(
-			_content->subtitle(),
+			subtitle,
 			{
 				EntityType::Bold,
 				EntityType::StrikeOut,
@@ -151,13 +202,22 @@ void ServiceBox::applyContentChanges() {
 				EntityType::Spoiler,
 				EntityType::CustomEmoji,
 			}),
-			kMarkupTextOptions,
-			_maxWidth,
-			Core::TextContext({
-				.session = &parent->history()->session(),
-				.repaint = [parent] { parent->customEmojiRepaint(); },
-			}));
-	InitElementTextPart(parent, _subtitle);
+		kMarkupTextOptions,
+		_maxWidth,
+		Core::TextContext({
+			.session = &_parent->history()->session(),
+			.repaint = textRepaintCallback(
+				TextPart::Subtitle,
+				generation),
+		}));
+	InitElementTextPart(_parent, _subtitle);
+}
+
+void ServiceBox::applyContentChanges() {
+	const auto subtitleWas = _subtitle.countHeight(_maxWidth);
+
+	const auto parent = _parent;
+	setSubtitle(_content->subtitle());
 	const auto subtitleNow = _subtitle.countHeight(_maxWidth);
 	if (subtitleNow != subtitleWas) {
 		_size.setHeight(_size.height() - subtitleWas + subtitleNow);
@@ -171,10 +231,14 @@ void ServiceBox::applyContentChanges() {
 }
 
 QSize ServiceBox::countOptimalSize() {
+	invalidateTextRepaint(_titleRepaint);
+	invalidateTextRepaint(_subtitleRepaint);
 	return _size;
 }
 
 QSize ServiceBox::countCurrentSize(int newWidth) {
+	invalidateTextRepaint(_titleRepaint);
+	invalidateTextRepaint(_subtitleRepaint);
 	return _size;
 }
 
@@ -215,11 +279,25 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 
 	const auto content = contentRect();
 	auto top = content.top() + content.height();
+	auto titleRepaintRegion = QRegion();
+	auto titleRepaintKnown = context.hasElementPainter(p);
 	{
 		p.setPen(context.st->msgServiceFg());
 		const auto &padding = st::msgServiceGiftBoxTitlePadding;
 		top += padding.top();
 		if (!_title.isEmpty()) {
+			const auto titleHeight = _title.countHeight(_maxWidth);
+			titleRepaintKnown = titleRepaintKnown
+				&& AddTextRepaintRect(
+					titleRepaintRegion,
+					p,
+					context,
+					_title,
+					QRectF(
+						st::msgPadding.left(),
+						top,
+						_maxWidth,
+						titleHeight));
 			_parent->prepareCustomEmojiPaint(p, context, _title);
 			_title.draw(p, {
 				.position = QPoint(st::msgPadding.left(), top),
@@ -231,8 +309,14 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			});
-			top += _title.countHeight(_maxWidth) + padding.bottom();
+			top += titleHeight + padding.bottom();
 		}
+		finishTextRepaint(
+			_titleRepaint,
+			p,
+			context,
+			std::move(titleRepaintRegion),
+			titleRepaintKnown);
 		if (!_author.isEmpty()) {
 			auto hq = PainterHighQualityEnabler(p);
 			p.setPen(Qt::NoPen);
@@ -264,6 +348,20 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 
 			top += height + st::msgServiceGiftBoxTitlePadding.bottom();
 		}
+		auto subtitleRepaintRegion = QRegion();
+		auto subtitleRepaintKnown = context.hasElementPainter(p);
+		const auto subtitleHeight = _subtitle.countHeight(_maxWidth);
+		subtitleRepaintKnown = subtitleRepaintKnown
+			&& AddTextRepaintRect(
+				subtitleRepaintRegion,
+				p,
+				context,
+				_subtitle,
+				QRectF(
+					st::msgPadding.left(),
+					top,
+					_maxWidth,
+					subtitleHeight));
 		_parent->prepareCustomEmojiPaint(p, context, _subtitle);
 		_subtitle.draw(p, {
 			.position = QPoint(st::msgPadding.left(), top),
@@ -275,7 +373,13 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		});
-		top += _subtitle.countHeight(_maxWidth) + padding.bottom();
+		top += subtitleHeight + padding.bottom();
+		finishTextRepaint(
+			_subtitleRepaint,
+			p,
+			context,
+			std::move(subtitleRepaintRegion),
+			subtitleRepaintKnown);
 	}
 
 	if (!_button.empty()) {
@@ -434,6 +538,8 @@ bool ServiceBox::hasHeavyPart() const {
 
 void ServiceBox::unloadHeavyPart() {
 	_content->unloadHeavyPart();
+	_title.unloadPersistentAnimation();
+	_subtitle.unloadPersistentAnimation();
 }
 
 QRect ServiceBox::buttonRect() const {
@@ -448,6 +554,63 @@ QRect ServiceBox::contentRect() const {
 	const auto size = _content->size();
 	const auto top = _content->top();
 	return QRect(QPoint((width() - size.width()) / 2, top), size);
+}
+
+void ServiceBox::repaintText(TextPart part, uint64 generation) const {
+	auto &repaint = (part == TextPart::Title)
+		? _titleRepaint
+		: _subtitleRepaint;
+	if (generation != repaint.generation || repaint.pending) {
+		return;
+	} else if (repaint.known && repaint.current.isEmpty()) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		_parent->customEmojiRepaint();
+	} else {
+		repaintTextRegion(repaint.current);
+	}
+}
+
+void ServiceBox::finishTextRepaint(
+		TextRepaint &repaint,
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const {
+	if (!context.hasElementPainter(p)) {
+		if (!repaint.known) {
+			repaint.pending = false;
+		}
+		return;
+	}
+	repaint.pending = false;
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.current = std::move(region);
+	repaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintTextRegion(previous.united(repaint.current));
+}
+
+void ServiceBox::invalidateTextRepaint(TextRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void ServiceBox::repaintTextRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
 }
 
 void ServiceBox::repaintButtonMinistars() const {
