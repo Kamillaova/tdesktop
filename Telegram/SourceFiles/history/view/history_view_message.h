@@ -301,6 +301,14 @@ private:
 	struct LinkRipple;
 	struct FromNameStatus;
 	struct RightAction;
+	struct TopicButtonRippleRepaint {
+		QRegion current;
+		QRegion stale;
+		QSize maskSize;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	void refreshDataIdHook() override;
 	bool hasHeavyPart() const override;
@@ -463,6 +471,17 @@ private:
 	void ensureRightAction() const;
 	void refreshTopicButton();
 	void resetTopicButton();
+	void clearTopicButtonRipple() const;
+	void repaintTopicButtonRipple(uint64 generation) const;
+	void recordTopicButtonRippleRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void invalidateTopicButtonRippleRepaint() const;
+	void repaintTopicButtonRippleRegion(const QRegion &region) const;
+	[[nodiscard]] uint64 resetTopicButtonRippleRepaint() const;
+	[[nodiscard]] auto ensureTopicButtonRippleRepaint() const
+	-> TopicButtonRippleRepaint &;
 	void repaintTopicButtonName(uint64 generation) const;
 	void recordTopicButtonNameRepaint(
 		const Painter &p,
@@ -528,6 +547,8 @@ private:
 	mutable std::unique_ptr<ViewButton> _viewButton;
 	std::unique_ptr<TopicButton> _topicButton;
 	uint64 _topicButtonGeneration = 0;
+	mutable std::unique_ptr<TopicButtonRippleRepaint>
+		_topicButtonRippleRepaint;
 	mutable std::unique_ptr<LinkRipple> _linkRipple;
 	mutable QPoint _linkRippleLastPoint;
 	mutable std::unique_ptr<CommentsButton> _comments;

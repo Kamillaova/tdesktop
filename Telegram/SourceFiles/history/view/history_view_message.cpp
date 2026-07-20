@@ -98,6 +98,24 @@ constexpr auto kMinWidthAppearDuration = crl::time(160);
 	return { before, before, after, after };
 }
 
+[[nodiscard]] QSize TopicButtonSize(
+		int availableWidth,
+		const Ui::Text::String &name) {
+	const auto padding = st::topicButtonPadding;
+	const auto height = padding.top()
+		+ st::msgNameFont->height
+		+ padding.bottom();
+	const auto width = std::max(
+		std::min(
+			availableWidth,
+			padding.left()
+				+ name.maxWidth()
+				+ st::topicButtonArrowSkip
+				+ padding.right()),
+		height);
+	return { width, height };
+}
+
 [[nodiscard]] int RevealLineRight(const Ui::Text::LineLayoutInfo &line) {
 	return line.left + line.width;
 }
@@ -1290,6 +1308,7 @@ QRect Message::effectIconGeometry() const {
 
 QSize Message::performCountOptimalSize() {
 	invalidateTopicButtonNameRepaint();
+	invalidateTopicButtonRippleRepaint();
 	const auto item = data();
 
 	const auto replyData = item->Get<HistoryMessageReply>();
@@ -1634,6 +1653,8 @@ void Message::refreshTopicButton() {
 		_topicButton->link = MakeTopicButtonLink(topic, jumpToId);
 		if (_topicButton->nameVersion != topic->titleVersion()) {
 			invalidateTopicButtonNameRepaint();
+			invalidateTopicButtonRippleRepaint();
+			clearTopicButtonRipple();
 			_topicButton->nameVersion = topic->titleVersion();
 			const auto generation = ++_topicButtonGeneration;
 			_topicButton->nameRepaint.generation = generation;
@@ -1662,9 +1683,112 @@ void Message::resetTopicButton() {
 	if (!_topicButton) {
 		return;
 	}
+	invalidateTopicButtonRippleRepaint();
+	clearTopicButtonRipple();
 	++_topicButtonGeneration;
 	_topicButton->nameRepaint = TopicButton::NameRepaint();
 	_topicButton = nullptr;
+}
+
+void Message::clearTopicButtonRipple() const {
+	if (!_topicButton || !_topicButton->ripple) {
+		return;
+	}
+	auto &repaint = ensureTopicButtonRippleRepaint();
+	repaint.maskSize = QSize();
+	repaint.pending = false;
+	++repaint.generation;
+	_topicButton->ripple = nullptr;
+}
+
+void Message::repaintTopicButtonRipple(uint64 generation) const {
+	const auto repaint = _topicButtonRippleRepaint.get();
+	if (!_topicButton
+		|| !_topicButton->ripple
+		|| !repaint
+		|| repaint->generation != generation
+		|| repaint->pending
+		|| (repaint->known && repaint->current.isEmpty())) {
+		return;
+	}
+	repaint->pending = true;
+	if (!repaint->known) {
+		this->repaint();
+	} else {
+		repaintTopicButtonRippleRegion(repaint->current);
+	}
+}
+
+void Message::recordTopicButtonRippleRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	} else if (!_topicButtonRippleRepaint && rect.isEmpty()) {
+		return;
+	}
+	auto &repaint = ensureTopicButtonRippleRepaint();
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintTopicButtonRippleRegion(previous.united(repaint.current));
+}
+
+void Message::invalidateTopicButtonRippleRepaint() const {
+	if (const auto repaint = _topicButtonRippleRepaint.get()) {
+		repaint->stale = repaint->stale.united(base::take(repaint->current));
+		repaint->pending = false;
+		repaint->known = false;
+	}
+}
+
+void Message::repaintTopicButtonRippleRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		repaint(rect);
+	}
+}
+
+uint64 Message::resetTopicButtonRippleRepaint() const {
+	auto &repaint = ensureTopicButtonRippleRepaint();
+	repaint.pending = false;
+	if (repaint.current.isEmpty()) {
+		repaint.known = false;
+	}
+	return ++repaint.generation;
+}
+
+auto Message::ensureTopicButtonRippleRepaint() const
+-> TopicButtonRippleRepaint & {
+	if (!_topicButtonRippleRepaint) {
+		_topicButtonRippleRepaint
+			= std::make_unique<TopicButtonRippleRepaint>();
+	}
+	return *_topicButtonRippleRepaint;
 }
 
 void Message::repaintTopicButtonName(uint64 generation) const {
@@ -1846,6 +1970,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	if (g.width() < 1) {
 		recordTextRepaintRect(p, context, QRectF());
 		recordTopicButtonNameRepaint(p, context, QRect());
+		recordTopicButtonRippleRepaint(p, context, QRect());
 		return;
 	}
 	const auto initialTransform = p.transform();
@@ -1897,6 +2022,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	if (isHidden()) {
 		recordTextRepaintRect(p, context, QRectF());
 		recordTopicButtonNameRepaint(p, context, QRect());
+		recordTopicButtonRippleRepaint(p, context, QRect());
 		return;
 	}
 
@@ -2097,6 +2223,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 		if (mediaOnTop) {
 			recordTopicButtonNameRepaint(p, context, QRect());
+			recordTopicButtonRippleRepaint(p, context, QRect());
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
 			paintFromName(p, trect, context, initialTransform);
@@ -2291,6 +2418,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 	} else if (media && media->isDisplayed()) {
 		recordTextRepaintRect(p, context, QRectF());
+		recordTopicButtonRippleRepaint(p, context, QRect());
 		p.translate(g.topLeft());
 		media->draw(p, context.translated(
 			-g.topLeft()
@@ -2305,6 +2433,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		p.translate(-g.topLeft());
 	} else {
 		recordTextRepaintRect(p, context, QRectF());
+		recordTopicButtonRippleRepaint(p, context, QRect());
 	}
 
 	p.restoreTextPalette();
@@ -2864,23 +2993,24 @@ void Message::paintTopicButton(
 		const PaintContext &context) const {
 	const auto button = displayedTopicButton();
 	if (!button) {
+		recordTopicButtonRippleRepaint(p, context, QRect());
 		return;
 	}
 	trect.setTop(trect.top() + st::topicButtonSkip);
 	const auto padding = st::topicButtonPadding;
-	const auto availableWidth = trect.width();
-	const auto height = padding.top()
-		+ st::msgNameFont->height
-		+ padding.bottom();
-	const auto width = std::max(
-		std::min(
-			availableWidth,
-			(padding.left()
-				+ button->name.maxWidth()
-				+ st::topicButtonArrowSkip
-				+ padding.right())),
-		height);
-	const auto rect = QRect(trect.x(), trect.y(), width, height);
+	const auto size = TopicButtonSize(trect.width(), button->name);
+	const auto width = size.width();
+	const auto height = size.height();
+	const auto rect = QRect(trect.topLeft(), size);
+	const auto canonical = context.hasElementPainter(p);
+	if (canonical
+		&& button->ripple
+		&& _topicButtonRippleRepaint
+		&& _topicButtonRippleRepaint->maskSize != rect.size()) {
+		invalidateTopicButtonRippleRepaint();
+		clearTopicButtonRipple();
+	}
+	recordTopicButtonRippleRepaint(p, context, rect);
 
 	const auto stm = context.messageStyle();
 	const auto skip = padding.right() + st::topicButtonArrowSkip;
@@ -2893,14 +3023,20 @@ void Message::paintTopicButton(
 		p.drawRoundedRect(rect, height / 2, height / 2);
 	}
 	if (button->ripple) {
+		p.save();
+		p.translate(rect.topLeft());
+		p.setClipRect(
+			QRect(QPoint(), rect.size()),
+			Qt::IntersectClip);
 		button->ripple->paint(
 			p,
-			rect.x(),
-			rect.y(),
-			this->width(),
+			0,
+			0,
+			rect.width(),
 			&color);
-		if (button->ripple->empty()) {
-			button->ripple.reset();
+		p.restore();
+		if (canonical && button->ripple->empty()) {
+			clearTopicButtonRipple();
 		}
 	}
 	const auto textRect = QRect(
@@ -3884,26 +4020,21 @@ void Message::createLinkRippleMask(
 
 void Message::createTopicButtonRipple() {
 	const auto geometry = countGeometry().marginsRemoved(st::msgPadding);
-	const auto availableWidth = geometry.width();
-	const auto padding = st::topicButtonPadding;
-	const auto height = padding.top()
-		+ st::msgNameFont->height
-		+ padding.bottom();
-	const auto width = std::max(
-		std::min(
-			availableWidth,
-			(padding.left()
-				+ _topicButton->name.maxWidth()
-				+ st::topicButtonArrowSkip
-				+ padding.right())),
-		height);
+	const auto size = TopicButtonSize(geometry.width(), _topicButton->name);
 	auto mask = Ui::RippleAnimation::RoundRectMask(
-		{ width, height },
-		height / 2);
+		size,
+		size.height() / 2);
+	const auto weak = base::make_weak(this);
+	const auto generation = resetTopicButtonRippleRepaint();
+	_topicButtonRippleRepaint->maskSize = size;
 	_topicButton->ripple = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		std::move(mask),
-		[=] { repaint(); });
+		[weak, generation] {
+			if (const auto strong = weak.get()) {
+				strong->repaintTopicButtonRipple(generation);
+			}
+		});
 }
 
 bool Message::hasHeavyPart() const {
@@ -4505,26 +4636,14 @@ bool Message::getStateTopicButton(
 		return false;
 	}
 	trect.setTop(trect.top() + st::topicButtonSkip);
-	const auto padding = st::topicButtonPadding;
-	const auto availableWidth = trect.width();
-	const auto height = padding.top()
-		+ st::msgNameFont->height
-		+ padding.bottom();
-	const auto width = std::max(
-		std::min(
-			availableWidth,
-			(padding.left()
-				+ _topicButton->name.maxWidth()
-				+ st::topicButtonArrowSkip
-				+ padding.right())),
-		height);
-	const auto rect = QRect(trect.x(), trect.y(), width, height);
+	const auto size = TopicButtonSize(trect.width(), _topicButton->name);
+	const auto rect = QRect(trect.topLeft(), size);
 	if (rect.contains(point)) {
 		outResult->link = _topicButton->link;
 		_topicButton->lastPoint = point - rect.topLeft();
 		return true;
 	}
-	trect.setY(trect.y() + height + st::topicButtonSkip);
+	trect.setY(trect.y() + size.height() + st::topicButtonSkip);
 	return false;
 }
 
@@ -6568,6 +6687,7 @@ Ui::BubbleRounding Message::countBubbleRounding() const {
 
 int Message::resizeContentGetHeight(int newWidth) {
 	invalidateTopicButtonNameRepaint();
+	invalidateTopicButtonRippleRepaint();
 	if (isHidden()) {
 		return marginTop() + marginBottom();
 	} else if (newWidth < st::msgMinWidth) {
