@@ -139,27 +139,44 @@ ServiceBox::ServiceBox(
 		+ st::msgServiceGiftBoxButtonMargins.bottom()))
 , _innerSize(_size - QSize(0, st::msgServiceGiftBoxTopSkip)) {
 	InitElementTextPart(_parent, _subtitle);
+	const auto weak = base::make_weak(this);
+	_button.repaint = [weak] {
+		if (const auto strong = weak.get()) {
+			strong->repaintButton();
+		}
+	};
 	if (auto text = _content->button()) {
-		_button.repaint = [=] { repaint(); };
 		std::move(text) | rpl::on_next([=](QString value) {
+			const auto sizeWas = _button.size;
 			_button.text.setText(st::semiboldTextStyle, value);
 			const auto height = st::msgServiceGiftBoxButtonHeight;
 			const auto &padding = st::msgServiceGiftBoxButtonPadding;
-			const auto empty = _button.size.isEmpty();
+			const auto empty = sizeWas.isEmpty();
 			_button.size = QSize(
 				(_button.text.maxWidth()
 					+ height
 					+ padding.left()
 					+ padding.right()),
 				height);
+			if (_button.size != sizeWas) {
+				invalidateButtonRepaint();
+				_button.ripple = nullptr;
+				if (_button.lastFg) {
+					*_button.lastFg = QColor();
+				}
+			}
 			if (!empty) {
-				repaint();
+				repaintButton();
 			}
 		}, _lifetime);
 	}
 	if (const auto type = _content->buttonMinistars()) {
 		_button.stars = std::make_unique<Ui::Premium::ColoredMiniStars>(
-			[=](const QRect &) { repaintButtonMinistars(); },
+			[weak](const QRect &) {
+				if (const auto strong = weak.get()) {
+					strong->repaintButton();
+				}
+			},
 			*type);
 		_button.lastFg = std::make_unique<QColor>();
 	}
@@ -233,12 +250,14 @@ void ServiceBox::applyContentChanges() {
 QSize ServiceBox::countOptimalSize() {
 	invalidateTextRepaint(_titleRepaint);
 	invalidateTextRepaint(_subtitleRepaint);
+	invalidateButtonRepaint();
 	return _size;
 }
 
 QSize ServiceBox::countCurrentSize(int newWidth) {
 	invalidateTextRepaint(_titleRepaint);
 	invalidateTextRepaint(_subtitleRepaint);
+	invalidateButtonRepaint();
 	return _size;
 }
 
@@ -385,14 +404,14 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 	if (!_button.empty()) {
 		const auto position = buttonRect().topLeft();
 		p.translate(position);
+		recordButtonRepaintRect(
+			p,
+			context,
+			Rect(_button.size).marginsAdded(Margins(st::lineWidth)));
 
 		p.setPen(Qt::NoPen);
 		p.setBrush(context.st->msgServiceBg()); // ?
 		if (const auto stars = _button.stars.get()) {
-			recordButtonMinistarsRepaintRect(
-				p,
-				context,
-				Rect(_button.size).marginsAdded(Margins(st::lineWidth)));
 			stars->setPaused(context.paused);
 		}
 		_button.drawBg(p);
@@ -404,7 +423,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 				p,
 				0,
 				0,
-				width(),
+				_button.size.width(),
 				&context.messageStyle()->msgWaveformInactive->c);
 			p.setOpacity(opacity);
 		}
@@ -416,6 +435,8 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 			style::al_top);
 
 		p.translate(-position);
+	} else {
+		recordButtonRepaintRect(p, context, QRect());
 	}
 
 	_content->draw(p, context, content);
@@ -613,38 +634,69 @@ void ServiceBox::repaintTextRegion(const QRegion &region) const {
 	}
 }
 
-void ServiceBox::repaintButtonMinistars() const {
-	if (_button.starsRepaintPending) {
+void ServiceBox::repaintButton() const {
+	auto &repaint = _button.animationRepaint;
+	if (repaint.pending
+		|| (repaint.known && repaint.current.isEmpty())) {
 		return;
 	}
-	_button.starsRepaintPending = true;
-	if (_button.starsRepaintRect.isEmpty()) {
-		repaint();
+	repaint.pending = true;
+	if (!repaint.known) {
+		this->repaint();
 	} else {
-		_parent->repaint(_button.starsRepaintRect);
+		repaintButtonRegion(repaint.current);
 	}
 }
 
-void ServiceBox::recordButtonMinistarsRepaintRect(
+void ServiceBox::recordButtonRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
 		QRect rect) const {
 	if (!context.hasElementPainter(p)) {
-		if (_button.starsRepaintRect.isEmpty()) {
-			_button.starsRepaintPending = false;
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	auto &repaint = _button.animationRepaint;
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.current = known ? std::move(current) : QRegion();
+	repaint.known = known;
+	if (!known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = true;
+			this->repaint();
 		}
 		return;
-	}
-	_button.starsRepaintPending = false;
-	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = _button.starsRepaintRect;
-	_button.starsRepaintRect = current;
-	if (previous.isEmpty() || previous == current) {
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
 		return;
 	}
-	_button.starsRepaintPending = true;
-	_parent->repaint(previous.united(current));
+	repaint.pending = true;
+	repaintButtonRegion(previous.united(repaint.current));
+}
+
+void ServiceBox::invalidateButtonRepaint() const {
+	auto &repaint = _button.animationRepaint;
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void ServiceBox::repaintButtonRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
 }
 
 void ServiceBox::Button::toggleRipple(bool pressed) {

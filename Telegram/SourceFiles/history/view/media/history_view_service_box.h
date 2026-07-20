@@ -122,6 +122,12 @@ private:
 		uint32 pending : 1 = 0;
 		uint32 known : 1 = 0;
 	};
+	struct ButtonRepaint {
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	[[nodiscard]] QRect buttonRect() const;
 	[[nodiscard]] QRect contentRect() const;
@@ -140,11 +146,13 @@ private:
 	void invalidateTextRepaint(TextRepaint &repaint) const;
 	void repaintTextRegion(const QRegion &region) const;
 
-	void repaintButtonMinistars() const;
-	void recordButtonMinistarsRepaintRect(
+	void repaintButton() const;
+	void recordButtonRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
 		QRect rect) const;
+	void invalidateButtonRepaint() const;
+	void repaintButtonRegion(const QRegion &region) const;
 
 	void applyContentChanges();
 
@@ -168,8 +176,7 @@ private:
 		std::unique_ptr<QColor> lastFg;
 
 		mutable QPoint lastPoint;
-		mutable QRect starsRepaintRect;
-		mutable bool starsRepaintPending = false;
+		mutable ButtonRepaint animationRepaint;
 	} _button;
 
 	mutable TextRepaint _titleRepaint;
