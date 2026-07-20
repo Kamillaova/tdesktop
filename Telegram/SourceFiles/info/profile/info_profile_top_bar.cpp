@@ -2593,7 +2593,7 @@ void TopBar::paintUserpic(QPainter &p, const QRect &geometry) {
 		if (!frame.isNull()) {
 			auto hq = PainterHighQualityEnabler(p);
 			p.drawImage(geometry, frame);
-			update();
+			update(geometry);
 			return;
 		}
 	}
