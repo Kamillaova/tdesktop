@@ -972,7 +972,7 @@ void Document::draw(
 			}
 		}
 
-		drawCornerDownload(p, context, mode);
+		drawCornerDownload(p, context, width, mode);
 	}
 	auto namewidth = width - nameleft - nameright;
 	auto statuswidth = namewidth;
@@ -1212,6 +1212,7 @@ bool Document::downloadInCorner() const {
 void Document::drawCornerDownload(
 		Painter &p,
 		const PaintContext &context,
+		int width,
 		LayoutMode mode) const {
 	if (dataLoaded()
 		|| _data->loadedInMediaCache()
@@ -1226,7 +1227,12 @@ void Document::drawCornerDownload(
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto shift = st::historyAudioDownloadShift;
 	const auto size = st::historyAudioDownloadSize;
-	const auto inner = style::rtlrect(st.padding.left() + shift, st.padding.top() - topMinus + shift, size, size, width());
+	const auto inner = style::rtlrect(
+		st.padding.left() + shift,
+		st.padding.top() - topMinus + shift,
+		size,
+		size,
+		width);
 	const auto bubblePattern = usesBubblePattern(context);
 	if (bubblePattern) {
 		p.setPen(Qt::NoPen);
@@ -1276,6 +1282,7 @@ void Document::drawCornerDownload(
 TextState Document::cornerDownloadTextState(
 		QPoint point,
 		StateRequest request,
+		int width,
 		LayoutMode mode) const {
 	auto result = TextState(_parent);
 	if (dataLoaded()
@@ -1290,7 +1297,12 @@ TextState Document::cornerDownloadTextState(
 		: (thumbed ? st::msgFileThumbLayoutGrouped : st::msgFileLayoutGrouped);
 	const auto shift = st::historyAudioDownloadShift;
 	const auto size = st::historyAudioDownloadSize;
-	const auto inner = style::rtlrect(st.padding.left() + shift, st.padding.top() - topMinus + shift, size, size, width());
+	const auto inner = style::rtlrect(
+		st.padding.left() + shift,
+		st.padding.top() - topMinus + shift,
+		size,
+		size,
+		width);
 	if (inner.contains(point)) {
 		result.link = _data->loading() ? _cancell : _savel;
 	}
@@ -1353,8 +1365,13 @@ TextState Document::textState(
 			}
 		}
 	} else {
-		if (const auto state = cornerDownloadTextState(point, request, mode); state.link) {
-			return state;
+		const auto cornerState = cornerDownloadTextState(
+			point,
+			request,
+			width,
+			mode);
+		if (cornerState.link) {
+			return cornerState;
 		}
 		if ((_data->loading() || _data->uploading()) && inner.contains(point) && !downloadInCorner()) {
 			result.link = _cancell;

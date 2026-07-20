@@ -148,6 +148,7 @@ private:
 	void drawCornerDownload(
 		Painter &p,
 		const PaintContext &context,
+		int width,
 		LayoutMode mode) const;
 	void paintPlaybackBlobs(
 		Painter &p,
@@ -156,6 +157,7 @@ private:
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,
 		StateRequest request,
+		int width,
 		LayoutMode mode) const;
 
 	not_null<DocumentData*> _data;
