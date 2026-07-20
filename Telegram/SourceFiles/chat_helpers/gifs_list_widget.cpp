@@ -341,11 +341,15 @@ void GifsListWidget::paintEvent(QPaintEvent *e) {
 	auto clip = e->rect();
 	p.fillRect(clip, st().bg);
 
-	paintInlineItems(p, clip);
+	paintInlineItems(p, clip, e->region());
 }
 
-void GifsListWidget::paintInlineItems(Painter &p, QRect clip) {
+void GifsListWidget::paintInlineItems(
+		Painter &p,
+		QRect clip,
+		const QRegion &region) {
 	if (_mosaic.empty()) {
+		_repaintItems.clear();
 		p.setFont(st::normalFont);
 		p.setPen(st::noContactsColor);
 		auto text = _inlineQuery.isEmpty()
@@ -358,7 +362,12 @@ void GifsListWidget::paintInlineItems(Painter &p, QRect clip) {
 	using namespace InlineBots::Layout;
 	PaintContext context(crl::now(), false, gifPaused, false);
 
+	pruneRepaintItems(region);
 	auto paintItem = [&](not_null<const ItemBase*> item, QPoint point) {
+		recordItemPaint(
+			item,
+			QRect(point, QSize(item->width(), item->height())),
+			region);
 		p.translate(point.x(), point.y());
 		item->paint(
 			p,
@@ -1022,24 +1031,35 @@ void GifsListWidget::showPreview() {
 void GifsListWidget::updateInlineItems(const LayoutItem *layout) {
 	if (!_repaintAllPending) {
 		if (layout) {
+			const auto position = layout->position();
+			if (position < 0 || _mosaic.maybeItemAt(position) != layout) {
+				return;
+			}
 			const auto result = layout->getResult();
 			const auto document = layout->getDocument();
 			if (!result && !document) {
-				_pendingRepaintItems.clear();
 				_repaintAllPending = true;
 			} else {
-				const auto already = ranges::find_if(
-					_pendingRepaintItems,
-					[&](const PendingRepaintItem &item) {
-						return (item.result == result)
-							&& (item.document == document);
-					});
-				if (already == end(_pendingRepaintItems)) {
-					_pendingRepaintItems.push_back({ result, document });
+				const auto identity = result
+					? static_cast<const void*>(result.get())
+					: static_cast<const void*>(document);
+				const auto i = _repaintItems.find(identity);
+				if (i == end(_repaintItems)
+					|| i->second.result != result
+					|| i->second.document != document) {
+					return;
+				}
+				if (i->second.position != position) {
+					_repaintAllPending = true;
+				} else if (!i->second.current.united(
+						i->second.stale).intersects(
+						visibleRepaintRect())) {
+					return;
+				} else {
+					i->second.pending = true;
 				}
 			}
 		} else {
-			_pendingRepaintItems.clear();
 			_repaintAllPending = true;
 		}
 	}
@@ -1073,43 +1093,106 @@ void GifsListWidget::repaintPendingItems() {
 
 	_lastUpdatedAt = now;
 	_updateInlineItems.cancel();
-	const auto pending = std::move(_pendingRepaintItems);
-	_pendingRepaintItems.clear();
-	const auto visible = QRect(
-		0,
-		getVisibleTop(),
-		width(),
-		getVisibleBottom() - getVisibleTop());
+	const auto visible = visibleRepaintRect();
 	auto damage = QRegion();
-	_mosaic.forEach([&](not_null<const LayoutItem*> item) {
-		const auto result = item->getResult();
-		const auto document = item->getDocument();
-		const auto found = ranges::find_if(
-			pending,
-			[&](const PendingRepaintItem &entry) {
-				return (entry.result == result)
-					&& (entry.document == document);
-			});
-		if (found == end(pending)) {
-			return;
+	auto visibleCount = 0;
+	for (auto &entry : _repaintItems) {
+		auto &item = entry.second;
+		if (item.current.intersects(visible)) {
+			++visibleCount;
 		}
-		const auto rect = _mosaic.findRect(item->position());
-		const auto updateRect = rtl()
-			? QRect(0, rect.y(), width(), rect.height())
-			: rect;
-		damage += updateRect.intersected(visible);
-	});
+		if (!base::take(item.pending)) {
+			continue;
+		}
+		const auto rect = item.current.united(base::take(item.stale))
+			.intersected(visible);
+		if (!rect.isEmpty()) {
+			damage += rect;
+		}
+	}
 	if (!damage.isEmpty()) {
-		update(damage);
+		const auto damageCount = damage.rectCount();
+		if (damageCount > 1
+			&& visibleCount > 0
+			&& damageCount * 2 >= visibleCount) {
+			update(damage.boundingRect());
+		} else {
+			update(damage);
+		}
 	}
 }
 
 void GifsListWidget::repaintItems(crl::time now) {
 	_lastUpdatedAt = now ? now : crl::now();
 	_updateInlineItems.cancel();
-	_pendingRepaintItems.clear();
+	_repaintItems.clear();
 	_repaintAllPending = false;
 	update();
+}
+
+QRect GifsListWidget::visibleRepaintRect() const {
+	const auto top = getVisibleTop();
+	const auto bottom = getVisibleBottom();
+	return QRect(0, top, width(), std::max(bottom - top, 0))
+		.intersected(rect());
+}
+
+void GifsListWidget::recordItemPaint(
+		not_null<const LayoutItem*> item,
+		QRect frame,
+		const QRegion &region) {
+	const auto result = item->getResult();
+	const auto document = item->getDocument();
+	const auto identity = result
+		? static_cast<const void*>(result.get())
+		: static_cast<const void*>(document);
+	if (!identity) {
+		return;
+	}
+	frame = myrtlrect(frame);
+	if (!frame.intersects(visibleRepaintRect())
+		|| !region.intersects(frame)) {
+		return;
+	}
+	const auto [i, added] = _repaintItems.try_emplace(identity);
+	auto &stored = i->second;
+	if (!added
+		&& (stored.result != result || stored.document != document)) {
+		stored = {};
+	}
+	stored.result = result;
+	stored.document = document;
+	stored.position = item->position();
+	if (!stored.stale.isEmpty() && region.contains(stored.stale)) {
+		stored.stale = {};
+	}
+	if (stored.current != frame) {
+		const auto previous = stored.current;
+		stored.current = frame;
+		if (!previous.isEmpty() && !region.contains(previous)) {
+			stored.stale = stored.stale.united(previous);
+			const auto cleanup = previous.united(frame).intersected(
+				visibleRepaintRect());
+			if (!cleanup.isEmpty()) {
+				update(cleanup);
+			}
+		}
+	}
+}
+
+void GifsListWidget::pruneRepaintItems(const QRegion &region) {
+	const auto visible = visibleRepaintRect();
+	for (auto i = _repaintItems.begin(); i != end(_repaintItems);) {
+		auto &item = i->second;
+		if (!item.stale.isEmpty() && region.contains(item.stale)) {
+			item.stale = {};
+		}
+		if (!item.current.united(item.stale).intersects(visible)) {
+			i = _repaintItems.erase(i);
+		} else {
+			++i;
+		}
+	}
 }
 
 } // namespace ChatHelpers

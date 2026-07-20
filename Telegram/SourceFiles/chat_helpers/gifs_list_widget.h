@@ -14,6 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QTimer>
 
+class QRegion;
+
 namespace style {
 struct ComposeIcons;
 } // namespace style
@@ -134,9 +136,13 @@ private:
 	using InlineResults = std::vector<std::shared_ptr<InlineResult>>;
 	using LayoutItem = InlineBots::Layout::ItemBase;
 
-	struct PendingRepaintItem {
+	struct RepaintItem {
 		std::shared_ptr<InlineResult> result;
 		DocumentData *document = nullptr;
+		int position = -1;
+		bool pending = false;
+		QRect current;
+		QRect stale;
 	};
 
 	struct InlineCacheEntry {
@@ -157,13 +163,22 @@ private:
 	void inlineResultsDone(const MTPmessages_BotResults &result);
 
 	void updateSelected();
-	void paintInlineItems(Painter &p, QRect clip);
+	void paintInlineItems(
+		Painter &p,
+		QRect clip,
+		const QRegion &region);
 	void refreshIcons();
 	[[nodiscard]] std::vector<StickerIcon> fillIcons();
 
 	void updateInlineItems(const LayoutItem *layout = nullptr);
 	void repaintPendingItems();
 	void repaintItems(crl::time now = 0);
+	[[nodiscard]] QRect visibleRepaintRect() const;
+	void recordItemPaint(
+		not_null<const LayoutItem*> item,
+		QRect frame,
+		const QRegion &region);
+	void pruneRepaintItems(const QRegion &region);
 	void showPreview();
 
 	void clearInlineRows(bool resultsDeleted);
@@ -191,7 +206,7 @@ private:
 	crl::time _lastScrolledAt = 0;
 	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
-	std::vector<PendingRepaintItem> _pendingRepaintItems;
+	std::map<const void*, RepaintItem> _repaintItems;
 	bool _repaintAllPending = false;
 	bool _inlineWithThumb = false;
 
