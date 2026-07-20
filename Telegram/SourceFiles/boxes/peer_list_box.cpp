@@ -2802,7 +2802,7 @@ void PeerListContent::updateRowStatus(not_null<PeerListRow*> row) {
 		return;
 	}
 	const auto rect = row->statusIconRect();
-	if (_rowsScrollCache.scrolling() && !rect.isEmpty()) {
+	if (!rect.isEmpty()) {
 		update(rect.translated(0, getRowTop(index)));
 	} else {
 		updateRow(index);
