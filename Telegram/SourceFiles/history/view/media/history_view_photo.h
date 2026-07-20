@@ -142,6 +142,10 @@ private:
 	bool videoAutoplayEnabled() const;
 	void setStreamed(std::unique_ptr<Streamed> value);
 	void repaintStreamedContent();
+	void recordStreamedContentRect(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
 	void checkStreamedIsStarted() const;
 	bool createStreamingObjects();
 	void handleStreamingUpdate(::Media::Streaming::Update &&update);
