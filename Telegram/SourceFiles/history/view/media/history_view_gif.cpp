@@ -78,6 +78,18 @@ constexpr auto kSeekTrackOpacity = 0.2;
 
 using ::Media::ValidFrameSize;
 
+[[nodiscard]] QRect SeekAnimationPaintRect(QRect rthumb) {
+	const auto normalInset = 1.5 * st::radialLine;
+	const auto minimumInset = std::min(
+		normalInset,
+		float64(st::historyVideoMessageSeekInset));
+	const auto paintRadius = std::max(
+		st::radialLine / 2.,
+		st::historyVideoMessageSeekDotSize / 2.);
+	const auto overflow = std::max(0., paintRadius - minimumInset);
+	return QRectF(rthumb).marginsAdded(Margins(overflow)).toAlignedRect();
+}
+
 [[nodiscard]] bool IsHostedInstantViewMedia(not_null<const Element*> parent) {
 	return parent->Get<InstantViewMediaRuntime>() != nullptr;
 }
@@ -327,6 +339,7 @@ QSize Gif::countThumbSize(int &inOutWidthMax) const {
 
 QSize Gif::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
+	invalidateSeekAnimationRepaint();
 	if (_data->isVideoMessage() && _transcribe) {
 		const auto &entry = _data->session().api().transcribes().entry(
 			_realParent);
@@ -383,6 +396,7 @@ QSize Gif::countOptimalSize() {
 QSize Gif::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
+	invalidateSeekAnimationRepaint();
 	if (const auto forced = HostedInstantViewForcedSize(_parent, this)
 		; !forced.isEmpty()) {
 		return forced;
@@ -539,6 +553,7 @@ bool Gif::hideMessageText() const {
 
 void Gif::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
+		recordSeekAnimationRepaint(p, context, QRect());
 		recordRadialAnimationRepaintRect(p, context, QRect());
 		return;
 	}
@@ -637,6 +652,10 @@ void Gif::draw(Painter &p, const PaintContext &context) const {
 		: _streamed
 		? &_streamed->instance
 		: nullptr;
+	recordSeekAnimationRepaint(
+		p,
+		context,
+		_seekl ? SeekAnimationPaintRect(rthumb) : QRect());
 	recordStreamedContentRect(p, context, rthumb);
 
 	if (displayLoading
@@ -1637,11 +1656,7 @@ void Gif::clickHandlerPressedChanged(
 						_seekingCurrent);
 				}
 				_seeking = false;
-				_seekAnimation.start(
-					[=] { repaint(); },
-					1.,
-					0.,
-					kSeekAnimationDuration);
+				startSeekAnimation(1., 0.);
 			} else if (_seekPressPoint != QPoint()) {
 				_seekPressPoint = QPoint();
 				::Media::Player::instance()->playPauseCancelClicked(
@@ -1698,11 +1713,7 @@ void Gif::updatePressed(QPoint point) {
 		_seekPressPoint = QPoint();
 		::Media::Player::instance()->startSeeking(
 			AudioMsgId::Type::Voice);
-		_seekAnimation.start(
-			[=] { repaint(); },
-			0.,
-			1.,
-			kSeekAnimationDuration);
+		startSeekAnimation(0., 1.);
 	}
 
 	const auto center = rthumb.center();
@@ -1713,7 +1724,7 @@ void Gif::updatePressed(QPoint point) {
 		fmod((M_PI / 2. - angle) / (2. * M_PI) + 1., 1.),
 		0.,
 		1.);
-	repaint();
+	repaintSeekAnimation();
 }
 
 bool Gif::fullFeaturedGrouped(RectParts sides) const {
@@ -1722,12 +1733,14 @@ bool Gif::fullFeaturedGrouped(RectParts sides) const {
 
 QSize Gif::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
+	invalidateSeekAnimationRepaint();
 	return sizeForAspectRatio();
 }
 
 QSize Gif::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
+	invalidateSeekAnimationRepaint();
 	return sizeForAspectRatio();
 }
 
@@ -1785,6 +1798,7 @@ void Gif::drawGrouped(
 	const auto streamedForWaiting = _streamed
 		? &_streamed->instance
 		: nullptr;
+	recordSeekAnimationRepaint(p, context, QRect());
 	recordStreamedContentRect(p, context, geometry);
 
 	if (displayLoading
@@ -2291,6 +2305,8 @@ bool Gif::hasHeavyPart() const {
 void Gif::unloadHeavyPart() {
 	clearRadialAnimationRepaintRect();
 	clearStreamedContentRect();
+	_seekAnimation.stop();
+	resetSeekAnimationRepaint();
 	stopAnimation();
 	_dataMedia = nullptr;
 	if (_spoiler) {
@@ -2393,6 +2409,86 @@ bool Gif::isRoundSeekable() const {
 			_realParent->fullId(),
 			state.id.externalPlayId()))
 		&& !::Media::Player::IsStoppedOrStopping(state.state);
+}
+
+void Gif::startSeekAnimation(float64 from, float64 to) {
+	const auto weak = base::make_weak(this);
+	_seekAnimation.start(
+		[weak] {
+			if (const auto strong = weak.get()) {
+				strong->repaintSeekAnimation();
+			}
+		},
+		from,
+		to,
+		kSeekAnimationDuration);
+}
+
+void Gif::repaintSeekAnimation() const {
+	if (_seekRepaint.pending
+		|| (_seekRepaint.known && _seekRepaint.current.isEmpty())) {
+		return;
+	}
+	_seekRepaint.pending = 1;
+	if (!_seekRepaint.known) {
+		repaint();
+	} else {
+		repaintSeekAnimationRegion(_seekRepaint.current);
+	}
+}
+
+void Gif::recordSeekAnimationRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto current = QRegion();
+	auto known = true;
+	if (!rect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, QRectF(rect));
+		if (!mapped || mapped->isEmpty()) {
+			known = false;
+		} else {
+			current = QRegion(*mapped);
+		}
+	}
+	const auto stale = base::take(_seekRepaint.stale);
+	const auto previous = stale.united(base::take(_seekRepaint.current));
+	_seekRepaint.pending = 0;
+	_seekRepaint.current = known ? std::move(current) : QRegion();
+	_seekRepaint.known = known ? 1 : 0;
+	if (!known) {
+		_seekRepaint.stale = previous;
+		if (!previous.isEmpty()) {
+			_seekRepaint.pending = 1;
+			repaint();
+		}
+		return;
+	} else if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == _seekRepaint.current)) {
+		return;
+	}
+	_seekRepaint.pending = 1;
+	repaintSeekAnimationRegion(previous.united(_seekRepaint.current));
+}
+
+void Gif::invalidateSeekAnimationRepaint() const {
+	_seekRepaint.stale = _seekRepaint.stale.united(
+		base::take(_seekRepaint.current));
+	_seekRepaint.pending = 0;
+	_seekRepaint.known = 0;
+}
+
+void Gif::resetSeekAnimationRepaint() const {
+	_seekRepaint = {};
+}
+
+void Gif::repaintSeekAnimationRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
 }
 
 Gif::Streamed *Gif::activeOwnStreamed() const {

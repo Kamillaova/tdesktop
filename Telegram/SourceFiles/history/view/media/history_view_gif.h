@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_file.h"
 #include "media/streaming/media_streaming_common.h"
 
+#include <QtGui/QRegion>
+
 class Image;
 struct HistoryMessageVia;
 struct HistoryMessageReply;
@@ -131,6 +133,12 @@ public:
 
 private:
 	struct Streamed;
+	struct SeekRepaint {
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 
 	void validateVideoThumbnail() const;
 	[[nodiscard]] QSize countThumbSize(int &inOutWidthMax) const;
@@ -160,6 +168,15 @@ private:
 	::Media::Streaming::Instance *activeCurrentStreamed() const;
 	::Media::View::PlaybackProgress *videoPlayback() const;
 	bool isRoundSeekable() const;
+	void startSeekAnimation(float64 from, float64 to);
+	void repaintSeekAnimation() const;
+	void recordSeekAnimationRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QRect rect) const;
+	void invalidateSeekAnimationRepaint() const;
+	void resetSeekAnimationRepaint() const;
+	void repaintSeekAnimationRegion(const QRegion &region) const;
 
 	void createStreamedPlayer();
 	void checkStreamedIsStarted() const;
@@ -260,6 +277,7 @@ private:
 	mutable QImage _thumbCache;
 	mutable QImage _roundingMask;
 	mutable QRect _streamedContentRect;
+	mutable SeekRepaint _seekRepaint;
 	mutable crl::time _videoPosition = 0;
 	std::shared_ptr<VoiceSeekClickHandler> _seekl;
 	mutable Ui::Animations::Simple _seekAnimation;
