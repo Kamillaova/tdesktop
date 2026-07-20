@@ -701,7 +701,7 @@ struct Poll::Answer {
 		not_null<PollData*> poll,
 		const PollAnswer &original,
 		Window::SessionController::MessageContext messageContext,
-		Fn<void()> repaint,
+		not_null<Options*> options,
 		Fn<bool()> paused);
 
 	Ui::Text::String text;
@@ -1802,6 +1802,16 @@ uint16 Poll::Header::selectionLength() const {
 struct Poll::Options : public Poll::Part {
 	using Part::Part;
 
+	struct ThumbnailRepaint {
+		QByteArray option;
+		const Ui::DynamicImage *image = nullptr;
+		QRegion repaintRegion;
+		QRegion collectedRepaintRegion;
+		QRegion staleRepaintRegion;
+		bool repaintPending = false;
+		bool collectingRepaintRegion = false;
+	};
+
 	int countHeight(int innerWidth) const override;
 	void draw(
 		Painter &p,
@@ -1854,6 +1864,26 @@ struct Poll::Options : public Poll::Part {
 	void finishSendingAnimationPaint() const;
 	void repaintSendingAnimationRegion(const QRegion &region) const;
 	void resetSendingAnimation() const;
+	void subscribeToThumbnailUpdates(
+		not_null<Ui::DynamicImage*> image,
+		PollThumbnailKind kind,
+		QByteArray option) const;
+	void thumbnailUpdated(
+		PollThumbnailKind kind,
+		const QByteArray &option,
+		const Ui::DynamicImage *image) const;
+	void invalidateAnimatedThumbnailRepaints();
+	void syncAnimatedThumbnailRepaints();
+	void beginAnimatedThumbnailPaint(
+		const Painter &p,
+		const PaintContext &context) const;
+	void recordAnimatedThumbnailRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		QRect rect) const;
+	void finishAnimatedThumbnailPaint() const;
+	void repaintAnimatedThumbnailRegion(const QRegion &region) const;
 	int paintAnswer(
 		Painter &p,
 		const Answer &answer,
@@ -1912,6 +1942,7 @@ struct Poll::Options : public Poll::Part {
 		int maxVotes,
 		bool showPercent);
 
+	mutable std::vector<ThumbnailRepaint> _thumbnailRepaints;
 	std::vector<Answer> _answers;
 	mutable std::unique_ptr<AnswersAnimation> _answersAnimation;
 	mutable std::unique_ptr<SendingAnimation> _sendingAnimation;
@@ -1961,6 +1992,7 @@ void Poll::Options::draw(
 				st::lineWidth,
 				choiceOverhang + 2 * st::lineWidth)));
 	beginSendingAnimationPaint(p, context);
+	beginAnimatedThumbnailPaint(p, context);
 
 	auto tshift = 0;
 	auto &&answers = ranges::views::zip(
@@ -1990,6 +2022,7 @@ void Poll::Options::draw(
 			context);
 		tshift += height;
 	}
+	finishAnimatedThumbnailPaint();
 	finishSendingAnimationPaint();
 	finishAnswersAnimationPaint();
 }
@@ -2136,7 +2169,7 @@ void Poll::Answer::fillMedia(
 		not_null<PollData*> poll,
 		const PollAnswer &original,
 		Window::SessionController::MessageContext messageContext,
-		Fn<void()> repaint,
+		not_null<Options*> options,
 		Fn<bool()> paused) {
 	const auto updated = MakePollThumbnail(
 		poll,
@@ -2159,7 +2192,10 @@ void Poll::Answer::fillMedia(
 	thumbnailKind = updated.kind;
 	thumbnailId = updated.id;
 	if (thumbnail) {
-		thumbnail->subscribeToUpdates(std::move(repaint));
+		options->subscribeToThumbnailUpdates(
+			thumbnail.get(),
+			thumbnailKind,
+			option);
 	}
 }
 
@@ -2481,6 +2517,7 @@ int Poll::Options::countAnswerHeight(
 }
 
 QSize Poll::countCurrentSize(int newWidth) {
+	_optionsPart->invalidateAnimatedThumbnailRepaints();
 	accumulate_min(newWidth, maxWidth());
 	const auto innerWidth = newWidth
 		- st::msgPadding.left()
@@ -3046,6 +3083,7 @@ void Poll::Header::updateRecentVoters() {
 }
 
 void Poll::Options::updateAnswers() {
+	invalidateAnimatedThumbnailRepaints();
 	const auto context = Core::TextContext({
 		.session = &_owner->_poll->session(),
 		.repaint = [=] {
@@ -3054,11 +3092,6 @@ void Poll::Options::updateAnswers() {
 			}
 		},
 		.customEmojiLoopLimit = 2,
-	});
-	const auto repaintThumbnail = crl::guard(_owner, [=] {
-		if (!_owner->_parent->delegate()->elementAnimationsPaused()) {
-			_owner->repaint();
-		}
 	});
 	const auto paused = [=] {
 		return _owner->_parent->delegate()->elementAnimationsPaused();
@@ -3100,12 +3133,13 @@ void Poll::Options::updateAnswers() {
 				_owner->_poll,
 				*i,
 				messageContext,
-				repaintThumbnail,
+				this,
 				paused);
 		}
 		_anyAnswerHasMedia = ranges::any_of(_answers, [](const Answer &a) {
 			return a.thumbnail != nullptr;
 		});
+		syncAnimatedThumbnailRepaints();
 		return;
 	}
 	_answers = ranges::views::all(options) | ranges::views::transform([&](
@@ -3122,7 +3156,7 @@ void Poll::Options::updateAnswers() {
 			_owner->_poll,
 			*i,
 			messageContext,
-			repaintThumbnail,
+			this,
 			paused);
 		return result;
 	}) | ranges::to_vector;
@@ -3143,6 +3177,7 @@ void Poll::Options::updateAnswers() {
 	_anyAnswerHasMedia = ranges::any_of(_answers, [](const Answer &a) {
 		return a.thumbnail != nullptr;
 	});
+	syncAnimatedThumbnailRepaints();
 
 	resetAnswersAnimation();
 }
@@ -3624,6 +3659,177 @@ void Poll::Options::resetSendingAnimation() const {
 	repaintSendingAnimationRegion(repaintRegion);
 }
 
+void Poll::Options::subscribeToThumbnailUpdates(
+		not_null<Ui::DynamicImage*> image,
+		PollThumbnailKind kind,
+		QByteArray option) const {
+	const auto raw = image.get();
+	image->subscribeToUpdates(crl::guard(_owner, [=] {
+		thumbnailUpdated(kind, option, raw);
+	}));
+}
+
+void Poll::Options::thumbnailUpdated(
+		PollThumbnailKind kind,
+		const QByteArray &option,
+		const Ui::DynamicImage *image) const {
+	if (_owner->_parent->delegate()->elementAnimationsPaused()) {
+		return;
+	}
+	if (kind != PollThumbnailKind::Emoji) {
+		_owner->repaint();
+		return;
+	}
+	const auto answer = ranges::find(
+		_answers,
+		option,
+		&Answer::option);
+	if (answer == end(_answers)
+		|| answer->thumbnailKind != PollThumbnailKind::Emoji
+		|| answer->thumbnail.get() != image) {
+		return;
+	}
+	const auto repaint = ranges::find(
+		_thumbnailRepaints,
+		option,
+		&ThumbnailRepaint::option);
+	if (repaint == end(_thumbnailRepaints)
+		|| repaint->image != image) {
+		_owner->repaint();
+		return;
+	}
+	if (repaint->repaintPending) {
+		return;
+	}
+	repaint->repaintPending = true;
+	if (repaint->repaintRegion.isEmpty()) {
+		_owner->repaint();
+	} else {
+		repaintAnimatedThumbnailRegion(repaint->repaintRegion);
+	}
+}
+
+void Poll::Options::invalidateAnimatedThumbnailRepaints() {
+	for (auto &repaint : _thumbnailRepaints) {
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+}
+
+void Poll::Options::syncAnimatedThumbnailRepaints() {
+	for (auto &repaint : _thumbnailRepaints) {
+		const auto answer = ranges::find(
+			_answers,
+			repaint.option,
+			&Answer::option);
+		const auto image = (answer != end(_answers)
+			&& answer->thumbnailKind == PollThumbnailKind::Emoji)
+			? answer->thumbnail.get()
+			: nullptr;
+		if (repaint.image == image) {
+			continue;
+		}
+		repaint.staleRepaintRegion = repaint.staleRepaintRegion
+			.united(base::take(repaint.repaintRegion))
+			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.image = image;
+		repaint.repaintPending = false;
+		repaint.collectingRepaintRegion = false;
+	}
+	for (const auto &answer : _answers) {
+		if (answer.thumbnailKind != PollThumbnailKind::Emoji
+			|| !answer.thumbnail) {
+			continue;
+		}
+		const auto repaint = ranges::find(
+			_thumbnailRepaints,
+			answer.option,
+			&ThumbnailRepaint::option);
+		if (repaint == end(_thumbnailRepaints)) {
+			_thumbnailRepaints.push_back({
+				.option = answer.option,
+				.image = answer.thumbnail.get(),
+			});
+		}
+	}
+}
+
+void Poll::Options::beginAnimatedThumbnailPaint(
+		const Painter &p,
+		const PaintContext &context) const {
+	const auto collect = context.hasElementPainter(p);
+	for (auto &repaint : _thumbnailRepaints) {
+		if (collect) {
+			repaint.repaintPending = false;
+			repaint.collectedRepaintRegion = QRegion();
+			repaint.collectingRepaintRegion = true;
+		} else {
+			if (repaint.repaintRegion.isEmpty()) {
+				repaint.repaintPending = false;
+			}
+			repaint.collectingRepaintRegion = false;
+		}
+	}
+}
+
+void Poll::Options::recordAnimatedThumbnailRect(
+		const Painter &p,
+		const PaintContext &context,
+		const Answer &answer,
+		QRect rect) const {
+	if (answer.thumbnailKind != PollThumbnailKind::Emoji) {
+		return;
+	}
+	const auto repaint = ranges::find(
+		_thumbnailRepaints,
+		answer.option,
+		&ThumbnailRepaint::option);
+	if (repaint == end(_thumbnailRepaints)
+		|| repaint->image != answer.thumbnail.get()
+		|| !repaint->collectingRepaintRegion) {
+		return;
+	}
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	if (mapped) {
+		repaint->collectedRepaintRegion += *mapped;
+	}
+}
+
+void Poll::Options::finishAnimatedThumbnailPaint() const {
+	auto repaintRegion = QRegion();
+	for (auto i = begin(_thumbnailRepaints);
+			i != end(_thumbnailRepaints);) {
+		if (!i->collectingRepaintRegion) {
+			++i;
+			continue;
+		}
+		i->collectingRepaintRegion = false;
+		const auto previous = base::take(i->staleRepaintRegion).united(
+			base::take(i->repaintRegion));
+		i->repaintRegion = base::take(i->collectedRepaintRegion);
+		if (previous != i->repaintRegion && !previous.isEmpty()) {
+			i->repaintPending = true;
+			repaintRegion += previous.united(i->repaintRegion);
+		}
+		if (!i->image && i->repaintRegion.isEmpty()) {
+			i = _thumbnailRepaints.erase(i);
+		} else {
+			++i;
+		}
+	}
+	repaintAnimatedThumbnailRegion(repaintRegion);
+}
+
+void Poll::Options::repaintAnimatedThumbnailRegion(
+		const QRegion &region) const {
+	for (const auto &rect : region) {
+		_owner->_parent->repaint(rect);
+	}
+}
+
 void Poll::Header::paintRecentVoters(
 		Painter &p,
 		int left,
@@ -4029,6 +4235,7 @@ int Poll::Options::paintAnswer(
 			media,
 			media);
 		if (!target.isEmpty()) {
+			recordAnimatedThumbnailRect(p, context, answer, target);
 			const auto webpagePlaceholder
 				= (answer.thumbnailKind == PollThumbnailKind::Webpage)
 					&& !answer.thumbnailId;
