@@ -89,8 +89,18 @@ CommunityChatsList::CommunityChatsList(
 		if (entryUpdate.flags & Flag::Height) {
 			_view.recountHeights(0.);
 			resizeToWidth(width());
-		} else {
-			update();
+		} else if (const auto history = entryUpdate.entry->asHistory()) {
+			for (auto index = 0; index != _view.size(); ++index) {
+				const auto row = _view.rowAt(index);
+				if (row->history() == history) {
+					update(
+						0,
+						_view.rowTop(index),
+						width(),
+						row->height());
+					break;
+				}
+			}
 		}
 	}, lifetime());
 }
