@@ -47,6 +47,10 @@ namespace {
 constexpr auto kMinRepaintDelay = crl::time(33);
 constexpr auto kMinAfterScrollDelay = crl::time(33);
 
+[[nodiscard]] int64 RectArea(const QRect &rect) {
+	return int64(rect.width()) * rect.height();
+}
+
 } // namespace
 
 Inner::Inner(
@@ -102,11 +106,16 @@ Inner::Inner(
 void Inner::visibleTopBottomUpdated(
 		int visibleTop,
 		int visibleBottom) {
+	const auto visibleChanged = (_visibleTop != visibleTop)
+		|| (_visibleBottom != visibleBottom);
 	_visibleBottom = visibleBottom;
 	if (_visibleTop != visibleTop) {
 		_visibleTop = visibleTop;
 		_lastScrolledAt = crl::now();
 		update();
+	}
+	if (visibleChanged) {
+		prunePaintedItems();
 	}
 }
 
@@ -210,22 +219,31 @@ Inner::~Inner() = default;
 
 void Inner::resizeEvent(QResizeEvent *e) {
 	updateRestrictedLabelGeometry();
+	repaintItems();
 }
 
 void Inner::paintEvent(QPaintEvent *e) {
 	Painter p(this);
-	QRect r = e ? e->rect() : rect();
+	const auto repaintRegion = e ? e->region() : QRegion(rect());
+	const auto r = e ? e->rect() : rect();
 	if (r != rect()) {
 		p.setClipRect(r);
 	}
 	p.fillRect(r, st::emojiPanBg);
 
-	paintInlineItems(p, r);
+	paintInlineItems(p, r, repaintRegion);
 }
 
-void Inner::paintInlineItems(Painter &p, const QRect &r) {
+void Inner::paintInlineItems(
+		Painter &p,
+		const QRect &r,
+		const QRegion &repaintRegion) {
 	if (_restrictedLabel) {
+		_paintedRepaintItems.clear();
 		return;
+	}
+	if (_mosaic.empty()) {
+		_paintedRepaintItems.clear();
 	}
 	if (_mosaic.empty() && !_switchPmButton) {
 		p.setFont(st::normalFont);
@@ -247,8 +265,122 @@ void Inner::paintInlineItems(Painter &p, const QRect &r) {
 			r.translated(-point),
 			&context);
 		p.translate(-point.x(), -point.y());
+		rememberPaintedItem(
+			item,
+			myrtlrect(QRect(point, QSize(item->width(), item->height()))),
+			repaintRegion);
 	};
 	_mosaic.paint(std::move(paintItem), r);
+}
+
+QRect Inner::visibleItemsRect() const {
+	return QRect(
+		0,
+		_visibleTop,
+		width(),
+		std::max(_visibleBottom - _visibleTop, 0)
+	).intersected(rect());
+}
+
+void Inner::rememberPaintedItem(
+		not_null<const ItemBase*> item,
+		QRect geometry,
+		const QRegion &repaintRegion) {
+	const auto result = item->getResult();
+	if (!result) {
+		_paintedRepaintItems.erase(item.get());
+		return;
+	}
+	const auto existing = _paintedRepaintItems.find(item.get());
+	if (existing != end(_paintedRepaintItems)
+		&& existing->second.result == result
+		&& existing->second.geometry != geometry) {
+		const auto moved = existing->second.geometry
+			.united(geometry)
+			.intersected(visibleItemsRect());
+		if (!moved.isEmpty() && !repaintRegion.contains(moved)) {
+			queueInlineItemRepaint(item, result, moved);
+			scheduleInlineItemsRepaint();
+		}
+	}
+	if (geometry.intersects(visibleItemsRect())) {
+		_paintedRepaintItems.insert_or_assign(
+			item.get(),
+			RepaintItem{ result, geometry, item->position() });
+	} else {
+		_paintedRepaintItems.erase(item.get());
+	}
+}
+
+void Inner::queueInlineItemRepaint(
+		const ItemBase *layout,
+		std::shared_ptr<Result> result,
+		QRect geometry) {
+	if (_repaintAllPending || _repaintVisiblePending) {
+		return;
+	}
+	const auto visible = visibleItemsRect();
+	geometry = geometry.intersected(visible);
+	if (geometry.isEmpty()) {
+		return;
+	}
+	const auto existing = _pendingRepaintItems.find(layout);
+	if (existing != end(_pendingRepaintItems)) {
+		if (existing->second.result != result) {
+			clearPendingItemRepaints();
+			_repaintVisiblePending = true;
+			return;
+		}
+		_pendingRepaintArea -= RectArea(existing->second.geometry);
+		existing->second.geometry = existing->second.geometry.united(geometry);
+		_pendingRepaintArea += RectArea(existing->second.geometry);
+	} else {
+		_pendingRepaintItems.emplace(
+			layout,
+			RepaintItem{ std::move(result), geometry });
+		_pendingRepaintArea += RectArea(geometry);
+	}
+	_pendingRepaintBounds = _pendingRepaintBounds.isEmpty()
+		? geometry
+		: _pendingRepaintBounds.united(geometry);
+	const auto visibleArea = RectArea(visible);
+	if ((_pendingRepaintItems.size() >= _paintedRepaintItems.size())
+		|| (_pendingRepaintArea >= visibleArea)
+		|| (RectArea(_pendingRepaintBounds) >= visibleArea)) {
+		clearPendingItemRepaints();
+		_repaintVisiblePending = true;
+	}
+}
+
+void Inner::scheduleInlineItemsRepaint() {
+	const auto now = crl::now();
+	const auto delay = std::max(
+		_lastScrolledAt + kMinAfterScrollDelay - now,
+		_lastUpdatedAt + kMinRepaintDelay - now);
+	if (delay <= 0) {
+		repaintPendingItems();
+	} else if (!_updateInlineItems.isActive()
+		|| _updateInlineItems.remainingTime() > kMinRepaintDelay) {
+		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
+	}
+}
+
+void Inner::clearPendingItemRepaints() {
+	_pendingRepaintItems.clear();
+	_pendingRepaintBounds = QRect();
+	_pendingRepaintArea = 0;
+}
+
+void Inner::prunePaintedItems() {
+	const auto visible = visibleItemsRect();
+	for (auto i = _paintedRepaintItems.begin();
+			i != end(_paintedRepaintItems);) {
+		if (!i->second.geometry.intersects(visible)) {
+			i = _paintedRepaintItems.erase(i);
+		} else {
+			++i;
+		}
+	}
 }
 
 void Inner::mousePressEvent(QMouseEvent *e) {
@@ -473,10 +605,12 @@ ItemBase *Inner::layoutPrepareInlineResult(std::shared_ptr<Result> result) {
 
 void Inner::deleteUnusedInlineLayouts() {
 	if (_mosaic.empty()) { // delete all
+		_paintedRepaintItems.clear();
 		_inlineLayouts.clear();
 	} else {
 		for (auto i = _inlineLayouts.begin(); i != _inlineLayouts.cend();) {
 			if (i->second->position() < 0) {
+				_paintedRepaintItems.erase(i->second.get());
 				i = _inlineLayouts.erase(i);
 			} else {
 				++i;
@@ -708,33 +842,39 @@ void Inner::showPreview() {
 }
 
 void Inner::updateInlineItems(const ItemBase *layout) {
-	if (!_repaintAllPending) {
-		if (layout) {
-			const auto result = layout->getResult();
-			if (!result) {
-				_pendingRepaintResults.clear();
-				_repaintAllPending = true;
-			} else if (ranges::find(
-					_pendingRepaintResults,
-					result) == end(_pendingRepaintResults)) {
-				_pendingRepaintResults.push_back(result);
-			}
-		} else {
-			_pendingRepaintResults.clear();
-			_repaintAllPending = true;
+	if (layout) {
+		const auto position = layout->position();
+		if (position < 0 || _mosaic.maybeItemAt(position) != layout) {
+			return;
 		}
+		if (!_repaintAllPending && !_repaintVisiblePending) {
+			const auto result = layout->getResult();
+			const auto painted = _paintedRepaintItems.find(layout);
+			if (!result) {
+				clearPendingItemRepaints();
+				_repaintAllPending = true;
+			} else if (painted != end(_paintedRepaintItems)
+				&& painted->second.result == result) {
+				if (painted->second.position != position) {
+					clearPendingItemRepaints();
+					_repaintVisiblePending = true;
+				} else {
+					queueInlineItemRepaint(
+						layout,
+						result,
+						painted->second.geometry);
+				}
+			}
+		}
+	} else if (!_repaintAllPending) {
+		clearPendingItemRepaints();
+		_repaintVisiblePending = false;
+		_repaintAllPending = true;
 	}
-
-	const auto now = crl::now();
-
-	const auto delay = std::max(
-		_lastScrolledAt + kMinAfterScrollDelay - now,
-		_lastUpdatedAt + kMinRepaintDelay - now);
-	if (delay <= 0) {
-		repaintPendingItems();
-	} else if (!_updateInlineItems.isActive()
-		|| _updateInlineItems.remainingTime() > kMinRepaintDelay) {
-		_updateInlineItems.callOnce(std::max(delay, kMinRepaintDelay));
+	if (_repaintAllPending
+		|| _repaintVisiblePending
+		|| !_pendingRepaintItems.empty()) {
+		scheduleInlineItemsRepaint();
 	}
 }
 
@@ -754,34 +894,38 @@ void Inner::repaintPendingItems() {
 
 	_lastUpdatedAt = now;
 	_updateInlineItems.cancel();
-	const auto pending = base::take(_pendingRepaintResults);
-	const auto visible = QRect(
-		0,
-		_visibleTop,
-		width(),
-		_visibleBottom - _visibleTop);
-	auto damage = QRegion();
-	_mosaic.forEach([&](not_null<const ItemBase*> item) {
-		if (ranges::find(
-				pending,
-				item->getResult()) == end(pending)) {
-			return;
+	const auto visible = visibleItemsRect();
+	if (base::take(_repaintVisiblePending)) {
+		clearPendingItemRepaints();
+		if (!visible.isEmpty()) {
+			update(visible);
 		}
-		const auto rect = _mosaic.findRect(item->position());
-		const auto updateRect = rtl()
-			? QRect(0, rect.y(), width(), rect.height())
-			: rect;
-		damage += updateRect.intersected(visible);
-	});
+		return;
+	}
+	const auto pending = base::take(_pendingRepaintItems);
+	_pendingRepaintBounds = QRect();
+	_pendingRepaintArea = 0;
+	auto damage = QRegion();
+	for (const auto &entry : pending) {
+		damage += entry.second.geometry.intersected(visible);
+	}
 	if (!damage.isEmpty()) {
-		update(damage);
+		const auto broad = (pending.size() >= _paintedRepaintItems.size())
+			|| (RectArea(damage.boundingRect()) >= RectArea(visible));
+		if (broad) {
+			update(visible);
+		} else {
+			update(damage);
+		}
 	}
 }
 
 void Inner::repaintItems(crl::time now) {
 	_lastUpdatedAt = now ? now : crl::now();
 	_updateInlineItems.cancel();
-	_pendingRepaintResults.clear();
+	clearPendingItemRepaints();
+	_paintedRepaintItems.clear();
+	_repaintVisiblePending = false;
 	_repaintAllPending = false;
 	update();
 }

@@ -46,6 +46,8 @@ namespace SendMenu {
 struct Details;
 } // namespace SendMenu
 
+class QRegion;
+
 namespace InlineBots {
 namespace Layout {
 
@@ -119,6 +121,12 @@ protected:
 private:
 	static constexpr bool kRefreshIconsScrollAnimation = true;
 	static constexpr bool kRefreshIconsNoAnimation = false;
+	struct RepaintItem {
+		std::shared_ptr<Result> result;
+		QRect geometry;
+		int position = -1;
+	};
+	using RepaintItems = std::map<const ItemBase*, RepaintItem>;
 
 	void switchPm();
 
@@ -127,7 +135,22 @@ private:
 	bool isRestrictedView();
 	void clearHeavyData();
 
-	void paintInlineItems(Painter &p, const QRect &r);
+	void paintInlineItems(
+		Painter &p,
+		const QRect &clip,
+		const QRegion &repaintRegion);
+	void rememberPaintedItem(
+		not_null<const ItemBase*> item,
+		QRect geometry,
+		const QRegion &repaintRegion);
+	void queueInlineItemRepaint(
+		const ItemBase *layout,
+		std::shared_ptr<Result> result,
+		QRect geometry);
+	void scheduleInlineItemsRepaint();
+	void clearPendingItemRepaints();
+	void prunePaintedItems();
+	[[nodiscard]] QRect visibleItemsRect() const;
 
 	void refreshSwitchPmButton(const CacheEntry *entry);
 	void refreshMosaicOffset();
@@ -159,7 +182,11 @@ private:
 	crl::time _lastScrolledAt = 0;
 	crl::time _lastUpdatedAt = 0;
 	base::Timer _updateInlineItems;
-	Results _pendingRepaintResults;
+	RepaintItems _paintedRepaintItems;
+	RepaintItems _pendingRepaintItems;
+	QRect _pendingRepaintBounds;
+	int64 _pendingRepaintArea = 0;
+	bool _repaintVisiblePending = false;
 	bool _repaintAllPending = false;
 	bool _inlineWithThumb = false;
 	bool _gallery = false;
