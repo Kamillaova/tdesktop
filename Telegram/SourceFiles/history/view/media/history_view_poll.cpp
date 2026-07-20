@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/image/image.h"
 #include "ui/item_text_options.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/text/format_values.h"
@@ -115,6 +116,75 @@ constexpr auto kVoteRestrictionToastDuration = 5 * crl::time(1000);
 [[nodiscard]] bool HasPollAnswerTextAnimation(
 		const Ui::Text::String &text) {
 	return text.hasCustomEmoji() || text.hasSpoilers();
+}
+
+[[nodiscard]] QMargins PollTextRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
+[[nodiscard]] bool AddPollTextRepaintRect(
+		QRegion &region,
+		const Painter &p,
+		const PaintContext &context,
+		const Ui::Text::String &text,
+		QRect rect,
+		bool useFullWidth = false) {
+	const auto customEmoji = text.hasCustomEmoji();
+	if (!customEmoji && !text.hasSpoilers()) {
+		return true;
+	}
+	const auto layoutWidth = useFullWidth
+		? rect.width()
+		: std::min(rect.width(), text.maxWidth());
+	const auto lines = text.countLinesGeometry(layoutWidth);
+	if (lines.empty()) {
+		return false;
+	}
+	const auto margins = customEmoji
+		? PollTextRepaintMargins()
+		: QMargins();
+	auto mappedRegion = QRegion();
+	auto lineTop = 0;
+	for (const auto &line : lines) {
+		const auto lineBottom = std::clamp(
+			line.bottom,
+			lineTop,
+			rect.height());
+		auto lineLeft = std::clamp(line.left, 0, layoutWidth);
+		const auto lineWidth = std::clamp(
+			line.width,
+			0,
+			layoutWidth - lineLeft);
+		if (line.rtl) {
+			lineLeft = layoutWidth - lineLeft - lineWidth;
+		}
+		if (lineWidth > 0 && lineBottom > lineTop) {
+			auto lineRect = QRectF(
+				rect.x() + lineLeft,
+				rect.y() + lineTop,
+				lineWidth,
+				lineBottom - lineTop);
+			if (customEmoji) {
+				lineRect = lineRect.marginsAdded(QMarginsF(margins));
+			}
+			const auto mapped = context.mapToElement(p, lineRect);
+			if (!mapped || mapped->isEmpty()) {
+				return false;
+			}
+			mappedRegion += *mapped;
+		}
+		lineTop = lineBottom;
+	}
+	if (mappedRegion.isEmpty()) {
+		return false;
+	}
+	region += mappedRegion;
+	return true;
 }
 
 enum class PollThumbnailKind {
@@ -1357,6 +1427,20 @@ void Poll::AddOption::toggleRipple(bool pressed) {
 }
 
 struct Poll::Header : public Poll::Part {
+	enum class TextPart {
+		Description,
+		Question,
+		Solution,
+	};
+
+	struct TextRepaint {
+		uint64 generation = 0;
+		QRegion current;
+		QRegion stale;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
+
 	explicit Header(not_null<Poll*> owner)
 	: Part(owner)
 	, _description(st::msgMinWidth / 2)
@@ -1388,6 +1472,19 @@ struct Poll::Header : public Poll::Part {
 	uint16 selectionLength() const override;
 
 	void updateDescription();
+	[[nodiscard]] Fn<void()> textRepaintCallback(TextPart part);
+	void resetTextRepaint(TextPart part);
+	void repaintText(TextPart part, uint64 generation) const;
+	void finishTextRepaint(
+		TextPart part,
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const;
+	void invalidateTextRepaints() const;
+	void invalidateTextRepaint(TextRepaint &repaint) const;
+	void repaintTextRegion(const QRegion &region) const;
+	[[nodiscard]] TextRepaint &textRepaint(TextPart part) const;
 	void updateAttachedMedia();
 	[[nodiscard]] int countTopContentSkip(int pollWidth = 0) const;
 	[[nodiscard]] int countTopMediaHeight(int pollWidth = 0) const;
@@ -1451,6 +1548,9 @@ struct Poll::Header : public Poll::Part {
 	QImage _recentVotersImage;
 	mutable ClickHandlerPtr _showSolutionLink;
 	Ui::Text::String _solutionText;
+	mutable TextRepaint _descriptionRepaint;
+	mutable TextRepaint _questionRepaint;
+	mutable TextRepaint _solutionRepaint;
 	mutable ClickHandlerPtr _closeSolutionLink;
 	std::unique_ptr<SolutionMedia> _solutionMedia;
 	std::unique_ptr<Media> _solutionAttach;
@@ -1479,6 +1579,8 @@ void Poll::Header::draw(
 		const PaintContext &context) const {
 	const auto stm = context.messageStyle();
 	auto tshift = countTopContentSkip();
+	auto descriptionRepaintRegion = QRegion();
+	auto descriptionRepaintKnown = context.hasElementPainter(p);
 
 	if (const auto mediaHeight = countTopMediaHeight()) {
 		if (_attachedMediaAttach) {
@@ -1547,6 +1649,14 @@ void Poll::Header::draw(
 
 	if (const auto descriptionHeight
 			= countDescriptionHeight(innerWidth)) {
+		descriptionRepaintKnown = descriptionRepaintKnown
+			&& AddPollTextRepaintRect(
+				descriptionRepaintRegion,
+				p,
+				context,
+				_description,
+				QRect(left, tshift, innerWidth, descriptionHeight),
+				true);
 		p.setPen(stm->historyTextFg);
 		_owner->_parent->prepareCustomEmojiPaint(
 			p, context, _description);
@@ -1563,14 +1673,37 @@ void Poll::Header::draw(
 		});
 		tshift += descriptionHeight + st::historyPollDescriptionSkip;
 	}
+	finishTextRepaint(
+		TextPart::Description,
+		p,
+		context,
+		std::move(descriptionRepaintRegion),
+		descriptionRepaintKnown);
 
 	if (const auto solutionHeight
 			= countSolutionBlockHeight(innerWidth)) {
 		paintSolutionBlock(
 			p, left, tshift, innerWidth, context);
 		tshift += solutionHeight + st::historyPollExplanationSkip;
+	} else {
+		finishTextRepaint(
+			TextPart::Solution,
+			p,
+			context,
+			QRegion(),
+			context.hasElementPainter(p));
 	}
 
+	auto questionRepaintRegion = QRegion();
+	auto questionRepaintKnown = context.hasElementPainter(p);
+	const auto questionHeight = _question.countHeight(innerWidth);
+	questionRepaintKnown = questionRepaintKnown
+		&& AddPollTextRepaintRect(
+			questionRepaintRegion,
+			p,
+			context,
+			_question,
+			QRect(left, tshift, innerWidth, questionHeight));
 	p.setPen(stm->historyTextFg);
 	_owner->_parent->prepareCustomEmojiPaint(p, context, _question);
 	_question.draw(p, {
@@ -1583,7 +1716,13 @@ void Poll::Header::draw(
 		.pausedSpoiler = context.paused,
 		.selection = toQuestionSelection(context.selection),
 	});
-	tshift += _question.countHeight(innerWidth)
+	finishTextRepaint(
+		TextPart::Question,
+		p,
+		context,
+		std::move(questionRepaintRegion),
+		questionRepaintKnown);
+	tshift += questionHeight
 		+ st::historyPollSubtitleSkip;
 
 	p.setPen(stm->msgDateFg);
@@ -1795,6 +1934,9 @@ void Poll::Header::unloadHeavyPart() {
 	for (auto &recent : _recentVoters) {
 		recent.userpic = {};
 	}
+	_description.unloadPersistentAnimation();
+	_question.unloadPersistentAnimation();
+	_solutionText.unloadPersistentAnimation();
 }
 
 uint16 Poll::Header::selectionLength() const {
@@ -2562,6 +2704,7 @@ int Poll::Options::countAnswerHeight(
 }
 
 QSize Poll::countCurrentSize(int newWidth) {
+	_headerPart->invalidateTextRepaints();
 	_optionsPart->invalidateAnswerTextRepaints();
 	_optionsPart->invalidateAnimatedThumbnailRepaints();
 	accumulate_min(newWidth, maxWidth());
@@ -2601,11 +2744,8 @@ void Poll::updateTexts() {
 			options,
 			Core::TextContext({
 				.session = &_poll->session(),
-				.repaint = [=] {
-					if (!_parent->delegate()->elementAnimationsPaused()) {
-						repaint();
-					}
-				},
+				.repaint = _headerPart->textRepaintCallback(
+					Header::TextPart::Question),
 				.customEmojiLoopLimit = 2,
 			}));
 	}
@@ -2652,13 +2792,104 @@ void Poll::updateTexts() {
 		first ? anim::type::instant : anim::type::normal);
 }
 
+Fn<void()> Poll::Header::textRepaintCallback(TextPart part) {
+	auto &repaint = textRepaint(part);
+	invalidateTextRepaint(repaint);
+	const auto generation = ++repaint.generation;
+	return crl::guard(_owner, [=] {
+		_owner->_headerPart->repaintText(part, generation);
+	});
+}
+
+void Poll::Header::resetTextRepaint(TextPart part) {
+	auto &repaint = textRepaint(part);
+	invalidateTextRepaint(repaint);
+	++repaint.generation;
+}
+
+void Poll::Header::repaintText(
+		TextPart part,
+		uint64 generation) const {
+	auto &repaint = textRepaint(part);
+	if (generation != repaint.generation
+		|| repaint.pending
+		|| _owner->_parent->delegate()->elementAnimationsPaused()) {
+		return;
+	} else if (repaint.known && repaint.current.isEmpty()) {
+		return;
+	}
+	repaint.pending = true;
+	if (!repaint.known) {
+		_owner->repaint();
+	} else {
+		repaintTextRegion(repaint.current);
+	}
+}
+
+void Poll::Header::finishTextRepaint(
+		TextPart part,
+		const Painter &p,
+		const PaintContext &context,
+		QRegion region,
+		bool geometryKnown) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	auto &repaint = textRepaint(part);
+	repaint.pending = false;
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.current = std::move(region);
+	repaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty() && previous == repaint.current)) {
+		return;
+	}
+	repaint.pending = true;
+	repaintTextRegion(previous.united(repaint.current));
+}
+
+void Poll::Header::invalidateTextRepaints() const {
+	invalidateTextRepaint(_descriptionRepaint);
+	invalidateTextRepaint(_questionRepaint);
+	invalidateTextRepaint(_solutionRepaint);
+}
+
+void Poll::Header::invalidateTextRepaint(TextRepaint &repaint) const {
+	repaint.stale = repaint.stale.united(base::take(repaint.current));
+	repaint.pending = false;
+	repaint.known = false;
+}
+
+void Poll::Header::repaintTextRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_owner->_parent->repaint(rect);
+	}
+}
+
+Poll::Header::TextRepaint &Poll::Header::textRepaint(
+		TextPart part) const {
+	switch (part) {
+	case TextPart::Description: return _descriptionRepaint;
+	case TextPart::Question: return _questionRepaint;
+	case TextPart::Solution: return _solutionRepaint;
+	}
+	Unexpected("Text part in Poll::Header::textRepaint.");
+}
+
 void Poll::Header::updateDescription() {
 	const auto media = _owner->_parent->data()->media();
 	const auto consumed = media
 		? media->consumedMessageText()
 		: TextWithEntities();
 	if (consumed.text.isEmpty()) {
-		_description = Ui::Text::String(st::msgMinWidth / 2);
+		if (!_description.isEmpty()) {
+			resetTextRepaint(TextPart::Description);
+			_description = Ui::Text::String(st::msgMinWidth / 2);
+		}
 		return;
 	}
 	if (_description.toTextWithEntities() == consumed) {
@@ -2666,11 +2897,7 @@ void Poll::Header::updateDescription() {
 	}
 	const auto context = Core::TextContext({
 		.session = &_owner->_poll->session(),
-		.repaint = [=] {
-			if (!_owner->_parent->delegate()->elementAnimationsPaused()) {
-				_owner->_parent->customEmojiRepaint();
-			}
-		},
+		.repaint = textRepaintCallback(TextPart::Description),
 		.customEmojiLoopLimit = 2,
 	});
 	_description.setMarkedText(
@@ -2683,12 +2910,16 @@ void Poll::Header::updateDescription() {
 
 void Poll::Header::updateSolutionText() {
 	if (_owner->_poll->solution.text.isEmpty()) {
-		_solutionText = Ui::Text::String();
+		if (!_solutionText.isEmpty()) {
+			resetTextRepaint(TextPart::Solution);
+			_solutionText = Ui::Text::String();
+		}
 		return;
 	}
 	if (_solutionText.toTextWithEntities() == _owner->_poll->solution) {
 		return;
 	}
+	auto repaint = textRepaintCallback(TextPart::Solution);
 	_solutionText = Ui::Text::String(st::msgMinWidth);
 	_solutionText.setMarkedText(
 		st::webPageDescriptionStyle,
@@ -2696,11 +2927,7 @@ void Poll::Header::updateSolutionText() {
 		Ui::ItemTextOptions(_owner->_parent->data()),
 		Core::TextContext({
 			.session = &_owner->_poll->session(),
-			.repaint = [=] {
-				if (!_owner->_parent->delegate()->elementAnimationsPaused()) {
-					_owner->repaint();
-				}
-			},
+			.repaint = std::move(repaint),
 		}));
 	InitElementTextPart(_owner->_parent, _solutionText);
 }
@@ -4176,6 +4403,16 @@ void Poll::Header::paintSolutionBlock(
 
 	yshift += st::semiboldFont->height + st::historyPollExplanationTitleSkip;
 
+	auto solutionRepaintRegion = QRegion();
+	auto solutionRepaintKnown = context.hasElementPainter(p);
+	const auto solutionTextHeight = _solutionText.countHeight(textWidth);
+	solutionRepaintKnown = solutionRepaintKnown
+		&& AddPollTextRepaintRect(
+			solutionRepaintRegion,
+			p,
+			context,
+			_solutionText,
+			QRect(innerLeft, yshift, textWidth, solutionTextHeight));
 	p.setPen(stm->historyTextFg);
 	_owner->_parent->prepareCustomEmojiPaint(p, context, _solutionText);
 	_solutionText.draw(p, {
@@ -4188,9 +4425,15 @@ void Poll::Header::paintSolutionBlock(
 		.pausedSpoiler = context.paused,
 		.selection = toSolutionSelection(context.selection),
 	});
+	finishTextRepaint(
+		TextPart::Solution,
+		p,
+		context,
+		std::move(solutionRepaintRegion),
+		solutionRepaintKnown);
 
 	if (countSolutionMediaHeight(textWidth)) {
-		yshift += _solutionText.countHeight(textWidth)
+		yshift += solutionTextHeight
 			+ st::historyPollExplanationMediaSkip;
 		const auto isDocument = _solutionMedia
 			&& (_solutionMedia->kind == PollThumbnailKind::Document
