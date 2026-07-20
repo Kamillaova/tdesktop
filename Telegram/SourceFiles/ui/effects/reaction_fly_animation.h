@@ -95,16 +95,19 @@ private:
 		int to,
 		int top,
 		float64 progress) const;
-	void paintCenterFrame(
+	QRect paintCenterFrame(
 		QPainter &p,
 		QRect target,
 		const QColor &colored,
-		crl::time now) const;
-	void paintMiniCopies(
+		crl::time now,
+		const QTransform &invertedInitialTransform,
+		bool paint) const;
+	QRect paintMiniCopies(
 		QPainter &p,
 		QPoint center,
 		const QColor &colored,
-		crl::time now) const;
+		crl::time now,
+		const QTransform &invertedInitialTransform) const;
 	void generateMiniCopies(int size, float64 miniCopyMultiplier);
 
 	const not_null<::Data::Reactions*> _owner;

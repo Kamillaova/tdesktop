@@ -162,7 +162,7 @@ public:
 	}
 
 	[[nodiscard]] std::optional<QRect> lookupEffectArea(
-		FullMsgId itemId) const;
+		FullMsgId itemId);
 	void startEffectsCollection();
 	[[nodiscard]] auto currentReactionPaintInfo()
 		-> not_null<Ui::ReactionPaintInfo*>;
@@ -204,6 +204,10 @@ private:
 		float64 expandRatio);
 
 	void clearAppearAnimations();
+	void repaintEffectTransition(
+		QRect previous,
+		QRect current,
+		QPoint itemOrigin) const;
 
 	[[nodiscard]] QMargins innerMargins() const;
 	[[nodiscard]] QRect buttonInner() const;
@@ -243,10 +247,18 @@ private:
 	mutable base::flat_map<ReactionId, ClickHandlerPtr> _reactionsLinks;
 	Fn<Fn<void()>(ReactionId)> _createChooseCallback;
 
-	base::flat_map<FullMsgId, QRect> _activeEffectAreas;
+	struct ActiveEffectArea {
+		QRect area;
+		bool repaintRequested = false;
+	};
+	struct CollectedEffect {
+		Ui::ReactionPaintInfo paint;
+		QPoint itemOrigin;
+	};
+	base::flat_map<FullMsgId, ActiveEffectArea> _activeEffectAreas;
 
 	Ui::ReactionPaintInfo _currentReactionInfo;
-	base::flat_map<FullMsgId, Ui::ReactionPaintInfo> _collectedEffects;
+	base::flat_map<FullMsgId, CollectedEffect> _collectedEffects;
 
 	base::unique_qptr<Ui::PopupMenu> _menu;
 	rpl::event_stream<ReactionId> _faveRequests;

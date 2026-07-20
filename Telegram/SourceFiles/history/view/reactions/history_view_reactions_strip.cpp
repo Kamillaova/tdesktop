@@ -165,7 +165,7 @@ auto Strip::resolveCountTargetMethod(float64 scale) const
 	};
 }
 
-void Strip::paintOne(
+bool Strip::paintOne(
 		QPainter &p,
 		ReactionIcons &icon,
 		QPoint position,
@@ -173,6 +173,7 @@ void Strip::paintOne(
 		bool allowAppearStart) {
 	if (icon.added == AddedButton::Expand) {
 		paintExpandIcon(p, position, target);
+		return true;
 	} else {
 		const auto paintFrame = [&](not_null<Ui::AnimatedIcon*> animation) {
 			const auto size = int(std::floor(target.width() + 0.01));
@@ -182,6 +183,7 @@ void Strip::paintOne(
 				{ size, size },
 				_update);
 			p.drawImage(target, frame.image);
+			return !frame.image.isNull();
 		};
 
 		const auto appear = icon.appear.get();
@@ -190,14 +192,15 @@ void Strip::paintOne(
 			appear->animate(_update);
 		}
 		if (appear && appear->animating()) {
-			paintFrame(appear);
+			return paintFrame(appear);
 		} else if (const auto select = icon.select.get()) {
-			paintFrame(select);
+			return paintFrame(select);
 		}
+		return false;
 	}
 }
 
-void Strip::paintOne(
+QRectF Strip::paintOne(
 		QPainter &p,
 		int index,
 		QPoint position,
@@ -207,7 +210,9 @@ void Strip::paintOne(
 	auto &icon = _icons[index];
 	const auto countTarget = resolveCountTargetMethod(scale);
 	const auto target = countTarget(icon).translated(position);
-	paintOne(p, icon, position, target, false);
+	return paintOne(p, icon, position, target, false)
+		? target
+		: QRectF();
 }
 
 bool Strip::inDefaultState(int index) const {

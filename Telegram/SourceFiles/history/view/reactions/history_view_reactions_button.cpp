@@ -495,11 +495,31 @@ void Manager::paint(QPainter &p, const PaintContext &context) {
 		paintButton(p, context, current);
 	}
 
-	for (const auto &[id, effect] : _collectedEffects) {
+	for (const auto &[id, collected] : _collectedEffects) {
+		const auto &effect = collected.paint;
 		const auto offset = effect.effectOffset;
 		p.translate(offset);
-		_activeEffectAreas[id] = effect.effectPaint(p).translated(offset);
+		const auto current = effect.effectPaint(p).translated(offset);
 		p.translate(-offset);
+
+		const auto i = _activeEffectAreas.find(id);
+		const auto previous = (i != end(_activeEffectAreas))
+			? i->second.area
+			: QRect();
+		const auto repaintRequested = (i == end(_activeEffectAreas))
+			|| base::take(i->second.repaintRequested);
+		if (!repaintRequested) {
+			continue;
+		}
+		auto &active = _activeEffectAreas[id];
+		active.area = current;
+		if (!current.isEmpty()
+			&& !previous.contains(current)) {
+			repaintEffectTransition(
+				previous,
+				current,
+				collected.itemOrigin);
+		}
 	}
 	_collectedEffects.clear();
 }
@@ -778,11 +798,13 @@ void Manager::clearAppearAnimations() {
 	_strip.clearAppearAnimations();
 }
 
-std::optional<QRect> Manager::lookupEffectArea(FullMsgId itemId) const {
+std::optional<QRect> Manager::lookupEffectArea(FullMsgId itemId) {
 	const auto i = _activeEffectAreas.find(itemId);
-	return (i != end(_activeEffectAreas))
-		? i->second
-		: std::optional<QRect>();
+	if (i == end(_activeEffectAreas)) {
+		return std::nullopt;
+	}
+	i->second.repaintRequested = true;
+	return i->second.area;
 }
 
 void Manager::startEffectsCollection() {
@@ -799,17 +821,33 @@ void Manager::recordCurrentReactionEffect(FullMsgId itemId, QPoint origin) {
 	if (_currentReactionInfo.effectPaint) {
 		_currentReactionInfo.effectOffset += origin
 			+ _currentReactionInfo.position;
-		_collectedEffects[itemId] = base::take(_currentReactionInfo);
+		_collectedEffects[itemId] = {
+			.paint = base::take(_currentReactionInfo),
+			.itemOrigin = origin,
+		};
 	} else {
 		if (!_collectedEffects.empty()) {
 			_collectedEffects.remove(itemId);
 		}
 		if (!_activeEffectAreas.empty()) {
-			if (const auto area = _activeEffectAreas.take(itemId)) {
-				_buttonUpdate(*area);
+			if (const auto active = _activeEffectAreas.take(itemId)) {
+				_buttonUpdate(active->area);
 			}
 		}
 	}
+}
+
+void Manager::repaintEffectTransition(
+		QRect previous,
+		QRect current,
+		QPoint itemOrigin) const {
+	if (!previous.isEmpty()) {
+		_buttonUpdate(previous);
+	}
+	_buttonUpdate(current);
+	_buttonUpdate(QRect(
+		itemOrigin,
+		QSize(st::lineWidth, st::lineWidth)));
 }
 
 bool Manager::showContextMenu(

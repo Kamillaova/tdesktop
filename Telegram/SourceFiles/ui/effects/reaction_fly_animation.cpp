@@ -29,6 +29,19 @@ constexpr auto kMiniCopiesScaleOutDuration = crl::time(200);
 constexpr auto kMiniCopiesMaxScaleMin = 0.6;
 constexpr auto kMiniCopiesMaxScaleMax = 0.9;
 
+[[nodiscard]] QRect MapPaintedRect(
+		const QPainter &p,
+		const QTransform &invertedInitialTransform,
+		QRectF rect) {
+	if (rect.isEmpty()) {
+		return {};
+	}
+	return invertedInitialTransform
+		.map(p.transform().map(QPolygonF(rect)))
+		.boundingRect()
+		.toAlignedRect();
+}
+
 } // namespace
 
 ReactionFlyAnimationArgs ReactionFlyAnimationArgs::translated(QPoint point) const {
@@ -147,94 +160,143 @@ QRect ReactionFlyAnimation::paintGetArea(
 		const QColor &colored,
 		QRect clip,
 		crl::time now) const {
-	const auto scale = [&] {
-		if (!_scaleOutDuration
-			|| (!_effect && !_noEffectScaleStarted)) {
-			return 1.;
-		}
-		auto progress = _noEffectScaleAnimation.value(0.);
-		if (_effect) {
-			const auto rate = _effect->frameRate();
-			if (!rate) {
-				return 1.;
-			}
-			const auto left = _effect->framesCount() - _effect->frameIndex();
-			const auto duration = left * 1000. / rate;
-			progress = (duration < _scaleOutDuration)
-				? (duration / double(_scaleOutDuration))
-				: 1.;
-		}
-		return (1. * progress + _scaleOutTarget * (1. - progress));
-	}();
-	auto hq = std::optional<PainterHighQualityEnabler>();
-	if (scale < 1.) {
-		hq.emplace(p);
-		const auto shift = QRectF(target).center();
-		p.translate(shift);
-		p.scale(scale, scale);
-		p.translate(-shift);
-	}
 	if (!_valid) {
 		return QRect();
-	} else if (_flyIcon.isNull()) {
-		const auto wide = QRect(
-			target.topLeft() - QPoint(target.width(), target.height()) / 2,
-			target.size() * 2);
-		const auto area = _miniCopies.empty()
-			? wide
-			: QRect(
-				target.topLeft() - QPoint(target.width(), target.height()),
-				target.size() * 3);
-		if (clip.isEmpty() || area.intersects(clip)) {
-			paintCenterFrame(p, target, colored, now);
+	}
+	const auto initialTransform = p.transform();
+	auto invertible = false;
+	const auto invertedInitialTransform = initialTransform.inverted(
+		&invertible);
+	if (!invertible) {
+		return QRect();
+	}
+	p.save();
+	const auto result = [&] {
+		const auto scale = [&] {
+			if (!_scaleOutDuration
+				|| (!_effect && !_noEffectScaleStarted)) {
+				return 1.;
+			}
+			auto progress = _noEffectScaleAnimation.value(0.);
+			if (_effect) {
+				const auto rate = _effect->frameRate();
+				if (!rate) {
+					return 1.;
+				}
+				const auto left = _effect->framesCount()
+					- _effect->frameIndex();
+				const auto duration = left * 1000. / rate;
+				progress = (duration < _scaleOutDuration)
+					? (duration / double(_scaleOutDuration))
+					: 1.;
+			}
+			return (1. * progress + _scaleOutTarget * (1. - progress));
+		}();
+		auto hq = std::optional<PainterHighQualityEnabler>();
+		if (scale < 1.) {
+			hq.emplace(p);
+			const auto shift = QRectF(target).center();
+			p.translate(shift);
+			p.scale(scale, scale);
+			p.translate(-shift);
+		}
+		if (_flyIcon.isNull()) {
+			const auto wide = QRect(
+				target.topLeft()
+					- QPoint(target.width(), target.height()) / 2,
+				target.size() * 2);
+			const auto mappedWide = MapPaintedRect(
+				p,
+				invertedInitialTransform,
+				QRectF(wide));
+			const auto visible = clip.isEmpty() || mappedWide.intersects(clip);
+			auto painted = paintCenterFrame(
+				p,
+				target,
+				colored,
+				now,
+				invertedInitialTransform,
+				visible || (_custom != nullptr));
 			if (const auto effect = _effect.get()) {
 				if (effect->animating()) {
-					// Must not be colored to text.
-					p.drawImage(wide, effect->frame(QColor()));
+					if (visible) {
+						// Must not be colored to text.
+						p.drawImage(wide, effect->frame(QColor()));
+					}
+					painted = painted.united(mappedWide);
 				}
 			}
-			paintMiniCopies(p, target.center(), colored, now);
+			if (_custom) {
+				painted = painted.united(paintMiniCopies(
+					p,
+					target.center(),
+					colored,
+					now,
+					invertedInitialTransform));
+			}
+			return painted;
 		}
-		return area;
-	}
-	const auto from = _flyFrom.translated(origin);
-	const auto lshift = target.width() / 4;
-	const auto rshift = target.width() / 2 - lshift;
-	const auto margins = QMargins{ lshift, lshift, rshift, rshift };
-	target = target.marginsRemoved(margins);
-	const auto progress = _fly.value(1.);
-	const auto rect = QRect(
-		anim::interpolate(from.x(), target.x(), progress),
-		computeParabolicTop(
-			_cached,
-			from.y(),
-			target.y(),
-			st::reactionFlyUp,
-			progress),
-		anim::interpolate(from.width(), target.width(), progress),
-		anim::interpolate(from.height(), target.height(), progress));
-	const auto wide = rect.marginsAdded(margins);
-	if (clip.isEmpty() || wide.intersects(clip)) {
+		const auto from = _flyFrom.translated(origin);
+		const auto lshift = target.width() / 4;
+		const auto rshift = target.width() / 2 - lshift;
+		const auto margins = QMargins{ lshift, lshift, rshift, rshift };
+		target = target.marginsRemoved(margins);
+		const auto progress = _fly.value(1.);
+		const auto rect = QRect(
+			anim::interpolate(from.x(), target.x(), progress),
+			computeParabolicTop(
+				_cached,
+				from.y(),
+				target.y(),
+				st::reactionFlyUp,
+				progress),
+			anim::interpolate(from.width(), target.width(), progress),
+			anim::interpolate(from.height(), target.height(), progress));
+		const auto wide = rect.marginsAdded(margins);
+		const auto mappedWide = MapPaintedRect(
+			p,
+			invertedInitialTransform,
+			QRectF(wide));
+		const auto visible = clip.isEmpty() || mappedWide.intersects(clip);
+		auto painted = QRect();
 		if (progress < 1.) {
-			p.setOpacity(1. - progress);
-			p.drawImage(rect, _flyIcon);
+			if (visible) {
+				p.setOpacity(1. - progress);
+				p.drawImage(rect, _flyIcon);
+			}
+			painted = MapPaintedRect(
+				p,
+				invertedInitialTransform,
+				QRectF(rect));
 		}
 		if (progress > 0.) {
-			p.setOpacity(progress);
-			paintCenterFrame(p, wide, colored, now);
+			if (visible || _custom) {
+				p.setOpacity(progress);
+			}
+			painted = painted.united(paintCenterFrame(
+				p,
+				wide,
+				colored,
+				now,
+				invertedInitialTransform,
+				visible || (_custom != nullptr)));
 		}
 		p.setOpacity(1.);
-	}
-	return wide;
+		return painted;
+	}();
+	p.restore();
+	return result;
 }
 
-void ReactionFlyAnimation::paintCenterFrame(
+QRect ReactionFlyAnimation::paintCenterFrame(
 		QPainter &p,
 		QRect target,
 		const QColor &colored,
-		crl::time now) const {
+		crl::time now,
+		const QTransform &invertedInitialTransform,
+		bool paint) const {
 	if (_effectOnly) {
-		return;
+		return {};
 	}
 	const auto size = QSize(
 		int(base::SafeRound(target.width() * _centerSizeMultiplier)),
@@ -245,32 +307,51 @@ void ReactionFlyAnimation::paintCenterFrame(
 			target.y() + (target.height() - size.height()) / 2,
 			size.width(),
 			size.height());
-		p.drawImage(rect, _center->frame(st::windowFg->c));
+		if (paint) {
+			p.drawImage(rect, _center->frame(st::windowFg->c));
+		}
+		return MapPaintedRect(p, invertedInitialTransform, QRectF(rect));
 	} else if (_custom) {
+		if (!paint) {
+			return {};
+		}
 		const auto scaled = (size.width() != _customSize);
-		_custom->paint(p, {
+		const auto position = QPoint(
+			target.x() + (target.width() - _customSize) / 2,
+			target.y() + (target.height() - _customSize) / 2);
+		const auto painted = _custom->paint(p, {
 			.textColor = colored,
 			.size = { _customSize, _customSize },
 			.now = now,
 			.scale = (scaled ? (size.width() / float64(_customSize)) : 1.),
-			.position = QPoint(
-				target.x() + (target.width() - _customSize) / 2,
-				target.y() + (target.height() - _customSize) / 2),
+			.position = position,
 			.scaled = scaled,
 			.internal = { .forceFirstFrame = _forceFirstFrame },
 		});
+		const auto fallback = QRectF(position, QSize(_customSize, _customSize));
+		const auto bounds = !painted.isEmpty()
+			? painted
+			: _custom->ready()
+			? QRectF()
+			: fallback;
+		return MapPaintedRect(
+			p,
+			invertedInitialTransform,
+			bounds);
 	}
+	return {};
 }
 
-void ReactionFlyAnimation::paintMiniCopies(
+QRect ReactionFlyAnimation::paintMiniCopies(
 		QPainter &p,
 		QPoint center,
 		const QColor &colored,
-		crl::time now) const {
+		crl::time now,
+		const QTransform &invertedInitialTransform) const {
 	Expects(_miniCopies.empty() || _custom != nullptr);
 
 	if (!_minis.animating()) {
-		return;
+		return {};
 	}
 	auto hq = PainterHighQualityEnabler(p);
 	const auto size = QSize(_customSize, _customSize);
@@ -287,6 +368,7 @@ void ReactionFlyAnimation::paintMiniCopies(
 		.scaled = true,
 		.internal = { .forceFirstFrame = _forceFirstFrame },
 	};
+	auto result = QRect();
 	for (const auto &mini : _miniCopies) {
 		if (progress >= mini.duration) {
 			continue;
@@ -305,8 +387,19 @@ void ReactionFlyAnimation::paintMiniCopies(
 				mini.finalY,
 				mini.flyUp,
 				value));
-		_custom->paint(p, context);
+		const auto painted = _custom->paint(p, context);
+		const auto fallback = QRectF(context.position, context.size);
+		const auto bounds = !painted.isEmpty()
+			? painted
+			: _custom->ready()
+			? QRectF()
+			: fallback;
+		result = result.united(MapPaintedRect(
+			p,
+			invertedInitialTransform,
+			bounds));
 	}
+	return result;
 }
 
 void ReactionFlyAnimation::generateMiniCopies(

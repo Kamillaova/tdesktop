@@ -32,12 +32,16 @@ public:
 	[[nodiscard]] ReactionFlyCenter grabBadgeCenter();
 
 private:
+	void requestRepaint(QRect area);
+
 	const int _flySize = 0;
 	Fn<QColor()> _textColor;
 	Ui::ReactionFlyAnimation _fly;
 	Ui::RpWidget _layer;
 	QRect _area;
-	bool _areaUpdated = false;
+	QRect _repaintArea;
+	QRect _followupArea;
+	crl::time _followupNow = 0;
 	QPointer<QWidget> _target;
 
 };
