@@ -46,6 +46,12 @@ bool TopicsView::prepared() const {
 	return (_version == version);
 }
 
+bool TopicsView::hasAnimatedContent() const {
+	return ranges::any_of(_titles, [](const auto &title) {
+		return title.title.hasCustomEmoji() || title.title.hasSpoilers();
+	});
+}
+
 void TopicsView::prepare(MsgId frontRootId, Fn<void()> customEmojiRepaint) {
 	Expects(_forum != nullptr);
 

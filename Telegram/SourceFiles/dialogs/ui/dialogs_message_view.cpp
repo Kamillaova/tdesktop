@@ -7,24 +7,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/ui/dialogs_message_view.h"
 
-#include "history/history.h"
-#include "history/history_item.h"
-#include "history/view/history_view_element.h"
-#include "history/view/history_view_item_preview.h"
-#include "main/main_session.h"
-#include "dialogs/dialogs_three_state_icon.h"
+#include "core/ui_integration.h"
 #include "dialogs/ui/dialogs_layout.h"
 #include "dialogs/ui/dialogs_topics_view.h"
+#include "dialogs/dialogs_three_state_icon.h"
+#include "history/view/history_view_element.h"
+#include "history/view/history_view_item_preview.h"
+#include "history/history.h"
+#include "history/history_item.h"
+#include "lang/lang_keys.h"
+#include "lang/lang_text_entity.h"
+#include "main/main_session.h"
 #include "ui/effects/spoiler_mess.h"
 #include "ui/text/custom_emoji_helper.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/painter.h"
-#include "ui/rect.h"
 #include "ui/power_saving.h"
-#include "core/ui_integration.h"
-#include "lang/lang_keys.h"
-#include "lang/lang_text_entity.h"
+#include "ui/rect.h"
+
 #include "styles/style_dialogs.h"
 
 namespace {
@@ -146,7 +147,8 @@ bool MessageView::prepared(
 	return (_textCachedFor == item.get())
 		&& (_unreadMedia == item->isUnreadMedia())
 		&& ((!forum && !monoforum)
-			|| (_topics
+			? !_topics
+			: (_topics
 				&& _topics->forum() == forum
 				&& _topics->monoforum() == monoforum
 				&& _topics->prepared()));
@@ -205,7 +207,8 @@ void MessageView::prepare(
 		_senderCache.setMarkedText(
 			st::dialogsTextStyle,
 			std::move(sender),
-			DialogTextOptions());
+			DialogTextOptions(),
+			context);
 		preview.text = Text::Mid(preview.text, senderTill);
 	} else {
 		_senderCache = { st::dialogsTextWidthMin };
@@ -386,9 +389,11 @@ int MessageView::countWidth() const {
 }
 
 bool MessageView::hasAnimatedContent() const {
-	if (_textCache.hasCustomEmoji()
+	if ((_topics && _topics->hasAnimatedContent())
+		|| _textCache.hasCustomEmoji()
 		|| _textCache.hasSpoilers()
-		|| _senderCache.hasCustomEmoji()) {
+		|| _senderCache.hasCustomEmoji()
+		|| _senderCache.hasSpoilers()) {
 		return true;
 	}
 	for (const auto &image : _imagesCache) {
@@ -456,6 +461,10 @@ void MessageView::paint(
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
 			.palette = palette,
+			.spoiler = Text::DefaultSpoilerCache(),
+			.now = context.now,
+			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
+			.pausedSpoiler = pausedSpoiler,
 			.elisionHeight = rect.height(),
 		});
 		rect.setLeft(rect.x() + _senderCache.maxWidth());

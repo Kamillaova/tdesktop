@@ -72,6 +72,7 @@ public:
 	}
 
 	[[nodiscard]] bool prepared() const;
+	[[nodiscard]] bool hasAnimatedContent() const;
 	void prepare(MsgId frontRootId, Fn<void()> customEmojiRepaint);
 	void prepare(PeerId frontPeerId, Fn<void()> customEmojiRepaint);
 
