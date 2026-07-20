@@ -45,6 +45,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace HistoryView {
 namespace {
 
+struct PaintedRectRepaint {
+	not_null<Element*> view;
+	QRect rect;
+	bool pending = false;
+};
+
 class ButtonPart final : public MediaGenericPart {
 public:
 	ButtonPart(
@@ -126,6 +132,52 @@ private:
 	ClickHandlerPtr _link;
 
 };
+
+void RepaintPaintedRect(not_null<PaintedRectRepaint*> state) {
+	if (state->pending) {
+		return;
+	}
+	state->pending = true;
+	if (state->rect.isEmpty()) {
+		state->view->repaint();
+	} else {
+		state->view->repaint(state->rect);
+	}
+}
+
+template <typename State>
+auto MakePaintedRectRepaintCallback(const std::shared_ptr<State> &state) {
+	const auto weak = std::weak_ptr<State>(state);
+	return [weak] {
+		const auto strong = weak.lock();
+		if (strong) {
+			RepaintPaintedRect(&strong->repaint);
+		}
+	};
+}
+
+void RecordPaintedRect(
+		not_null<PaintedRectRepaint*> state,
+		const Painter &p,
+		const Ui::ChatPaintContext &context,
+		QRectF rect) {
+	if (!context.hasElementPainter(p)) {
+		if (state->rect.isEmpty()) {
+			state->pending = false;
+		}
+		return;
+	}
+	state->pending = false;
+	const auto mapped = context.mapToElement(p, rect);
+	const auto current = mapped ? *mapped : QRect();
+	const auto previous = state->rect;
+	state->rect = current;
+	if (previous.isEmpty() || previous == current) {
+		return;
+	}
+	state->pending = true;
+	state->view->repaint(previous.united(current));
+}
 
 TextBubblePart::TextBubblePart(
 	TextWithEntities text,
@@ -483,16 +535,19 @@ auto UniqueGiftBg(
 		const Ui::ChatPaintContext&,
 		not_null<const MediaGeneric*>)> {
 	struct State {
+		PaintedRectRepaint repaint;
 		QImage bg;
 		base::flat_map<float64, QImage> cache;
 		std::unique_ptr<Ui::Text::CustomEmoji> pattern;
 		QImage badgeCache;
 		Info::PeerGifts::GiftBadge badgeKey;
 	};
-	const auto state = std::make_shared<State>();
+	const auto state = std::make_shared<State>(State{
+		.repaint = { .view = view },
+	});
 	state->pattern = view->history()->owner().customEmojiManager().create(
 		gift->pattern.document,
-		[=] { view->repaint(); },
+		MakePaintedRectRepaintCallback(state),
 		Data::CustomEmojiSizeTag::Large);
 	[[maybe_unused]] const auto preload = state->pattern->ready();
 
@@ -512,6 +567,7 @@ auto UniqueGiftBg(
 		const auto full = QRect(0, 0, media->width(), media->height());
 		const auto inner = full.marginsRemoved(
 			{ removed, removed, removed, removed });
+		RecordPaintedRect(&state->repaint, p, context, inner);
 		if (!webpreview) {
 			auto pen = context.st->msgServiceBg()->p;
 			pen.setWidthF(thickness);
@@ -657,6 +713,7 @@ auto AuctionBg(
 		const Ui::ChatPaintContext&,
 		not_null<const MediaGeneric*>)> {
 	struct State {
+		PaintedRectRepaint repaint;
 		std::unique_ptr<Ui::Text::CustomEmoji> pattern;
 		base::flat_map<float64, QImage> cache;
 		std::optional<Ui::StarParticles> particles;
@@ -664,11 +721,13 @@ auto AuctionBg(
 		crl::time pausedAt = 0;
 		crl::time pauseOffset = 0;
 	};
-	const auto state = std::make_shared<State>();
+	const auto state = std::make_shared<State>(State{
+		.repaint = { .view = view },
+	});
 	if (gift->unique && gift->unique->pattern.document) {
 		state->pattern = view->history()->owner().customEmojiManager().create(
 			gift->unique->pattern.document,
-			[=] { view->repaint(); },
+			MakePaintedRectRepaintCallback(state),
 			Data::CustomEmojiSizeTag::Large);
 	}
 	state->particles.emplace(
@@ -727,9 +786,8 @@ auto AuctionBg(
 		const auto left = std::max(endDate - now, 0);
 		if (startsIn > 0 || left > 0) {
 			if (!state->timer) {
-				state->timer = std::make_unique<base::Timer>([=] {
-					view->repaint();
-				});
+				state->timer = std::make_unique<base::Timer>(
+					MakePaintedRectRepaintCallback(state));
 			}
 			state->timer->callOnce(1000);
 		} else if (state->timer) {
@@ -761,6 +819,11 @@ auto AuctionBg(
 			padding.top(),
 			timerWidth,
 			timerHeight);
+		RecordPaintedRect(
+			&state->repaint,
+			p,
+			context,
+			QRectF(full).united(timerRect));
 
 		p.setPen(Qt::NoPen);
 		p.setBrush(st::slideFadeOutBg);
