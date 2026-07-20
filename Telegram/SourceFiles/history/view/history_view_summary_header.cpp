@@ -156,10 +156,11 @@ void SummaryHeader::paint(
 	}
 	{
 		const auto size = QSize(w, _height);
+		const auto particlesRect = QRect(QPoint(), size);
 		if (_animation->cachedSize != size) {
 			_animation->path = QPainterPath();
 			_animation->path.addRoundedRect(
-				QRect(0, 0, w, _height),
+				particlesRect,
 				quoteSt.radius,
 				quoteSt.radius);
 			_animation->cachedSize = size;
@@ -170,17 +171,15 @@ void SummaryHeader::paint(
 		const auto paused = context.paused || On(PowerSaving::kChatEffects);
 		_animation->particles.paint(
 			p,
-			QRect(0, 0, w, _height),
+			particlesRect,
 			context.now,
 			paused);
 		if (!paused) {
-			const auto session = &view->history()->session();
-			const auto r = QRect(x, y, w, _height);
-			Ui::PostponeCall(session, [=, itemId = view->data()->fullId()] {
-				if (const auto i = session->data().message(itemId)) {
-					session->data().requestItemRepaint(i, r);
-				}
-			});
+			scheduleParticlesRepaint(
+				view,
+				context.mapToElement(
+					p,
+					QRectF(particlesRect)));
 		}
 		p.setClipping(false);
 		p.translate(-x, -y);
@@ -235,6 +234,42 @@ void SummaryHeader::paint(
 		if (_ripple.animation->empty()) {
 			_ripple.animation.reset();
 		}
+	}
+}
+
+void SummaryHeader::scheduleParticlesRepaint(
+		not_null<const Element*> view,
+		std::optional<QRect> rect) const {
+	const auto alreadyPending = (_particlesRepaintState
+		!= ParticlesRepaintState::None);
+	if (!rect || rect->isEmpty()) {
+		_particlesRepaintRect = QRect();
+		_particlesRepaintState = ParticlesRepaintState::Full;
+	} else if (_particlesRepaintState != ParticlesRepaintState::Full) {
+		_particlesRepaintRect = _particlesRepaintRect.united(*rect);
+		_particlesRepaintState = ParticlesRepaintState::Rect;
+	}
+	if (alreadyPending) {
+		return;
+	}
+	const auto weak = base::make_weak(view);
+	Ui::PostponeCall(&view->history()->session(), [weak] {
+		if (const auto strong = weak.get()) {
+			if (const auto header = strong->Get<SummaryHeader>()) {
+				header->repaintParticles(strong);
+			}
+		}
+	});
+}
+
+void SummaryHeader::repaintParticles(
+		not_null<const Element*> view) const {
+	const auto state = base::take(_particlesRepaintState);
+	const auto rect = base::take(_particlesRepaintRect);
+	if (state == ParticlesRepaintState::Full) {
+		view->repaint();
+	} else if (state == ParticlesRepaintState::Rect) {
+		view->repaint(rect);
 	}
 }
 

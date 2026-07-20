@@ -53,8 +53,18 @@ public:
 	void unloadHeavyPart();
 
 private:
+	enum class ParticlesRepaintState : uchar {
+		None,
+		Rect,
+		Full,
+	};
+
 	void ensureAnimation() const;
 	void ensureLottie() const;
+	void scheduleParticlesRepaint(
+		not_null<const Element*> view,
+		std::optional<QRect> rect) const;
+	void repaintParticles(not_null<const Element*> view) const;
 
 	[[nodiscard]] QRect iconRect() const;
 	struct Animation {
@@ -80,6 +90,9 @@ private:
 	mutable int _width = 0;
 	mutable std::unique_ptr<Lottie::Icon> _lottie;
 	mutable crl::time _unloadTime = 0;
+	mutable QRect _particlesRepaintRect;
+	mutable ParticlesRepaintState _particlesRepaintState
+		= ParticlesRepaintState::None;
 
 };
 
