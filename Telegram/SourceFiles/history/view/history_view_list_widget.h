@@ -667,6 +667,7 @@ private:
 	void repaintItem(FullMsgId itemId);
 	void repaintItem(const Element *view);
 	void repaintItem(const Element *view, QRect rect);
+	void repaintItem(const Element *view, const QRegion &region);
 	void resizeItem(not_null<Element*> view);
 	void refreshItem(not_null<const Element*> view);
 	void viewHeightAdjusted(not_null<Element*> view);

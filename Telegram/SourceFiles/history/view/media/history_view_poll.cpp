@@ -2729,9 +2729,7 @@ void Poll::stopRepaintGeneration(RepaintState &repaint) const {
 }
 
 void Poll::repaintRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void Poll::invalidateFiniteRepaintGeometries() const {
@@ -3187,9 +3185,7 @@ void Poll::Header::invalidateTextRepaint(TextRepaint &repaint) const {
 }
 
 void Poll::Header::repaintTextRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_owner->_parent->repaint(rect);
-	}
+	_owner->_parent->repaint(region);
 }
 
 Poll::Header::TextRepaint &Poll::Header::textRepaint(
@@ -4245,9 +4241,7 @@ void Poll::Options::finishAnswersAnimationPaint() const {
 
 void Poll::Options::repaintAnswersAnimationRegion(
 		const QRegion &region) const {
-	for (const auto &rect : region) {
-		_owner->_parent->repaint(rect);
-	}
+	_owner->_parent->repaint(region);
 }
 
 void Poll::Options::radialAnimationCallback() const {
@@ -4316,9 +4310,7 @@ void Poll::Options::finishSendingAnimationPaint() const {
 
 void Poll::Options::repaintSendingAnimationRegion(
 		const QRegion &region) const {
-	for (const auto &rect : region) {
-		_owner->_parent->repaint(rect);
-	}
+	_owner->_parent->repaint(region);
 }
 
 void Poll::Options::resetSendingAnimation() const {
@@ -4502,9 +4494,7 @@ void Poll::Options::finishAnswerTextPaint() const {
 
 void Poll::Options::repaintAnswerTextRegion(
 		const QRegion &region) const {
-	for (const auto &rect : region) {
-		_owner->_parent->repaint(rect);
-	}
+	_owner->_parent->repaint(region);
 }
 
 void Poll::Options::subscribeToThumbnailUpdates(
@@ -4673,9 +4663,7 @@ void Poll::Options::finishAnimatedThumbnailPaint() const {
 
 void Poll::Options::repaintAnimatedThumbnailRegion(
 		const QRegion &region) const {
-	for (const auto &rect : region) {
-		_owner->_parent->repaint(rect);
-	}
+	_owner->_parent->repaint(region);
 }
 
 void Poll::Options::recordAnswerFeedbackRect(

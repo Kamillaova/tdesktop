@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_location_manager.h"
 #include "base/timer.h"
 
+#include <QtGui/QRegion>
+
 class Image;
 class HistoryItem;
 struct WebPageCollage;
@@ -157,6 +159,7 @@ struct ReactionsRemoved {
 struct RequestViewRepaint {
 	not_null<const HistoryView::Element*> view;
 	QRect rect;
+	QRegion region;
 };
 
 struct ViewRemoval {
@@ -408,6 +411,9 @@ public:
 	void requestDrawToReply(DrawToReplyRequest request);
 	[[nodiscard]] rpl::producer<DrawToReplyRequest> drawToReplyRequests() const;
 	void requestViewRepaint(not_null<const ViewElement*> view, QRect r = QRect());
+	void requestViewRepaint(
+		not_null<const ViewElement*> view,
+		const QRegion &region);
 	[[nodiscard]] rpl::producer<RequestViewRepaint> viewRepaintRequest() const;
 	void requestItemResize(not_null<const HistoryItem*> item);
 	[[nodiscard]] rpl::producer<not_null<const HistoryItem*>> itemResizeRequest() const;

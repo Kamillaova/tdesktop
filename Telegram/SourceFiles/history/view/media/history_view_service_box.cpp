@@ -641,9 +641,7 @@ void ServiceBox::invalidateTextRepaint(TextRepaint &repaint) const {
 }
 
 void ServiceBox::repaintTextRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void ServiceBox::repaintButton() const {
@@ -706,9 +704,7 @@ void ServiceBox::invalidateButtonRepaint() const {
 }
 
 void ServiceBox::repaintButtonRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void ServiceBox::Button::toggleRipple(bool pressed) {

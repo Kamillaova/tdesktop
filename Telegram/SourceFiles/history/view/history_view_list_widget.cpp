@@ -505,7 +505,11 @@ ListWidget::ListWidget(
 	_session->data().viewRepaintRequest(
 	) | rpl::on_next([this](Data::RequestViewRepaint data) {
 		if (data.view->delegate() == this) {
-			repaintItem(data.view, data.rect);
+			if (data.region.isEmpty()) {
+				repaintItem(data.view, data.rect);
+			} else {
+				repaintItem(data.view, data.region);
+			}
 		}
 	}, lifetime());
 	_session->data().viewResizeRequest(
@@ -4824,6 +4828,23 @@ void ListWidget::repaintItem(const Element *view, QRect rect) {
 	}
 	const auto top = itemTopForRepaint(view);
 	update(rect.translated(0, top));
+	const auto id = view->data()->fullId();
+	const auto area = _reactionsManager
+		? _reactionsManager->lookupEffectArea(id)
+		: std::nullopt;
+	if (area) {
+		update(*area);
+	}
+}
+
+void ListWidget::repaintItem(
+		const Element *view,
+		const QRegion &region) {
+	if (!view) {
+		return;
+	}
+	const auto top = itemTopForRepaint(view);
+	update(region.translated(0, top));
 	const auto id = view->data()->fullId();
 	const auto area = _reactionsManager
 		? _reactionsManager->lookupEffectArea(id)

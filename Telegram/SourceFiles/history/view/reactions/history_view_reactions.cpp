@@ -110,6 +110,8 @@ struct InlineList::CustomEmojiRepaint {
 	QRegion repaintRegion;
 	QRegion collectedRepaintRegion;
 	QRegion staleRepaintRegion;
+	bool repaintRegionKnown = false;
+	bool collectedRepaintRegionKnown = false;
 	bool repaintPending = false;
 	bool collectingRepaintRegion = false;
 };
@@ -133,7 +135,7 @@ struct InlineList::RippleEffect : Ui::RippleAnimation {
 InlineList::InlineList(
 	not_null<::Data::Reactions*> owner,
 	Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
-	Fn<void(QRect)> customEmojiRepaint,
+	Fn<void(std::optional<QRegion>)> customEmojiRepaint,
 	Fn<void(QRect)> animationRepaint,
 	Data &&data)
 : _owner(owner)
@@ -210,14 +212,14 @@ void InlineList::customEmojiUpdated(
 		&CustomEmojiRepaint::id);
 	if (repaint == end(_customEmojiRepaints)
 		|| repaint->generation != generation) {
-		_customEmojiRepaint(QRect());
+		_customEmojiRepaint(std::nullopt);
 		return;
 	} else if (repaint->repaintPending) {
 		return;
 	}
 	repaint->repaintPending = true;
-	if (repaint->repaintRegion.isEmpty()) {
-		_customEmojiRepaint(QRect());
+	if (!repaint->repaintRegionKnown) {
+		_customEmojiRepaint(std::nullopt);
 	} else {
 		repaintCustomEmojiRegion(repaint->repaintRegion);
 	}
@@ -228,6 +230,8 @@ void InlineList::invalidateCustomEmojiRepaints() {
 		repaint.staleRepaintRegion = repaint.staleRepaintRegion
 			.united(base::take(repaint.repaintRegion))
 			.united(base::take(repaint.collectedRepaintRegion));
+		repaint.repaintRegionKnown = false;
+		repaint.collectedRepaintRegionKnown = false;
 		repaint.repaintPending = false;
 		repaint.collectingRepaintRegion = false;
 	}
@@ -246,6 +250,8 @@ void InlineList::syncCustomEmojiRepaints() {
 			.united(base::take(repaint.repaintRegion))
 			.united(base::take(repaint.collectedRepaintRegion));
 		repaint.generation = generation;
+		repaint.repaintRegionKnown = false;
+		repaint.collectedRepaintRegionKnown = false;
 		repaint.repaintPending = false;
 		repaint.collectingRepaintRegion = false;
 	}
@@ -274,6 +280,7 @@ void InlineList::beginCustomEmojiPaint(
 		if (collect) {
 			repaint.repaintPending = false;
 			repaint.collectedRepaintRegion = QRegion();
+			repaint.collectedRepaintRegionKnown = true;
 			repaint.collectingRepaintRegion = true;
 		} else {
 			if (repaint.repaintRegion.isEmpty()) {
@@ -298,13 +305,17 @@ void InlineList::recordCustomEmojiRect(
 		|| !repaint->collectingRepaintRegion) {
 		return;
 	}
-	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	if (!mapped) {
+		repaint->collectedRepaintRegionKnown = false;
+	} else if (!mapped->isEmpty()) {
 		repaint->collectedRepaintRegion += *mapped;
 	}
 }
 
 void InlineList::finishCustomEmojiPaint() const {
 	auto repaintRegion = QRegion();
+	auto repaintAll = false;
 	for (auto i = begin(_customEmojiRepaints);
 			i != end(_customEmojiRepaints);) {
 		if (!i->collectingRepaintRegion) {
@@ -312,10 +323,21 @@ void InlineList::finishCustomEmojiPaint() const {
 			continue;
 		}
 		i->collectingRepaintRegion = false;
+		const auto known = i->collectedRepaintRegionKnown;
+		i->collectedRepaintRegionKnown = false;
 		const auto stale = base::take(i->staleRepaintRegion);
 		const auto previous = stale.united(base::take(i->repaintRegion));
-		i->repaintRegion = base::take(i->collectedRepaintRegion);
-		if (!previous.isEmpty()
+		auto collected = base::take(i->collectedRepaintRegion);
+		i->repaintRegion = known
+			? std::move(collected)
+			: QRegion();
+		i->repaintRegionKnown = known;
+		if (!known) {
+			if (!previous.isEmpty()) {
+				i->repaintPending = true;
+				repaintAll = true;
+			}
+		} else if (!previous.isEmpty()
 			&& (!stale.isEmpty() || previous != i->repaintRegion)) {
 			i->repaintPending = true;
 			repaintRegion += previous.united(i->repaintRegion);
@@ -326,12 +348,16 @@ void InlineList::finishCustomEmojiPaint() const {
 			++i;
 		}
 	}
-	repaintCustomEmojiRegion(repaintRegion);
+	if (repaintAll) {
+		_customEmojiRepaint(std::nullopt);
+	} else {
+		repaintCustomEmojiRegion(repaintRegion);
+	}
 }
 
 void InlineList::repaintCustomEmojiRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_customEmojiRepaint(rect);
+	if (!region.isEmpty()) {
+		_customEmojiRepaint(region);
 	}
 }
 

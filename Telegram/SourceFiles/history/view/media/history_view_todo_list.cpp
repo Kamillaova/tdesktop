@@ -351,9 +351,7 @@ void TodoList::invalidateRepaintGeometries() const {
 }
 
 void TodoList::repaintRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void TodoList::recordRepaintGeometry(

@@ -395,9 +395,7 @@ void SummaryHeader::invalidateRippleRepaint(
 void SummaryHeader::repaintRippleRegion(
 		not_null<const Element*> view,
 		const QRegion &region) const {
-	for (const auto &rect : region) {
-		view->repaint(rect);
-	}
+	view->repaint(region);
 }
 
 void SummaryHeader::saveRipplePoint(QPoint point) const {

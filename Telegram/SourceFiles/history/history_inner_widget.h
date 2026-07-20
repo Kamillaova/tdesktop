@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_top_bar_widget.h"
 
 #include <QtGui/QPainterPath>
+#include <QtGui/QRegion>
 
 struct ClickContext;
 struct ClickHandlerContext;
@@ -177,6 +178,7 @@ public:
 	void repaintItem(const HistoryItem *item);
 	void repaintItem(const Element *view);
 	void repaintItem(const Element *view, QRect rect);
+	void repaintItem(const Element *view, const QRegion &region);
 
 	[[nodiscard]] bool canCopySelected() const;
 	[[nodiscard]] bool canDeleteSelected() const;

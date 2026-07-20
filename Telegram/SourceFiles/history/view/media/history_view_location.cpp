@@ -487,9 +487,7 @@ void Location::invalidateAnimationRepaints() const {
 }
 
 void Location::repaintAnimationRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void Location::draw(Painter &p, const PaintContext &context) const {

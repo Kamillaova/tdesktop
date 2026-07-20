@@ -752,6 +752,7 @@ public:
 	void clearCustomEmojiRepaint() const;
 	void hideSpoilers();
 	void repaint(QRect r = QRect()) const;
+	void repaint(const QRegion &region) const;
 
 	[[nodiscard]] ClickHandlerPtr fromPhotoLink() const {
 		return fromLink();

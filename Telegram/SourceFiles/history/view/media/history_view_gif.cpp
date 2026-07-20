@@ -2486,9 +2486,7 @@ void Gif::resetSeekAnimationRepaint() const {
 }
 
 void Gif::repaintSeekAnimationRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 Gif::Streamed *Gif::activeOwnStreamed() const {

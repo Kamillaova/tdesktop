@@ -1186,9 +1186,7 @@ void WebPage::invalidateDescriptionRepaint() const {
 }
 
 void WebPage::repaintDescriptionRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void WebPage::repaintOuterRipple(uint64 generation) const {
@@ -1260,9 +1258,7 @@ void WebPage::invalidateRippleRepaint(RippleRepaint &repaint) const {
 }
 
 void WebPage::repaintRippleRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 uint64 WebPage::resetRippleRepaint(RippleRepaint &repaint) const {

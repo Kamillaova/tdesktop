@@ -726,9 +726,7 @@ void Game::invalidateDescriptionRepaint() const {
 }
 
 void Game::repaintDescriptionRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void Game::repaintRipple(uint64 generation) const {
@@ -791,9 +789,7 @@ void Game::invalidateRippleRepaint() const {
 }
 
 void Game::repaintRippleRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 uint64 Game::resetRippleRepaint() const {

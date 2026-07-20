@@ -96,6 +96,7 @@ namespace {
 
 constexpr auto kNextForUpgradeGiftTimeout = 5 * crl::time(1000);
 constexpr auto kMaxServiceNotificationMessageSize = 4096;
+constexpr auto kMaxRepaintRegionRects = 16;
 
 using ViewElement = HistoryView::Element;
 
@@ -2145,6 +2146,20 @@ rpl::producer<DrawToReplyRequest> Session::drawToReplyRequests() const {
 
 void Session::requestViewRepaint(not_null<const ViewElement*> view, QRect r) {
 	_viewRepaintRequest.fire_copy({ view, r });
+}
+
+void Session::requestViewRepaint(
+		not_null<const ViewElement*> view,
+		const QRegion &region) {
+	if (region.isEmpty()) {
+		return;
+	}
+	const auto count = region.rectCount();
+	if (count == 1 || count > kMaxRepaintRegionRects) {
+		requestViewRepaint(view, region.boundingRect());
+		return;
+	}
+	_viewRepaintRequest.fire_copy({ view, QRect(), region });
 }
 
 rpl::producer<RequestViewRepaint> Session::viewRepaintRequest() const {

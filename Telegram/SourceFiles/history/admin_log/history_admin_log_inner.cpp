@@ -297,7 +297,11 @@ InnerWidget::InnerWidget(
 	session().data().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (myView(data.view)) {
-			repaintItem(data.view, data.rect);
+			if (data.region.isEmpty()) {
+				repaintItem(data.view, data.rect);
+			} else {
+				repaintItem(data.view, data.region);
+			}
 		}
 	}, lifetime());
 	session().data().viewResizeRequest(
@@ -3034,6 +3038,16 @@ void InnerWidget::repaintItem(const Element *view, QRect rect) {
 	}
 	const auto top = itemTop(view);
 	update(rect.translated(0, top));
+}
+
+void InnerWidget::repaintItem(
+		const Element *view,
+		const QRegion &region) {
+	if (!view) {
+		return;
+	}
+	const auto top = itemTop(view);
+	update(region.translated(0, top));
 }
 
 void InnerWidget::resizeItem(not_null<Element*> view) {

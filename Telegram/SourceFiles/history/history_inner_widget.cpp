@@ -481,7 +481,11 @@ HistoryInner::HistoryInner(
 	}, lifetime());
 	session().data().viewRepaintRequest(
 	) | rpl::on_next([this](Data::RequestViewRepaint data) {
-		repaintItem(data.view, data.rect);
+		if (data.region.isEmpty()) {
+			repaintItem(data.view, data.rect);
+		} else {
+			repaintItem(data.view, data.region);
+		}
 	}, lifetime());
 	session().data().viewLayoutChanged(
 	) | rpl::filter([=](not_null<const Element*> view) {
@@ -898,6 +902,22 @@ void HistoryInner::repaintItem(const Element *view, QRect rect) {
 	const auto top = itemTopForRepaint(view);
 	if (top >= 0) {
 		update(rect.translated(0, top));
+		const auto id = view->data()->fullId();
+		if (const auto area = _reactionsManager->lookupEffectArea(id)) {
+			update(*area);
+		}
+	}
+}
+
+void HistoryInner::repaintItem(
+		const Element *view,
+		const QRegion &region) {
+	if (_widget->skipItemRepaint()) {
+		return;
+	}
+	const auto top = itemTopForRepaint(view);
+	if (top >= 0) {
+		update(region.translated(0, top));
 		const auto id = view->data()->fullId();
 		if (const auto area = _reactionsManager->lookupEffectArea(id)) {
 			update(*area);

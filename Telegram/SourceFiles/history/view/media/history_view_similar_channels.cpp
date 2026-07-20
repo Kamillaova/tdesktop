@@ -580,9 +580,7 @@ void SimilarChannels::recordChannelRepaint(
 }
 
 void SimilarChannels::repaintChannelRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void SimilarChannels::resetChannelRepaints() const {

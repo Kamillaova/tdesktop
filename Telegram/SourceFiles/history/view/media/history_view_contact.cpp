@@ -784,9 +784,7 @@ void Contact::invalidateRippleRepaints() const {
 }
 
 void Contact::repaintRippleRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 Contact::RippleRepaint &Contact::buttonRippleRepaint(int index) const {

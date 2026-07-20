@@ -1268,9 +1268,7 @@ void ServicePreMessage::invalidateTextRepaint() const {
 }
 
 void ServicePreMessage::repaintTextRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		owner->repaint(rect);
-	}
+	owner->repaint(region);
 }
 
 ClickHandlerPtr ServicePreMessage::textState(
@@ -1608,6 +1606,10 @@ void Element::prepareCustomEmojiPaint(
 
 void Element::repaint(QRect r) const {
 	history()->owner().requestViewRepaint(this, r);
+}
+
+void Element::repaint(const QRegion &region) const {
+	history()->owner().requestViewRepaint(this, region);
 }
 
 void Element::paintHighlight(
@@ -3005,11 +3007,11 @@ void Element::refreshReactions() {
 		setReactions(std::make_unique<InlineList>(
 			&history()->owner().reactions(),
 			handlerFactory,
-			[=](QRect rect) {
-				if (rect.isNull()) {
-					customEmojiRepaint();
+			[=](std::optional<QRegion> region) {
+				if (region) {
+					repaint(*region);
 				} else {
-					repaint(rect);
+					customEmojiRepaint();
 				}
 			},
 			[=](QRect rect) {

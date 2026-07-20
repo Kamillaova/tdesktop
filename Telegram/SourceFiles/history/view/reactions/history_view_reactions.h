@@ -11,6 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_object.h"
 #include "data/data_message_reaction_id.h"
 
+#include <QtGui/QRegion>
+
+#include <optional>
+
 namespace Data {
 class Reactions;
 } // namespace Data
@@ -59,7 +63,7 @@ public:
 	InlineList(
 		not_null<::Data::Reactions*> owner,
 		Fn<ClickHandlerPtr(ReactionId)> handlerFactory,
-		Fn<void(QRect)> customEmojiRepaint,
+		Fn<void(std::optional<QRegion>)> customEmojiRepaint,
 		Fn<void(QRect)> animationRepaint,
 		Data &&data);
 	~InlineList();
@@ -177,7 +181,7 @@ private:
 
 	const not_null<::Data::Reactions*> _owner;
 	const Fn<ClickHandlerPtr(ReactionId)> _handlerFactory;
-	const Fn<void(QRect)> _customEmojiRepaint;
+	const Fn<void(std::optional<QRegion>)> _customEmojiRepaint;
 	const Fn<void(QRect)> _animationRepaint;
 	Data _data;
 	mutable std::vector<CustomEmojiRepaint> _customEmojiRepaints;

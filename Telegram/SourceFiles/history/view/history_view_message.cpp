@@ -1897,9 +1897,7 @@ void Message::invalidateTopicButtonRippleRepaint() const {
 }
 
 void Message::repaintTopicButtonRippleRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		repaint(rect);
-	}
+	repaint(region);
 }
 
 uint64 Message::resetTopicButtonRippleRepaint() const {
@@ -2043,9 +2041,7 @@ void Message::invalidateTopicButtonNameRepaint() const {
 }
 
 void Message::repaintTopicButtonNameRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		repaint(rect);
-	}
+	repaint(region);
 }
 
 int Message::marginTop() const {

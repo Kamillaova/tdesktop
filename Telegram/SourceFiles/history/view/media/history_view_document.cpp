@@ -2075,9 +2075,7 @@ void Document::suspendTtlAnimationRepaint() const {
 }
 
 void Document::repaintTtlAnimationRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 QRect Document::paintPlaybackBlobs(
@@ -2252,9 +2250,7 @@ void Document::invalidateVoiceInteractionRepaint() const {
 }
 
 void Document::repaintVoiceInteractionRegion(const QRegion &region) const {
-	for (const auto &rect : region) {
-		_parent->repaint(rect);
-	}
+	_parent->repaint(region);
 }
 
 void Document::repaintCaption(uint64 generation) const {
