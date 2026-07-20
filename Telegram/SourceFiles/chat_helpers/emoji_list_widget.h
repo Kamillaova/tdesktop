@@ -14,6 +14,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/round_rect.h"
 #include "base/timer.h"
 
+#include <QtGui/QTransform>
+
 #include <map>
 
 class StickerPremiumMark;
@@ -202,11 +204,17 @@ private:
 		bool premiumRequired = false;
 		bool collapsed = false;
 	};
+	struct CustomPaintedArea {
+		QRect current;
+		QRect nominal;
+		QRect stale;
+	};
 	struct CustomOne {
 		std::shared_ptr<Data::EmojiStatusCollectible> collectible;
 		not_null<Ui::Text::CustomEmoji*> custom;
 		not_null<DocumentData*> document;
 		EmojiPtr emoji = nullptr;
+		CustomPaintedArea paintedArea;
 	};
 	struct CustomSet {
 		uint64 id = 0;
@@ -290,6 +298,12 @@ private:
 		float64 progress = 0.;
 		int finalHeight = 0;
 		bool expanding = false;
+		QTransform inverseInitialTransform;
+		bool trackCustomPaint = false;
+	};
+	struct CustomPainted {
+		DocumentId documentId = 0;
+		CustomPaintedArea *area = nullptr;
 	};
 	struct ResolvedCustom {
 		DocumentData *document = nullptr;
@@ -362,8 +376,15 @@ private:
 	[[nodiscard]] QRect searchShortcutRect(int index) const;
 	void refreshSearchShortcutsScroll(int newWidth);
 	void scrollSearchShortcutsTo(int value);
-	void paintSearchShortcuts(Painter &p, QRect clip);
-	void paintSearchShortcutIcon(Painter &p, const CustomSet &set, QRect rect);
+	void paintSearchShortcuts(
+		Painter &p,
+		const ExpandingContext &context,
+		QRect clip);
+	void paintSearchShortcutIcon(
+		Painter &p,
+		const ExpandingContext &context,
+		CustomSet &set,
+		QRect rect);
 	void toggleSearchShortcut(int index);
 	void backToSearchResults();
 	[[nodiscard]] CustomSet &searchSetBySection(int section);
@@ -405,7 +426,7 @@ private:
 		QPainter &p,
 		const ExpandingContext &context,
 		QPoint position,
-		const RecentOne &recent);
+		RecentOne &recent);
 	void drawEmoji(
 		QPainter &p,
 		const ExpandingContext &context,
@@ -466,6 +487,17 @@ private:
 	[[nodiscard]] PowerSaving::Flag powerSavingFlag() const;
 
 	void repaintCustom(DocumentId documentId);
+	void flushCustomRepaints();
+	[[nodiscard]] CustomPainted customPaintedAt(int section, int index);
+	void recordCustomPaint(
+		CustomPaintedArea &area,
+		const QPainter &p,
+		const ExpandingContext &context,
+		QRectF painted,
+		QRectF fallback);
+	[[nodiscard]] QRect takeCustomRepaintRect(
+		CustomPaintedArea &area,
+		QRect fallback);
 
 	void fillRecent();
 	void fillRecentFrom(const std::vector<EmojiStatusId> &list);
@@ -510,6 +542,7 @@ private:
 	base::flat_set<DocumentId> _recentCustomIds;
 	base::flat_set<DocumentId> _freeEffects;
 	base::flat_set<DocumentId> _repaintsScheduled;
+	bool _repaintCustomScheduled = false;
 	rpl::variable<int> _recentShownCount;
 	std::unique_ptr<Ui::Text::CustomEmojiPaintContext> _emojiPaintContext;
 	bool _recentPainted = false;
