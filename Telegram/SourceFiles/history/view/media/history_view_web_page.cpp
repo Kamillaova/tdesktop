@@ -38,6 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect.h"
 #include "ui/power_saving.h"
 #include "ui/text/format_values.h"
+#include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
@@ -52,6 +53,32 @@ constexpr auto kStickerSetLines = 3;
 constexpr auto kFactcheckAboutDuration = 5 * crl::time(1000);
 constexpr auto kSponsoredUserpicLines = 2;
 constexpr auto kLogEntryPreviewLines = 2;
+
+[[nodiscard]] QMargins CustomEmojiRepaintMargins() {
+	const auto inner = st::emojiSize;
+	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
+	const auto skip = (inner - outer) / 2;
+	const auto before = std::max(-skip, 0);
+	const auto after = std::max(skip + outer - inner, 0);
+	return { before, before, after, after };
+}
+
+[[nodiscard]] bool AddDescriptionRepaintRect(
+		QRegion &region,
+		const Painter &p,
+		const PaintContext &context,
+		QRectF rect,
+		const QMargins &margins) {
+	if (!margins.isNull()) {
+		rect = rect.marginsAdded(QMarginsF(margins));
+	}
+	const auto mapped = context.mapToElement(p, rect);
+	if (!mapped || mapped->isEmpty()) {
+		return false;
+	}
+	region += *mapped;
+	return true;
+}
 
 [[nodiscard]] int ArticleThumbWidth(not_null<PhotoData*> thumb, int height) {
 	const auto size = thumb->location(Data::PhotoSize::Thumbnail);
@@ -402,6 +429,7 @@ void WebPage::customEmojiResolveDone(not_null<DocumentData*> document) {
 }
 
 QSize WebPage::countOptimalSize() {
+	invalidateDescriptionRepaint();
 	if (_data->pendingTill || _data->failed) {
 		return { 0, 0 };
 	}
@@ -435,6 +463,7 @@ QSize WebPage::countOptimalSize() {
 	const auto padding = inBubblePadding() + innerMargin();
 	const auto versionChanged = (_dataVersion != _data->version);
 	if (versionChanged) {
+		++_descriptionRepaint.generation;
 		_dataVersion = _data->version;
 		_openl = nullptr;
 		_previewLink = nullptr;
@@ -623,6 +652,7 @@ QSize WebPage::countOptimalSize() {
 		&& !_data->description.text.isEmpty()
 		&& !_data->uniqueGift
 		&& !_data->auction) {
+		const auto generation = ++_descriptionRepaint.generation;
 		const auto &text = _data->description;
 		using Type = Core::TextContextDetails::HashtagMentionType;
 		auto context = Core::TextContext({
@@ -634,7 +664,7 @@ QSize WebPage::countOptimalSize() {
 					? Type::Instagram
 					: Type::Telegram),
 			},
-			.repaint = [=] { _parent->customEmojiRepaint(); },
+			.repaint = descriptionRepaintCallback(generation),
 		});
 		_description.setMarkedText(
 			st::webPageDescriptionStyle,
@@ -767,6 +797,7 @@ QSize WebPage::countOptimalSize() {
 }
 
 QSize WebPage::countCurrentSize(int newWidth) {
+	invalidateDescriptionRepaint();
 	if (_data->pendingTill || _data->failed) {
 		return { newWidth, minHeight() };
 	}
@@ -943,6 +974,217 @@ void WebPage::ensurePhotoMediaCreated() const {
 	history()->owner().registerHeavyViewPart(_parent);
 }
 
+Fn<void()> WebPage::descriptionRepaintCallback(uint64 generation) {
+	const auto weak = base::make_weak(this);
+	return [weak, generation] {
+		if (const auto strong = weak.get()) {
+			strong->repaintDescription(generation);
+		}
+	};
+}
+
+void WebPage::repaintDescription(uint64 generation) const {
+	if (_descriptionRepaint.generation != generation
+		|| _descriptionRepaint.pending) {
+		return;
+	} else if (_descriptionRepaint.known
+		&& _descriptionRepaint.current.isEmpty()) {
+		return;
+	}
+	_descriptionRepaint.pending = true;
+	if (!_descriptionRepaint.known) {
+		_parent->customEmojiRepaint();
+	} else {
+		repaintDescriptionRegion(_descriptionRepaint.current);
+	}
+}
+
+void WebPage::recordDescriptionRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QPoint position,
+		int availableWidth,
+		int visibleHeight,
+		int visibleLines,
+		int removeFromEnd,
+		bool logEntryPreview) const {
+	if (!context.hasElementPainter(p)) {
+		return;
+	}
+	if (_descriptionRepaint.pending && !_descriptionRepaint.known) {
+		_parent->clearCustomEmojiRepaint();
+	}
+	_descriptionRepaint.pending = false;
+
+	auto region = QRegion();
+	auto geometryKnown = true;
+	const auto customEmoji = _description.hasCustomEmoji();
+	const auto animated = customEmoji || _description.hasSpoilers();
+	const auto margins = customEmoji
+		? CustomEmojiRepaintMargins()
+		: QMargins();
+	const auto addLine = [&](const Ui::Text::LineLayoutInfo &line,
+			int top,
+			int bottom,
+			int lineWidth,
+			bool conservative) {
+		if (bottom <= top) {
+			return true;
+		}
+		auto left = std::clamp(line.left, 0, lineWidth);
+		auto width = std::clamp(line.width, 0, lineWidth);
+		if (conservative) {
+			left = 0;
+			width = lineWidth;
+		} else if (line.rtl) {
+			left = line.left
+				? std::clamp(line.left, 0, lineWidth)
+				: std::max(lineWidth - width, 0);
+			width = line.left ? (lineWidth - left) : width;
+		} else {
+			width = std::min(width, lineWidth - left);
+		}
+		return !width || AddDescriptionRepaintRect(
+			region,
+			p,
+			context,
+			QRectF(
+				position.x() + left,
+				position.y() + top,
+				width,
+				bottom - top),
+			margins);
+	};
+
+	if (animated && availableWidth > 0 && visibleHeight > 0) {
+		if (logEntryPreview) {
+			const auto narrowWidth = std::max(
+				availableWidth - _pixw - st::webPagePhotoDelta,
+				1);
+			const auto narrowLines = std::max(
+				kLogEntryPreviewLines - _siteNameLines,
+				0);
+			const auto dimensions = _description.countDimensions(
+				logEntryGeometry(availableWidth),
+				{ .lineWidths = true });
+			const auto count = int(dimensions.lineWidths.size());
+			if (!count) {
+				geometryKnown = false;
+			} else if (narrowLines > 0
+				&& narrowWidth < availableWidth) {
+				const auto narrowCount = std::min(narrowLines, count);
+				auto top = 0;
+				for (auto i = 0; i != narrowCount; ++i) {
+					const auto bottom = std::clamp(
+						logEntryDescriptionPrefixHeight(
+							availableWidth,
+							i),
+						top,
+						visibleHeight);
+					if (bottom > top && !AddDescriptionRepaintRect(
+							region,
+							p,
+							context,
+							QRectF(
+								position.x(),
+								position.y() + top,
+								narrowWidth,
+								bottom - top),
+							margins)) {
+						geometryKnown = false;
+						break;
+					}
+					top = bottom;
+				}
+				if (geometryKnown && count > narrowLines
+					&& visibleHeight > top) {
+					geometryKnown = AddDescriptionRepaintRect(
+						region,
+						p,
+						context,
+						QRectF(
+							position.x(),
+							position.y() + top,
+							availableWidth,
+							visibleHeight - top),
+						margins);
+				}
+			} else {
+				geometryKnown = AddDescriptionRepaintRect(
+					region,
+					p,
+					context,
+					QRectF(position, QSize(
+						availableWidth,
+						visibleHeight)),
+					margins);
+			}
+		} else {
+			const auto lines = _description.countLinesGeometry(
+				availableWidth);
+			const auto count = (visibleLines > 0)
+				? std::min(visibleLines, int(lines.size()))
+				: int(lines.size());
+			const auto conservativeLast = (visibleLines > 0)
+				&& ((int(lines.size()) > visibleLines)
+					|| (removeFromEnd > 0));
+			auto top = 0;
+			if (!count) {
+				geometryKnown = false;
+			}
+			for (auto i = 0; i != count; ++i) {
+				const auto bottom = std::clamp(
+					lines[i].bottom,
+					top,
+					visibleHeight);
+				if (!addLine(
+						lines[i],
+						top,
+						bottom,
+						availableWidth,
+						conservativeLast && (i + 1 == count))) {
+					geometryKnown = false;
+					break;
+				}
+				top = bottom;
+			}
+		}
+	}
+
+	if (!geometryKnown) {
+		region = QRegion();
+	}
+	const auto stale = base::take(_descriptionRepaint.stale);
+	const auto previous = stale.united(
+		base::take(_descriptionRepaint.current));
+	_descriptionRepaint.current = std::move(region);
+	_descriptionRepaint.known = geometryKnown;
+	if (previous.isEmpty()
+		|| (stale.isEmpty()
+			&& previous == _descriptionRepaint.current)) {
+		return;
+	}
+	_descriptionRepaint.pending = true;
+	repaintDescriptionRegion(
+		previous.united(_descriptionRepaint.current));
+}
+
+void WebPage::invalidateDescriptionRepaint() const {
+	if (_descriptionRepaint.pending && !_descriptionRepaint.known) {
+		_parent->clearCustomEmojiRepaint();
+	}
+	_descriptionRepaint.stale = _descriptionRepaint.stale.united(
+		base::take(_descriptionRepaint.current));
+	_descriptionRepaint.pending = false;
+	_descriptionRepaint.known = false;
+}
+
+void WebPage::repaintDescriptionRegion(const QRegion &region) const {
+	for (const auto &rect : region) {
+		_parent->repaint(rect);
+	}
+}
+
 bool WebPage::hasHeavyPart() const {
 	if (const auto stickerSet = stickerSetData()) {
 		for (const auto &part : stickerSet->views) {
@@ -970,6 +1212,15 @@ void WebPage::unloadHeavyPart() {
 
 void WebPage::draw(Painter &p, const PaintContext &context) const {
 	if (width() < rect::m::sum::h(st::msgPadding) + 1) {
+		recordDescriptionRepaint(
+			p,
+			context,
+			QPoint(),
+			0,
+			0,
+			0,
+			0,
+			false);
 		return;
 	}
 	const auto st = context.st;
@@ -1263,6 +1514,20 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 		const auto descriptionWidth = previewGeometry
 			? inner.width()
 			: paintw;
+		const auto descriptionHeight = previewGeometry
+			? _logPreviewDescHeight
+			: (_descriptionLines > 0)
+			? (_descriptionLines * lineHeight)
+			: _description.countHeight(descriptionWidth);
+		recordDescriptionRepaint(
+			p,
+			context,
+			QPoint(inner.left(), tshift),
+			descriptionWidth,
+			descriptionHeight,
+			_descriptionLines,
+			endskip,
+			previewGeometry);
 		_parent->prepareCustomEmojiPaint(p, context, _description);
 		_description.draw(p, {
 			.position = { inner.left(), tshift },
@@ -1282,11 +1547,17 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			.elisionRemoveFromEnd = (_descriptionLines > 0) ? endskip : 0,
 			.useFullWidth = true,
 		});
-		tshift += previewGeometry
-			? _logPreviewDescHeight
-			: (_descriptionLines > 0)
-			? (_descriptionLines * lineHeight)
-			: _description.countHeight(paintw);
+		tshift += descriptionHeight;
+	} else {
+		recordDescriptionRepaint(
+			p,
+			context,
+			QPoint(),
+			0,
+			0,
+			0,
+			0,
+			false);
 	}
 	if (factcheck && factcheck->expanded) {
 		const auto skip = st::factcheckFooterSkip;
@@ -1857,6 +2128,20 @@ Ui::Text::GeometryDescriptor WebPage::logEntryGeometry(int width) const {
 	};
 }
 
+int WebPage::logEntryDescriptionPrefixHeight(
+		int width,
+		int lastLine) const {
+	auto geometry = logEntryGeometry(width);
+	geometry.layout = [
+			layout = std::move(geometry.layout),
+			lastLine](int line) {
+		auto result = layout(line);
+		result.elided = (line == lastLine);
+		return result;
+	};
+	return _description.countDimensions(std::move(geometry)).height;
+}
+
 WebPage::FactcheckMetrics WebPage::computeFactcheckMetrics(
 		int fullHeight) const {
 	const auto possible = fullHeight / st::normalFont->height;
@@ -1890,6 +2175,8 @@ int WebPage::bottomInfoPadding() const {
 }
 
 WebPage::~WebPage() {
+	invalidateDescriptionRepaint();
+	++_descriptionRepaint.generation;
 	history()->owner().unregisterWebPageView(_data, _parent);
 	if (_composeToneListening) {
 		_data->session().data().customEmojiManager().unregisterListener(

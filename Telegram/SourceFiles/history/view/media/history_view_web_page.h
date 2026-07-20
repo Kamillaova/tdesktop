@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_media.h"
 #include "ui/userpic_view.h"
 
+#include <QtGui/QRegion>
+
 namespace Data {
 class DocumentMedia;
 class Media;
@@ -146,6 +148,13 @@ private:
 		uint32 expandable : 1 = 0;
 		uint32 expanded : 1 = 0;
 	};
+	struct DescriptionRepaint {
+		QRegion current;
+		QRegion stale;
+		uint64 generation = 0;
+		uint32 pending : 1 = 0;
+		uint32 known : 1 = 0;
+	};
 	using AdditionalData = std::variant<
 		StickerSetData,
 		SponsoredData,
@@ -172,6 +181,22 @@ private:
 	[[nodiscard]] bool hasLogEntryPreview() const;
 	[[nodiscard]] Ui::Text::GeometryDescriptor logEntryGeometry(
 		int width) const;
+	[[nodiscard]] int logEntryDescriptionPrefixHeight(
+		int width,
+		int lastLine) const;
+	[[nodiscard]] Fn<void()> descriptionRepaintCallback(uint64 generation);
+	void repaintDescription(uint64 generation) const;
+	void recordDescriptionRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QPoint position,
+		int availableWidth,
+		int visibleHeight,
+		int visibleLines,
+		int removeFromEnd,
+		bool logEntryPreview) const;
+	void invalidateDescriptionRepaint() const;
+	void repaintDescriptionRegion(const QRegion &region) const;
 
 	[[nodiscard]] ClickHandlerPtr replaceAttachLink(
 		const ClickHandlerPtr &link) const;
@@ -213,6 +238,7 @@ private:
 	Ui::Text::String _title;
 	Ui::Text::String _description;
 	Ui::Text::String _openButton;
+	mutable DescriptionRepaint _descriptionRepaint;
 
 	QString _duration;
 	int _durationWidth = 0;
