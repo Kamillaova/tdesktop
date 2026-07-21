@@ -160,7 +160,15 @@ private:
 	void updateGiftButtonsGeometry(
 		float64 progressCurrent,
 		const QRect &userpicRect);
-	void paintUserpic(QPainter &p, const QRect &geometry);
+	void paintUserpic(
+		QPainter &p,
+		const QRect &geometry,
+		const QRegion &paintRegion);
+	void repaintTopicIcon();
+	void recordTopicIconPaint(
+		const QRectF &repaintBounds,
+		const QTransform &transform,
+		const QRegion &paintRegion);
 	void updateVideoUserpic();
 	void showTopBarMenu(
 		not_null<Window::SessionController*> controller,
@@ -328,6 +336,12 @@ private:
 	bool _communityEffect = false;
 	QImage _monoforumMask;
 	std::unique_ptr<Ui::VideoUserpicPlayer> _videoUserpicPlayer;
+	struct TopicIconRepaint {
+		QRect painted;
+		QTransform transform;
+		bool valid = false;
+	};
+	TopicIconRepaint _topicIconRepaint;
 	std::unique_ptr<TopicIconView> _topicIconView;
 	std::unique_ptr<Ui::UploadProgressOverlay> _uploadOverlay;
 	rpl::lifetime _uploadLifetime;

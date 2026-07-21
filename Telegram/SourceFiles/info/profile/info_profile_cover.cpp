@@ -18,10 +18,22 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_lottie.h"
 #include "window/window_session_controller.h"
 #include "ui/painter.h"
+#include "ui/rect.h"
 #include "styles/style_info.h"
 #include "styles/style_dialogs.h"
 
 namespace Info::Profile {
+namespace {
+
+[[nodiscard]] QRect CenteredRect(QRect outer, QSize size) {
+	return QRect(
+		outer.x() + (outer.width() - size.width()) / 2,
+		outer.y() + (outer.height() - size.height()) / 2,
+		size.width(),
+		size.height());
+}
+
+} // namespace
 
 QMargins LargeCustomEmojiMargins() {
 	const auto ratio = style::DevicePixelRatio();
@@ -56,16 +68,22 @@ TopicIconView::TopicIconView(
 	setup(topic);
 }
 
-void TopicIconView::paintInRect(QPainter &p, QRect rect, QColor textColor) {
+QRect TopicIconView::repaintBounds(QRect rect) const {
+	const auto size = (_player || _topic->iconId())
+		? st::infoTopicCover.photo.size
+		: !_image.isNull()
+		? _image.size() / style::DevicePixelRatio()
+		: Size(st::infoForumTopicIcon.size);
+	return CenteredRect(rect, size);
+}
+
+QRect TopicIconView::paintInRect(
+		QPainter &p,
+		QRect rect,
+		QColor textColor) {
 	const auto paint = [&](const QImage &image) {
 		const auto size = image.size() / style::DevicePixelRatio();
-		p.drawImage(
-			QRect(
-				rect.x() + (rect.width() - size.width()) / 2,
-				rect.y() + (rect.height() - size.height()) / 2,
-				size.width(),
-				size.height()),
-			image);
+		p.drawImage(CenteredRect(rect, size), image);
 	};
 	if (_player && _player->ready()) {
 		const auto colored = _playerUsesTextColor
@@ -83,6 +101,7 @@ void TopicIconView::paintInRect(QPainter &p, QRect rect, QColor textColor) {
 	} else if (!_topic->iconId() && !_image.isNull()) {
 		paint(_image);
 	}
+	return repaintBounds(rect);
 }
 
 void TopicIconView::setup(not_null<Data::ForumTopic*> topic) {
@@ -193,7 +212,7 @@ TopicIconButton::TopicIconButton(
 	paintRequest(
 	) | rpl::on_next([=] {
 		auto p = QPainter(this);
-		_view.paintInRect(p, rect());
+		(void)_view.paintInRect(p, rect());
 	}, lifetime());
 }
 

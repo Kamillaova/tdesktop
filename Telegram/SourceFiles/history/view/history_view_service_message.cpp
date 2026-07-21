@@ -984,7 +984,7 @@ void EmptyPainter::paint(
 	auto top = bubbleTop + padding.top();
 
 	if (_icon) {
-		_icon->paintInRect(
+		(void)_icon->paintInRect(
 			p,
 			QRect(bubbleLeft, top, bubbleWidth, iconHeight),
 			st->msgServiceFg()->c);

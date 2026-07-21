@@ -80,6 +80,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/round_checkbox.h"
 #include "ui/empty_userpic.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/peer/video_userpic_player.h"
 #include "ui/rect.h"
@@ -474,7 +475,7 @@ TopBar::TopBar(
 		_topicIconView = std::make_unique<TopicIconView>(
 			_topic,
 			_gifPausedChecker,
-			[=] { update(); });
+			[=] { repaintTopicIcon(); });
 	} else {
 		updateVideoUserpic();
 	}
@@ -2583,9 +2584,46 @@ void TopBar::updateGiftButtonsGeometry(
 	}
 }
 
-void TopBar::paintUserpic(QPainter &p, const QRect &geometry) {
+void TopBar::repaintTopicIcon() {
+	if (!_topicIconView || !_topicIconRepaint.valid) {
+		update();
+		return;
+	}
+	const auto current = Ui::DamageRect(
+		QRectF(_topicIconView->repaintBounds(userpicGeometry())),
+		_topicIconRepaint.transform);
+	const auto damage = _topicIconRepaint.painted.united(current)
+		.intersected(rect());
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}
+
+void TopBar::recordTopicIconPaint(
+		const QRectF &repaintBounds,
+		const QTransform &transform,
+		const QRegion &paintRegion) {
+	const auto current = Ui::DamageRect(repaintBounds, transform)
+		.intersected(rect());
+	const auto combined = _topicIconRepaint.valid
+		? _topicIconRepaint.painted.united(current)
+		: current;
+	const auto uncovered = QRegion(combined).subtracted(paintRegion);
+	_topicIconRepaint.painted = uncovered.isEmpty() ? current : combined;
+	_topicIconRepaint.transform = transform;
+	_topicIconRepaint.valid = true;
+	if (!uncovered.isEmpty() && !combined.isEmpty()) {
+		update(combined);
+	}
+}
+
+void TopBar::paintUserpic(
+		QPainter &p,
+		const QRect &geometry,
+		const QRegion &paintRegion) {
 	if (_topicIconView) {
-		_topicIconView->paintInRect(p, geometry);
+		const auto repaintBounds = _topicIconView->paintInRect(p, geometry);
+		recordTopicIconPaint(repaintBounds, p.transform(), paintRegion);
 		return;
 	}
 	if (_videoUserpicPlayer && _videoUserpicPlayer->ready()) {
@@ -2728,8 +2766,13 @@ void TopBar::paintEvent(QPaintEvent *e) {
 		paintPinnedToTopGifts(p, rect(), geometry);
 	}
 
+	const auto userpicPaintBounds = _topicIconView
+		? _topicIconView->repaintBounds(geometry)
+		: geometry;
+	if (clipBounds.intersects(userpicPaintBounds)) {
+		paintUserpic(p, geometry, e->region());
+	}
 	if (clipBounds.intersects(geometry)) {
-		paintUserpic(p, geometry);
 		paintStoryOutline(p, geometry);
 	}
 

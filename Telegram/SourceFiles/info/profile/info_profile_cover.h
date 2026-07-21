@@ -37,7 +37,8 @@ public:
 		Fn<void()> update,
 		const style::color &generalIconFg);
 
-	void paintInRect(
+	[[nodiscard]] QRect repaintBounds(QRect rect) const;
+	[[nodiscard]] QRect paintInRect(
 		QPainter &p,
 		QRect rect,
 		QColor textColor = QColor(0, 0, 0, 0));
