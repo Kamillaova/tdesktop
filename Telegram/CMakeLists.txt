@@ -1024,6 +1024,8 @@ PRIVATE
     history/view/history_view_element_overlay.h
     history/view/history_view_element.cpp
     history/view/history_view_element.h
+    history/view/history_view_repaint_request.cpp
+    history/view/history_view_repaint_request.h
     history/view/history_view_emoji_interactions.cpp
     history/view/history_view_emoji_interactions.h
     history/view/history_view_empty_list_bubble.cpp

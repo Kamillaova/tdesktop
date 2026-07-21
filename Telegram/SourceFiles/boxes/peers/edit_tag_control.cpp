@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history_item.h"
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_message.h"
+#include "history/view/history_view_repaint_request.h"
 #include "history/view/media/history_view_media_generic.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
@@ -202,6 +203,7 @@ private:
 	const std::unique_ptr<Ui::ChatTheme> _theme;
 	const std::unique_ptr<Ui::ChatStyle> _style;
 	const std::unique_ptr<TagPreviewDelegate> _delegate;
+	HistoryView::ViewRepaintMapper _repaintMapper;
 	AdminLog::OwnedItem _item;
 	int _topSkip = 0;
 	int _bottomSkip = 0;
@@ -234,7 +236,11 @@ EditTagControl::PreviewWidget::PreviewWidget(
 	_history->owner().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == _item.get()) {
-			update();
+			if (const auto mapped = _repaintMapper.map(data)) {
+				update(*mapped);
+			} else {
+				update();
+			}
 		}
 	}, lifetime());
 
@@ -332,7 +338,10 @@ void EditTagControl::PreviewWidget::paintEvent(QPaintEvent *e) {
 		e->rect(),
 		!window()->isActiveWindow());
 	p.translate(0, _topSkip);
-	_item->draw(p, context);
+	_repaintMapper.record(p);
+	_item->draw(
+		p,
+		context.translated(0, -_topSkip).withElementPainter(p));
 
 	if (_item->displayFromPhoto()) {
 		auto userpicBottom = height()

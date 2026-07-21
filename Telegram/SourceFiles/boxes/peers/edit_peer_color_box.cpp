@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_user.h"
 #include "data/data_web_page.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_repaint_request.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "info/channel_statistics/boosts/info_boosts_widget.h"
@@ -210,6 +211,7 @@ private:
 	const std::shared_ptr<Ui::ChatTheme> _theme;
 	const std::shared_ptr<Ui::ChatStyle> _style;
 	const std::unique_ptr<PreviewDelegate> _delegate;
+	HistoryView::ViewRepaintMapper _repaintMapper;
 	const not_null<HistoryItem*> _replyToItem;
 	const not_null<HistoryItem*> _replyItem;
 	std::unique_ptr<Element> _element;
@@ -337,7 +339,11 @@ PreviewWrap::PreviewWrap(
 	session->data().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == _element.get()) {
-			update();
+			if (const auto mapped = _repaintMapper.map(data)) {
+				update(*mapped);
+			} else {
+				update();
+			}
 		}
 	}, lifetime());
 
@@ -369,7 +375,10 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 		!window()->isActiveWindow());
 
 	p.translate(_position);
-	_element->draw(p, context);
+	_repaintMapper.record(p);
+	_element->draw(
+		p,
+		context.translated(-_position).withElementPainter(p));
 
 	if (_element->displayFromPhoto()) {
 		auto userpicBottom = height()

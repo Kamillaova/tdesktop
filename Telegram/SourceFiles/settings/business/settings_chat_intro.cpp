@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_sticker_player.h"
 #include "history/view/history_view_about_view.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_repaint_request.h"
 #include "history/history.h"
 #include "lang/lang_keys.h"
 #include "main/main_app_config.h"
@@ -86,6 +87,7 @@ private:
 	const std::unique_ptr<Ui::ChatTheme> _theme;
 	const std::unique_ptr<Ui::ChatStyle> _style;
 	const std::unique_ptr<PreviewDelegate> _delegate;
+	ViewRepaintMapper _repaintMapper;
 
 	std::unique_ptr<AboutView> _view;
 	QPoint _position;
@@ -354,7 +356,11 @@ PreviewWrap::PreviewWrap(
 	session->data().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == _view->view()) {
-			update();
+			if (const auto mapped = _repaintMapper.map(data)) {
+				update(*mapped);
+			} else {
+				update();
+			}
 		}
 	}, lifetime());
 
@@ -420,7 +426,10 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 		e->rect(),
 		!window()->isActiveWindow());
 	p.translate(_position);
-	_view->view()->draw(p, context);
+	_repaintMapper.record(p);
+	_view->view()->draw(
+		p,
+		context.translated(-_position).withElementPainter(p));
 }
 
 StickerPanel::StickerPanel() = default;

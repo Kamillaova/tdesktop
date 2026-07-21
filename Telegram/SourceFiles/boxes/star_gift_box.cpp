@@ -60,6 +60,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_media_generic.h"
 #include "history/view/media/history_view_unique_gift.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_repaint_request.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/history_item_helpers.h"
@@ -300,6 +301,7 @@ private:
 	const std::unique_ptr<ChatTheme> _theme;
 	const std::unique_ptr<ChatStyle> _style;
 	const std::unique_ptr<PreviewDelegate> _delegate;
+	HistoryView::ViewRepaintMapper _repaintMapper;
 	AdminLog::OwnedItem _item;
 	QPoint _position;
 
@@ -584,7 +586,11 @@ PreviewWrap::PreviewWrap(
 	_history->owner().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == _item.get()) {
-			update();
+			if (const auto mapped = _repaintMapper.map(data)) {
+				update(*mapped);
+			} else {
+				update();
+			}
 		}
 	}, lifetime());
 
@@ -788,7 +794,10 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 		e->rect(),
 		!window()->isActiveWindow());
 	p.translate(_position);
-	_item->draw(p, context);
+	_repaintMapper.record(p);
+	_item->draw(
+		p,
+		context.translated(-_position).withElementPainter(p));
 }
 
 [[nodiscard]] rpl::producer<PremiumGiftsDescriptor> GiftsPremium(
