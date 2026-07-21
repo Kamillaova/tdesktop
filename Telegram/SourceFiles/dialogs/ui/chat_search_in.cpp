@@ -22,6 +22,30 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Dialogs {
 namespace {
 
+void RepaintDynamicImage(
+		not_null<QWidget*> widget,
+		const QRect &paintedRect) {
+	if (paintedRect.isEmpty()) {
+		widget->update();
+	} else {
+		widget->update(paintedRect);
+	}
+}
+
+void RecordDynamicImagePaint(
+		not_null<QWidget*> widget,
+		QRect &paintedRect,
+		QRect rect) {
+	if (paintedRect == rect) {
+		return;
+	}
+	const auto previous = paintedRect;
+	paintedRect = rect;
+	if (!previous.isEmpty()) {
+		widget->update(rect.isEmpty() ? previous : previous.united(rect));
+	}
+}
+
 class Action final : public Ui::Menu::ItemBase {
 public:
 	Action(
@@ -54,6 +78,7 @@ private:
 	const int _height = 0;
 
 	std::shared_ptr<Ui::DynamicImage> _icon;
+	QRect _iconPaintRect;
 	Ui::Text::String _text;
 	bool _checked = false;
 
@@ -100,7 +125,9 @@ Action::Action(
 , _icon(std::move(icon))
 , _checked(chosen) {
 	_text.setText(st::semiboldTextStyle, label);
-	_icon->subscribeToUpdates([=] { update(); });
+	_icon->subscribeToUpdates([=] {
+		RepaintDynamicImage(this, _iconPaintRect);
+	});
 
 	fitToMenuWidth();
 	resolveMinWidth();
@@ -144,7 +171,9 @@ void Action::paint(Painter &p) {
 	auto x = st::dialogsSearchInPhotoPadding;
 	const auto photos = st::dialogsSearchInPhotoSize;
 	const auto photoy = (height() - photos) / 2;
-	p.drawImage(QRect{ x, photoy, photos, photos }, _icon->image(photos));
+	const auto iconRect = QRect{ x, photoy, photos, photos };
+	RecordDynamicImagePaint(this, _iconPaintRect, iconRect);
+	p.drawImage(iconRect, _icon->image(photos));
 	x += photos + st::dialogsSearchInSkip;
 	const auto available = width()
 		- x
@@ -260,7 +289,7 @@ HashOrCashtag IsHashOrCashtagSearchQuery(const QString &query) {
 }
 
 void ChatSearchIn::Section::update() {
-	outer->update();
+	RepaintDynamicImage(outer.get(), imagePaintRect);
 }
 
 ChatSearchIn::ChatSearchIn(QWidget *parent)
@@ -400,6 +429,7 @@ void ChatSearchIn::updateSection(
 			section->cancel = nullptr;
 			section->shadow = nullptr;
 			section->outer = nullptr;
+			section->imagePaintRect = {};
 			section->subscribed = false;
 		}
 		return;
@@ -417,15 +447,17 @@ void ChatSearchIn::updateSection(
 			if (!section->subscribed) {
 				section->subscribed = true;
 				section->image->subscribeToUpdates([=] {
-					raw->update();
+					section->update();
 				});
 			}
 			const auto outer = raw->width();
 			const auto size = st::dialogsSearchInPhotoSize;
 			const auto left = st::dialogsSearchInPhotoPadding;
 			const auto top = (st::dialogsSearchInHeight - size) / 2;
+			const auto imageRect = QRect{ left, top, size, size };
+			RecordDynamicImagePaint(raw, section->imagePaintRect, imageRect);
 			p.drawImage(
-				QRect{ left, top, size, size },
+				imageRect,
 				section->image->image(size));
 
 			const auto x = left + size + st::dialogsSearchInSkip;

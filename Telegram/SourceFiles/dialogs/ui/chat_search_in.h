@@ -61,6 +61,7 @@ private:
 		std::unique_ptr<Ui::IconButton> cancel;
 		std::unique_ptr<Ui::PlainShadow> shadow;
 		std::shared_ptr<Ui::DynamicImage> image;
+		QRect imagePaintRect;
 		Ui::Text::String text;
 		rpl::event_stream<> clicks;
 		rpl::event_stream<> cancelRequests;
