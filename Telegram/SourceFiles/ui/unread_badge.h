@@ -69,6 +69,10 @@ public:
 	int drawGetWidth(Painter &p, Descriptor &&descriptor);
 	[[nodiscard]] QRect emojiStatusRect() const;
 	[[nodiscard]] QRect botVerifiedRect() const;
+	void paintBotVerifiedFrame(
+		QPainter &p,
+		crl::time now,
+		const style::VerifiedBadge &st);
 	void paintEmojiStatusFrame(QPainter &p, crl::time now, bool paused);
 	void paintEmojiStatusFrame(
 		QPainter &p,

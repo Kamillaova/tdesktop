@@ -995,6 +995,13 @@ int PeerListRow::paintNameIconGetLeadingWidth(
 	return skip;// ? skip + st::dialogsChatTypeSkip) : 0;
 }
 
+void PeerListRow::paintBotVerifiedIcon(
+		Painter &p,
+		crl::time now,
+		const style::VerifiedBadge &st) {
+	_badge.paintBotVerifiedFrame(p, now, st);
+}
+
 void PeerListRow::paintStatusIcon(Painter &p, crl::time now, bool paused) {
 	_badge.paintEmojiStatusFrame(p, now, paused);
 }
@@ -2080,11 +2087,18 @@ crl::time PeerListContent::paintRow(
 			[&](QImage &image) {
 				auto q = Painter(&image);
 				paintRowContent(q, now, index, false, 0);
+				const auto botVerifiedRect = row->botVerifiedIconRect();
+				if (!botVerifiedRect.isEmpty()) {
+					q.fillRect(botVerifiedRect, st.button.textBg);
+				}
 				const auto statusRect = row->statusIconRect();
 				if (!statusRect.isEmpty()) {
 					q.fillRect(statusRect, st.button.textBg);
 				}
 			});
+		if (!row->botVerifiedIconRect().isEmpty()) {
+			row->paintBotVerifiedIcon(p, now, st::dialogsVerifiedColors);
+		}
 		if (!row->statusIconRect().isEmpty()) {
 			row->paintStatusIcon(p, now, false);
 		}
@@ -2164,7 +2178,7 @@ void PeerListContent::paintRowContent(
 	}
 	const auto leading = row->paintNameIconGetLeadingWidth(
 		p,
-		[=] { updateRow(row); },
+		[=] { updateRowIcon(row, row->botVerifiedIconRect()); },
 		now,
 		namex,
 		namey,
@@ -2173,7 +2187,7 @@ void PeerListContent::paintRowContent(
 	namew -= leading;
 	namew -= row->paintNameIconGetWidth(
 		p,
-		[=] { updateRowStatus(row); },
+		[=] { updateRowIcon(row, row->statusIconRect()); },
 		now,
 		namex + leading,
 		namey,
@@ -2815,12 +2829,13 @@ void PeerListContent::updateRow(RowIndex index) {
 	update(0, getRowTop(index), width(), _rowHeight);
 }
 
-void PeerListContent::updateRowStatus(not_null<PeerListRow*> row) {
+void PeerListContent::updateRowIcon(
+		not_null<PeerListRow*> row,
+		QRect rect) {
 	const auto index = findRowIndex(row);
 	if (index.value < 0) {
 		return;
 	}
-	const auto rect = row->statusIconRect();
 	if (!rect.isEmpty()) {
 		update(rect.translated(0, getRowTop(index)));
 	} else {

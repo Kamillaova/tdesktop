@@ -142,6 +142,13 @@ public:
 		int outerWidth,
 		bool selected);
 
+	[[nodiscard]] QRect botVerifiedIconRect() const {
+		return _badge.botVerifiedRect();
+	}
+	void paintBotVerifiedIcon(
+		Painter &p,
+		crl::time now,
+		const style::VerifiedBadge &st);
 	[[nodiscard]] QRect statusIconRect() const {
 		return _statusIconRect;
 	}
@@ -886,7 +893,7 @@ private:
 
 	void updateRow(not_null<PeerListRow*> row, RowIndex hint);
 	void updateRow(RowIndex row);
-	void updateRowStatus(not_null<PeerListRow*> row);
+	void updateRowIcon(not_null<PeerListRow*> row, QRect rect);
 	int getRowTop(RowIndex row) const;
 	PeerListRow *getRow(RowIndex element);
 	RowIndex findRowIndex(

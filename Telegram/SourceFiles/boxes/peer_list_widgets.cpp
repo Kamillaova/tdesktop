@@ -93,9 +93,18 @@ crl::time PeerListWidgets::paintRow(
 			+ rightActionMargins.right()
 			- skipRight;
 	}
+	const auto repaintIcon = [=](QRect rect) {
+		if (rect.isEmpty()) {
+			updateRow(row);
+		} else {
+			repaintRow(row, QRegion(rect));
+		}
+	};
 	const auto leading = row->paintNameIconGetLeadingWidth(
 		p,
-		[=] { updateRow(row); },
+		[=] {
+			repaintIcon(row->botVerifiedIconRect());
+		},
 		now,
 		namex,
 		namey,
@@ -104,7 +113,9 @@ crl::time PeerListWidgets::paintRow(
 	namew -= leading;
 	namew -= row->paintNameIconGetWidth(
 		p,
-		[=] { updateRow(row); },
+		[=] {
+			repaintIcon(row->statusIconRect());
+		},
 		now,
 		namex + leading,
 		namey,

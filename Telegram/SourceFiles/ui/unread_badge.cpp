@@ -159,6 +159,7 @@ struct PeerBadge::EmojiStatus {
 
 struct PeerBadge::BotVerifiedData {
 	std::unique_ptr<Text::CustomEmoji> icon;
+	QPoint lastOrigin;
 	QRect lastRect;
 };
 
@@ -443,6 +444,25 @@ QRect PeerBadge::botVerifiedRect() const {
 	return _botVerifiedData ? _botVerifiedData->lastRect : QRect();
 }
 
+void PeerBadge::paintBotVerifiedFrame(
+		QPainter &p,
+		crl::time now,
+		const style::VerifiedBadge &st) {
+	const auto data = _botVerifiedData.get();
+	if (!data || !data->icon) {
+		return;
+	}
+	const auto position = data->lastOrigin + st.position;
+	const auto repaintBounds = data->icon->paint(p, {
+		.textColor = st.color->c,
+		.now = now,
+		.position = position,
+	}).repaintBounds();
+	if (!repaintBounds.isEmpty()) {
+		data->lastRect = repaintBounds.toAlignedRect();
+	}
+}
+
 void PeerBadge::paintEmojiStatusFrame(
 		QPainter &p,
 		crl::time now,
@@ -533,19 +553,8 @@ int PeerBadge::drawVerified(
 	}
 	data->lastRect = QRect();
 	if (const auto icon = data->icon.get()) {
-		const auto iconPosition = position + st.position;
-		data->lastRect = QRectF(
-			iconPosition,
-			Size(st::emojiSize)
-		).toAlignedRect();
-		const auto painted = icon->paint(p, {
-			.textColor = st.color->c,
-			.now = crl::now(),
-			.position = iconPosition,
-		});
-		if (!painted.isEmpty()) {
-			data->lastRect = painted.toAlignedRect();
-		}
+		data->lastOrigin = position;
+		paintBotVerifiedFrame(p, crl::now(), st);
 		return icon->width();
 	}
 	return 0;
