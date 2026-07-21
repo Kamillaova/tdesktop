@@ -17,6 +17,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/palette.h"
 
+#include <QtGui/QPaintEvent>
+
 namespace Ui {
 namespace {
 
@@ -44,6 +46,10 @@ namespace {
 		&& (same != a.size() || same != b.size());
 }
 
+[[nodiscard]] QRect MapPaintRect(const QPainter &p, QRectF rect) {
+	return p.transform().mapRect(rect).toAlignedRect();
+}
+
 } // namespace
 
 MessageBar::MessageBar(
@@ -62,21 +68,41 @@ MessageBar::MessageBar(
 }
 
 void MessageBar::customEmojiRepaint() {
-	if (_customEmojiRepaintScheduled) {
+	if (_repaintingImageSpoiler) {
+		_widget.update();
 		return;
 	}
-	_customEmojiRepaintScheduled = true;
-	_widget.update();
+	if (_textAnimationDamage.scheduled
+		|| (!_text.hasCustomEmoji() && !_text.hasSpoilers())) {
+		return;
+	}
+	if (!_textAnimationDamage.known
+		&& _textAnimationDamage.fallbackUsed) {
+		return;
+	}
+	const auto damage = _textAnimationDamage.known
+		? _textAnimationDamage.stale.united(_textAnimationDamage.current)
+		: _textAnimationDamage.stale.united(textAnimationFallbackRect());
+	if (!damage.intersects(_widget.rect())) {
+		return;
+	}
+	if (!_textAnimationDamage.known) {
+		_textAnimationDamage.fallbackUsed = true;
+	}
+	scheduleTextAnimationRepaint(damage);
 }
 
 void MessageBar::setup() {
 	_widget.resize(0, st::historyReplyHeight);
-	_widget.paintRequest(
-	) | rpl::on_next([=](QRect rect) {
+	_widget.events(
+	) | rpl::filter([](not_null<QEvent*> event) {
+		return event->type() == QEvent::Paint;
+	}) | rpl::on_next([=](not_null<QEvent*> event) {
 		auto p = Painter(&_widget);
 		p.setInactive(_customEmojiPaused());
-		_customEmojiRepaintScheduled = false;
-		paint(p);
+		paint(
+			p,
+			static_cast<QPaintEvent*>(event.get())->region());
 	}, _widget.lifetime());
 }
 
@@ -205,6 +231,7 @@ void MessageBar::tweenTo(MessageBarContent &&content) {
 }
 
 void MessageBar::updateFromContent(MessageBarContent &&content) {
+	invalidateTextAnimationDamage();
 	_content = std::move(content);
 	_title.setText(_st.title, _content.title);
 	_text.setMarkedText(
@@ -216,8 +243,12 @@ void MessageBar::updateFromContent(MessageBarContent &&content) {
 	if (!_content.spoilerRepaint) {
 		_spoiler = nullptr;
 	} else if (!_spoiler) {
-		_spoiler = std::make_unique<SpoilerAnimation>(
-			_content.spoilerRepaint);
+		const auto repaint = _content.spoilerRepaint;
+		_spoiler = std::make_unique<SpoilerAnimation>([=] {
+			_repaintingImageSpoiler = true;
+			repaint();
+			_repaintingImageSpoiler = false;
+		});
 	}
 }
 
@@ -260,6 +291,81 @@ QRect MessageBar::textRect() const {
 	auto result = bodyRect();
 	result.setTop(result.top() + st::msgServiceNameFont->height);
 	return result;
+}
+
+QRect MessageBar::textAnimationFallbackRect() const {
+	auto result = bodyRect(false);
+	if (_animation
+		&& _animation->bodyAnimation != BodyAnimation::None) {
+		const auto shift = st::msgReplyBarSkip;
+		result = result.translated(0, -shift).united(
+			result.translated(0, shift));
+	} else {
+		const auto top = _title.isEmpty()
+			? result.y()
+				+ (result.height() - st::normalFont->height) / 2
+			: result.y() + st::msgServiceNameFont->height;
+		result = QRect(
+			QPoint(result.x(), top),
+			QSize(result.width(), _text.lineHeight()));
+	}
+	return result.intersected(_widget.rect());
+}
+
+void MessageBar::invalidateTextAnimationDamage() {
+	_textAnimationDamage.stale = _textAnimationDamage.stale.united(
+		_textAnimationDamage.current);
+	_textAnimationDamage.current = QRect();
+	_textAnimationDamage.known = false;
+	_textAnimationDamage.fallbackUsed = false;
+}
+
+void MessageBar::recordTextAnimationDamage(
+		QRect current,
+		bool known,
+		const QRegion &repaintRegion) {
+	const auto widgetRect = _widget.rect();
+	current &= widgetRect;
+	_textAnimationDamage.stale &= widgetRect;
+	_textAnimationDamage.scheduled = false;
+	if (!known) {
+		if (_textAnimationDamage.known) {
+			_textAnimationDamage.stale = _textAnimationDamage.stale.united(
+				_textAnimationDamage.current);
+			_textAnimationDamage.current = QRect();
+		}
+		_textAnimationDamage.known = false;
+		if (repaintRegion.contains(_textAnimationDamage.stale)) {
+			_textAnimationDamage.stale = QRect();
+		}
+		return;
+	}
+	if (_textAnimationDamage.known
+		&& _textAnimationDamage.current != current) {
+		_textAnimationDamage.stale = _textAnimationDamage.stale.united(
+			_textAnimationDamage.current);
+	}
+	_textAnimationDamage.current = current;
+	_textAnimationDamage.known = true;
+	_textAnimationDamage.fallbackUsed = false;
+	if (_textAnimationDamage.stale.isEmpty()) {
+		return;
+	}
+	const auto damage = _textAnimationDamage.stale.united(current);
+	if (repaintRegion.contains(damage)) {
+		_textAnimationDamage.stale = QRect();
+	} else {
+		scheduleTextAnimationRepaint(damage);
+	}
+}
+
+void MessageBar::scheduleTextAnimationRepaint(QRect damage) {
+	damage &= _widget.rect();
+	if (damage.isEmpty()) {
+		return;
+	}
+	_textAnimationDamage.scheduled = true;
+	_widget.update(damage);
 }
 
 auto MessageBar::makeGrabGuard() {
@@ -340,7 +446,11 @@ QPixmap MessageBar::prepareImage(const QImage &preview) {
 	return QPixmap::fromImage(preview, Qt::ColorOnly);
 }
 
-void MessageBar::paint(Painter &p) {
+void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
+	const auto canonical = (p.device() == &_widget);
+	if (canonical) {
+		_textAnimationDamage.scheduled = false;
+	}
 	const auto progress = _animation ? _animation->bodyMoved.value(1.) : 1.;
 	const auto imageFinal = _image.isNull() ? 0. : 1.;
 	const auto imageShown = _animation
@@ -435,21 +545,32 @@ void MessageBar::paint(Painter &p) {
 				pausedSpoiler);
 		}
 	}
+	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
+	auto textAnimationFallback = QRect();
 	if (!_animation || _animation->bodyAnimation == BodyAnimation::None) {
 		if (_title.isEmpty()) {
 			// "Loading..." state.
 			p.setPen(st::historyComposeAreaFgService);
+			const auto position = QPoint(
+				body.x(),
+				body.y() + (body.height() - st::normalFont->height) / 2);
+			textAnimationFallback = QRect(
+				position,
+				QSize(body.width(), _text.lineHeight()));
 			_text.draw(p, {
-				.position = {
-					body.x(),
-					body.y() + (body.height() - st::normalFont->height) / 2,
-				},
+				.position = position,
 				.outerWidth = width,
 				.availableWidth = body.width(),
 				.elisionLines = 1,
+				.customEmojiPaintedBounds = canonical
+					? &customEmojiPaintedBounds
+					: nullptr,
 			});
 		} else {
 			p.setPen(_st.textFg);
+			textAnimationFallback = QRect(
+				QPoint(body.x(), text.y()),
+				QSize(body.width(), _text.lineHeight()));
 			_text.draw(p, {
 				.position = { body.x(), text.y() },
 				.outerWidth = width,
@@ -460,7 +581,31 @@ void MessageBar::paint(Painter &p) {
 				.pausedEmoji = paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = pausedSpoiler,
 				.elisionLines = 1,
+				.customEmojiPaintedBounds = canonical
+					? &customEmojiPaintedBounds
+					: nullptr,
 			});
+		}
+		if (canonical) {
+			const auto mappedFallback = MapPaintRect(
+				p,
+				QRectF(textAnimationFallback));
+			if (repaintRegion.intersects(mappedFallback)) {
+				const auto customEmojiKnown = !_text.hasCustomEmoji()
+					|| customEmojiPaintedBounds.repaintRectKnown();
+				auto damage = _text.hasSpoilers()
+					? mappedFallback
+					: QRect();
+				if (_text.hasCustomEmoji() && customEmojiKnown) {
+					damage = damage.united(MapPaintRect(
+						p,
+						customEmojiPaintedBounds.repaintRect()));
+				}
+				recordTextAnimationDamage(
+					damage,
+					customEmojiKnown,
+					repaintRegion);
+			}
 		}
 	} else if (_animation->bodyAnimation == BodyAnimation::Text) {
 		p.setOpacity(1. - progress);

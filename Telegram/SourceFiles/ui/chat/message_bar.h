@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 
 class Painter;
+class QRegion;
 
 namespace style {
 struct MessageBar;
@@ -77,11 +78,24 @@ private:
 		float64 skip = 0.;
 		float64 offset = 0.;
 	};
+	struct TextAnimationDamage {
+		QRect current;
+		QRect stale;
+		bool known = false;
+		bool scheduled = false;
+		bool fallbackUsed = false;
+	};
 	void setup();
-	void paint(Painter &p);
+	void paint(Painter &p, const QRegion &repaintRegion);
 	void paintLeftBar(Painter &p);
 	void tweenTo(MessageBarContent &&content);
 	void updateFromContent(MessageBarContent &&content);
+	void invalidateTextAnimationDamage();
+	void recordTextAnimationDamage(
+		QRect current,
+		bool known,
+		const QRegion &repaintRegion);
+	void scheduleTextAnimationRepaint(QRect damage);
 	[[nodiscard]] QPixmap prepareImage(const QImage &preview);
 
 	[[nodiscard]] QRect imageRect() const;
@@ -89,6 +103,7 @@ private:
 	[[nodiscard]] QRect bodyRect(bool withImage) const;
 	[[nodiscard]] QRect bodyRect() const;
 	[[nodiscard]] QRect textRect() const;
+	[[nodiscard]] QRect textAnimationFallbackRect() const;
 
 	auto makeGrabGuard();
 	[[nodiscard]] QPixmap grabBodyOrTextPart(BodyAnimation type);
@@ -125,7 +140,8 @@ private:
 	QPixmap _image, _topBarGradient, _bottomBarGradient;
 	std::unique_ptr<Animation> _animation;
 	std::unique_ptr<SpoilerAnimation> _spoiler;
-	bool _customEmojiRepaintScheduled = false;
+	TextAnimationDamage _textAnimationDamage;
+	bool _repaintingImageSpoiler = false;
 
 };
 
