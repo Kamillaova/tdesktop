@@ -314,7 +314,7 @@ MainWidget::MainWidget(
 		closeBothPlayers();
 	}, lifetime());
 
-	Media::Player::instance()->updatedNotifier(
+	Media::Player::instance()->itemUpdatedNotifier(
 	) | rpl::on_next([=](const Media::Player::TrackState &state) {
 		handleAudioUpdate(state);
 	}, lifetime());
@@ -874,7 +874,7 @@ void MainWidget::handleAudioUpdate(const Media::Player::TrackState &state) {
 	} else if (item) {
 		session().data().requestItemVisualRepaint(item);
 	}
-	if (document) {
+	if (document && !document->isVideoMessage()) {
 		if (const auto items = InlineBots::Layout::documentItems()) {
 			if (const auto i = items->find(document); i != items->end()) {
 				for (const auto &item : i->second) {

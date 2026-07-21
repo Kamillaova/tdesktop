@@ -79,6 +79,15 @@ base::options::toggle OptionDisableAutoplayNext({
 const char kOptionDisableAutoplayNext[] = "disable-autoplay-next";
 
 struct Instance::Streamed {
+	struct ItemUpdateKey {
+		AudioMsgId id;
+		State state = State::Stopped;
+		int64 position = 0;
+		int64 length = 0;
+
+		friend inline bool operator==(ItemUpdateKey, ItemUpdateKey) = default;
+	};
+
 	Streamed(
 		AudioMsgId id,
 		std::shared_ptr<Streaming::Document> document);
@@ -86,6 +95,7 @@ struct Instance::Streamed {
 	AudioMsgId id;
 	Streaming::Instance instance;
 	View::PlaybackProgress progress;
+	std::optional<ItemUpdateKey> itemUpdateKey;
 	bool clearing = false;
 	rpl::lifetime lifetime;
 };
@@ -223,7 +233,7 @@ AudioMsgId::Type Instance::getActiveType() const {
 void Instance::handleSongUpdate(const AudioMsgId &audioId) {
 	emitUpdate(audioId.type(), [&](const AudioMsgId &playing) {
 		return (audioId == playing);
-	});
+	}, ItemUpdateMode::PlaybackPosition);
 }
 
 void Instance::setCurrent(const AudioMsgId &audioId) {
@@ -1191,8 +1201,11 @@ void Instance::updatePlaybackSpeed() {
 	}
 }
 
-void Instance::emitUpdate(AudioMsgId::Type type) {
-	emitUpdate(type, [](const AudioMsgId &playing) { return true; });
+void Instance::emitUpdate(AudioMsgId::Type type, ItemUpdateMode mode) {
+	emitUpdate(
+		type,
+		[](const AudioMsgId &playing) { return true; },
+		mode);
 }
 
 RepeatMode Instance::repeat(not_null<const Data*> data) const {
@@ -1269,7 +1282,10 @@ View::PlaybackProgress *Instance::roundVideoPlayback(
 }
 
 template <typename CheckCallback>
-void Instance::emitUpdate(AudioMsgId::Type type, CheckCallback check) {
+void Instance::emitUpdate(
+		AudioMsgId::Type type,
+		CheckCallback check,
+		ItemUpdateMode mode) {
 	if (const auto data = getData(type)) {
 		const auto state = getState(type);
 		if (!state.id || !check(state.id)) {
@@ -1294,9 +1310,35 @@ void Instance::emitUpdate(AudioMsgId::Type type, CheckCallback check) {
 		if (type == AudioMsgId::Type::Song) {
 			_listenTracker->update(state);
 		}
+		const auto notifyItem = [&] {
+			const auto document = state.id.audio();
+			const auto streamed = data->streamed.get();
+			if (!streamed || !document || !document->isVideoMessage()) {
+				return true;
+			}
+			const auto position = (state.frequency > 0)
+				? (state.position / state.frequency)
+				: state.position;
+			const auto length = (state.frequency > 0)
+				? (state.length / state.frequency)
+				: state.length;
+			const auto key = Streamed::ItemUpdateKey{
+				.id = state.id,
+				.state = state.state,
+				.position = position,
+				.length = length,
+			};
+			const auto changed = !streamed->itemUpdateKey
+				|| (*streamed->itemUpdateKey != key);
+			streamed->itemUpdateKey = key;
+			return (mode == ItemUpdateMode::Always) || changed;
+		}();
 
 		auto finished = false;
 		_updatedNotifier.fire_copy({state});
+		if (notifyItem) {
+			_itemUpdatedNotifier.fire_copy({state});
+		}
 		if (data->isPlaying && state.state == State::StoppedAtEnd) {
 			if (repeat(data) == RepeatMode::One) {
 				play(data->current);
@@ -1372,11 +1414,11 @@ void Instance::handleStreamingUpdate(
 	}, [&](PreloadedVideo) {
 		//emitUpdate(data->type, [](AudioMsgId) { return true; });
 	}, [&](UpdateVideo) {
-		emitUpdate(data->type);
+		emitUpdate(data->type, ItemUpdateMode::PlaybackPosition);
 	}, [&](PreloadedAudio) {
 		//emitUpdate(data->type, [](AudioMsgId) { return true; });
 	}, [&](UpdateAudio) {
-		emitUpdate(data->type);
+		emitUpdate(data->type, ItemUpdateMode::PlaybackPosition);
 	}, [](WaitingForData) {
 	}, [](SpeedEstimate) {
 	}, [](MutedByOther) {
@@ -1405,7 +1447,14 @@ void Instance::requestRoundVideoResize() const {
 
 void Instance::requestRoundVideoRepaint() const {
 	if (const auto item = roundVideoItem()) {
-		item->history()->owner().requestItemVisualRepaint(item);
+		const auto data = getData(AudioMsgId::Type::Voice);
+		const auto document = data->streamed->id.audio();
+		if (!document) {
+			return;
+		}
+		item->history()->owner().requestItemPlaybackFrameRepaint(
+			item,
+			document);
 	}
 }
 

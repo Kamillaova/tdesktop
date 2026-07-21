@@ -2136,6 +2136,19 @@ void Session::requestItemPlaybackRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) {
 	_itemRepaintRequest.fire_copy(item);
+	requestItemPlaybackViewRepaint(item, document);
+}
+
+void Session::requestItemPlaybackFrameRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) {
+	_itemPlaybackFrameRepaintRequest.fire_copy(item);
+	requestItemPlaybackViewRepaint(item, document);
+}
+
+void Session::requestItemPlaybackViewRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) {
 	auto repaintGroupLeader = false;
 	auto repaintView = [&](not_null<ViewElement*> view) {
 		if (view->isHiddenByGroup()) {
@@ -2153,6 +2166,11 @@ void Session::requestItemPlaybackRepaint(
 			}
 		}
 	}
+}
+
+auto Session::itemPlaybackFrameRepaintRequest() const
+-> rpl::producer<not_null<const HistoryItem*>> {
+	return _itemPlaybackFrameRepaintRequest.events();
 }
 
 rpl::producer<not_null<const HistoryItem*>> Session::itemRepaintRequest() const {

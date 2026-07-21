@@ -109,7 +109,9 @@ Float::Float(
 	_roundPainter = std::make_unique<RoundPainter>(item);
 	prepareShadow();
 
-	document->session().data().itemRepaintRequest(
+	rpl::merge(
+		document->session().data().itemRepaintRequest(),
+		document->session().data().itemPlaybackFrameRepaintRequest()
 	) | rpl::on_next([this](auto item) {
 		if (_item == item) {
 			repaintItem();

@@ -156,6 +156,9 @@ public:
 	[[nodiscard]] rpl::producer<TrackState> updatedNotifier() const {
 		return _updatedNotifier.events();
 	}
+	[[nodiscard]] rpl::producer<TrackState> itemUpdatedNotifier() const {
+		return _itemUpdatedNotifier.events();
+	}
 
 	[[nodiscard]] rpl::producer<> stops(AudioMsgId::Type type) const;
 	[[nodiscard]] rpl::producer<> startsPlay(AudioMsgId::Type type) const;
@@ -171,6 +174,10 @@ public:
 private:
 	using SharedMediaType = Storage::SharedMediaType;
 	using SliceKey = SparseIdsMergedSlice::Key;
+	enum class ItemUpdateMode {
+		Always,
+		PlaybackPosition,
+	};
 	struct Streamed;
 	struct ShuffleData;
 	struct Data {
@@ -263,9 +270,14 @@ private:
 		Streaming::Error &&error);
 
 	void clearStreamed(not_null<Data*> data, bool savePosition = true);
-	void emitUpdate(AudioMsgId::Type type);
+	void emitUpdate(
+		AudioMsgId::Type type,
+		ItemUpdateMode mode = ItemUpdateMode::Always);
 	template <typename CheckCallback>
-	void emitUpdate(AudioMsgId::Type type, CheckCallback check);
+	void emitUpdate(
+		AudioMsgId::Type type,
+		CheckCallback check,
+		ItemUpdateMode mode = ItemUpdateMode::Always);
 
 	[[nodiscard]] RepeatMode repeat(not_null<const Data*> data) const;
 	[[nodiscard]] rpl::producer<RepeatMode> repeatChanges(
@@ -313,6 +325,7 @@ private:
 	rpl::event_stream<AudioMsgId::Type> _playerStopped;
 	rpl::event_stream<AudioMsgId::Type> _playerStartedPlay;
 	rpl::event_stream<TrackState> _updatedNotifier;
+	rpl::event_stream<TrackState> _itemUpdatedNotifier;
 	rpl::event_stream<SeekingChanges> _seekingChanges;
 	rpl::event_stream<> _closePlayerRequests;
 	rpl::lifetime _lifetime;
