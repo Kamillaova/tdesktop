@@ -161,11 +161,13 @@ struct StickersListWidget::Set {
 	rpl::lifetime lottieLifetime;
 	std::shared_ptr<SetAnimationIdentity> animationIdentity
 		= std::make_shared<SetAnimationIdentity>();
+	base::flat_map<
+		Lottie::Animation*,
+		std::shared_ptr<StickerAnimationIdentity>> lottieAnimationIdentities;
 	std::vector<std::shared_ptr<StickerAnimationIdentity>> repaintStickers;
 
 	int count = 0;
 	bool externalLayout = false;
-	bool repaintLottie = false;
 };
 
 auto StickersListWidget::PrepareStickers(
@@ -1178,8 +1180,8 @@ void StickersListWidget::takeHeavyData(Set &to, Set &from) {
 	to.lottiePlayer = std::move(from.lottiePlayer);
 	to.lottieLifetime = std::move(from.lottieLifetime);
 	to.animationIdentity = std::move(from.animationIdentity);
+	to.lottieAnimationIdentities.clear();
 	to.repaintStickers = std::move(from.repaintStickers);
-	to.repaintLottie = from.repaintLottie;
 	auto &toList = to.stickers;
 	auto &fromList = from.stickers;
 	const auto same = ranges::equal(
@@ -1211,9 +1213,15 @@ void StickersListWidget::takeHeavyData(Set &to, Set &from) {
 			}
 		}
 	}
+	from.lottieAnimationIdentities.clear();
 	for (auto i = 0, count = int(toList.size()); i != count; ++i) {
 		if (const auto identity = toList[i].animationIdentity) {
 			identity->index = i;
+			if (toList[i].lottie) {
+				to.lottieAnimationIdentities.emplace(
+					toList[i].lottie,
+					identity);
+			}
 		}
 	}
 }
@@ -1942,7 +1950,7 @@ void StickersListWidget::checkVisibleLottie() {
 void StickersListWidget::clearHeavyIn(Set &set, bool clearSavedFrames) {
 	const auto player = base::take(set.lottiePlayer);
 	const auto lifetime = base::take(set.lottieLifetime);
-	set.repaintLottie = false;
+	set.lottieAnimationIdentities.clear();
 	for (const auto &identity : set.repaintStickers) {
 		identity->repaintPending = false;
 	}
@@ -2048,7 +2056,7 @@ void StickersListWidget::ensureLottiePlayer(Set &set) {
 		set.animationIdentity);
 
 	raw->updates(
-	) | rpl::on_next([=] {
+	) | rpl::on_next([=](const Lottie::MultiUpdate &update) {
 		const auto strong = identity.lock();
 		if (!strong) {
 			return;
@@ -2062,8 +2070,19 @@ void StickersListWidget::ensureLottiePlayer(Set &set) {
 		if (current.lottiePlayer.get() != raw) {
 			return;
 		}
-		current.repaintLottie = true;
-		updateSet(info);
+		auto found = false;
+		for (const auto animation : update.animations) {
+			const auto i = current.lottieAnimationIdentities.find(
+				animation.get());
+			if (i == end(current.lottieAnimationIdentities)) {
+				continue;
+			}
+			queueStickerRepaint(current, i->second);
+			found = true;
+		}
+		if (found) {
+			updateSet(info);
+		}
 	}, set.lottieLifetime);
 }
 
@@ -2096,6 +2115,14 @@ void StickersListWidget::setupLottie(Set &set, int section, int index) {
 		sticker.documentMedia.get(),
 		StickerLottieSize::StickersPanel,
 		boundingBoxSize() * style::DevicePixelRatio());
+	sticker.animationIdentity = std::make_shared<StickerAnimationIdentity>(
+		StickerAnimationIdentity{
+			.document = sticker.document.get(),
+			.index = index,
+		});
+	set.lottieAnimationIdentities.emplace(
+		sticker.lottie,
+		sticker.animationIdentity);
 }
 
 void StickersListWidget::setupWebm(Set &set, int section, int index) {
@@ -2313,20 +2340,27 @@ void StickersListWidget::refreshVisibleSearchShortcutAnimationIdentities() {
 	}
 }
 
+void StickersListWidget::queueStickerRepaint(
+		Set &set,
+		std::shared_ptr<StickerAnimationIdentity> identity) {
+	if (identity->repaintPending) {
+		return;
+	}
+	identity->repaintPending = true;
+	set.repaintStickers.push_back(std::move(identity));
+}
+
 void StickersListWidget::updateSticker(
 		const SectionInfo &info,
 		std::shared_ptr<StickerAnimationIdentity> identity) {
 	auto &set = shownSets()[info.section];
-	if (!identity->repaintPending) {
-		identity->repaintPending = true;
-		set.repaintStickers.push_back(std::move(identity));
-	}
+	queueStickerRepaint(set, std::move(identity));
 	updateSet(info);
 }
 
 void StickersListWidget::updateSet(const SectionInfo &info) {
 	auto &set = shownSets()[info.section];
-	if (!set.repaintLottie && set.repaintStickers.empty()) {
+	if (set.repaintStickers.empty()) {
 		return;
 	}
 
@@ -2367,16 +2401,8 @@ void StickersListWidget::repaintItems(
 		info.rowsCount);
 	const auto from = std::min(count, fromRow * _columnCount);
 	const auto till = std::min(count, toRow * _columnCount);
-	const auto repaintLottie = base::take(set.repaintLottie);
 	const auto repaintStickers = base::take(set.repaintStickers);
 	auto selected = std::vector<bool>(till - from, false);
-	if (repaintLottie) {
-		for (auto i = from; i != till; ++i) {
-			if (set.stickers[i].lottie) {
-				selected[i - from] = true;
-			}
-		}
-	}
 	for (const auto &identity : repaintStickers) {
 		identity->repaintPending = false;
 		auto index = identity->index;
@@ -2415,7 +2441,8 @@ void StickersListWidget::repaintItems(
 			(rowTill - rowFrom) * _singleSize.height()));
 	};
 	const auto visibleCount = till - from;
-	if (visibleCount > 0
+	if (indices.size() > 1
+		&& visibleCount > 0
 		&& int(indices.size()) * 2 >= visibleCount) {
 		update(gridRect(fromRow, toRow));
 	} else {
@@ -2428,7 +2455,8 @@ void StickersListWidget::repaintItems(
 			const auto rowCount = std::min(
 				_columnCount,
 				count - row * _columnCount);
-			if (int(i - rowBegin) * 2 >= rowCount) {
+			if ((i - rowBegin) > 1
+				&& int(i - rowBegin) * 2 >= rowCount) {
 				update(gridRect(row, row + 1));
 				continue;
 			}
@@ -2459,7 +2487,6 @@ void StickersListWidget::clearPendingSetRepaints() {
 	}
 	_repaintSets.clear();
 	for (auto &set : shownSets()) {
-		set.repaintLottie = false;
 		for (const auto &identity : set.repaintStickers) {
 			identity->repaintPending = false;
 		}
@@ -3466,7 +3493,7 @@ void StickersListWidget::refreshSearchSets() {
 			set->stickers.empty() ? set->covers : set->stickers,
 			skipPremium);
 		if (!elements.empty()) {
-			entry.lottiePlayer = nullptr;
+			clearHeavyIn(entry, false);
 			entry.stickers = std::move(elements);
 		}
 		entry.thumbnailDocument = set->lookupThumbnailDocument();

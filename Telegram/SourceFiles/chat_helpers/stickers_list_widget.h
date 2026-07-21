@@ -350,6 +350,9 @@ private:
 	void refreshVisibleSetAnimationIdentities();
 	void refreshVisibleSearchShortcutAnimationIdentities();
 	void repaintItems(crl::time now = 0);
+	void queueStickerRepaint(
+		Set &set,
+		std::shared_ptr<StickerAnimationIdentity> identity);
 	void updateSticker(
 		const SectionInfo &info,
 		std::shared_ptr<StickerAnimationIdentity> identity);
