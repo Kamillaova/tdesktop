@@ -35,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/emoji_fly_animation.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
+#include "ui/paint/damage.h"
 #include "ui/text/text_isolated_emoji.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/animated_icon.h"
@@ -154,7 +155,9 @@ private:
 	void cacheBackground();
 	void watchForSticker();
 	void setStickerFrom(not_null<DocumentData*> document);
+	void recordStickerRepaint(QRect bounds);
 	[[nodiscard]] QSize stickerSize() const;
+	[[nodiscard]] QRect localContentRect() const;
 
 	const not_null<Main::Session*> _session;
 	Data::WeatherArea _data;
@@ -172,6 +175,8 @@ private:
 	std::shared_ptr<HistoryView::StickerPlayer> _sticker;
 	rpl::lifetime _lifetime;
 	QRect _contentRect;
+	QRect _stickerRepaintBounds;
+	bool _stickerRepaintBoundsKnown = false;
 
 };
 
@@ -673,12 +678,33 @@ void WeatherView::paintEvent(QPaintEvent *e) {
 		p.scale(scale, scale);
 		p.translate(-scenter);
 		p.drawImage(rect, image);
+		recordStickerRepaint(Ui::DamageRect(
+			rect,
+			p.transform()).intersected(localContentRect()));
 		_sticker->markFrameShown();
+	} else {
+		recordStickerRepaint({});
 	}
 }
 
 QSize WeatherView::stickerSize() const {
 	return QSize(st::chatIntroStickerSize, st::chatIntroStickerSize);
+}
+
+QRect WeatherView::localContentRect() const {
+	return _contentRect.isEmpty()
+		? rect()
+		: _contentRect.translated(-geometry().topLeft()).intersected(rect());
+}
+
+void WeatherView::recordStickerRepaint(QRect bounds) {
+	const auto previous = _stickerRepaintBounds;
+	const auto known = _stickerRepaintBoundsKnown;
+	_stickerRepaintBounds = bounds;
+	_stickerRepaintBoundsKnown = !bounds.isEmpty();
+	if (known && previous != bounds) {
+		update(previous.united(bounds));
+	}
 }
 
 void WeatherView::setStickerFrom(not_null<DocumentData*> document) {
@@ -713,7 +739,13 @@ void WeatherView::setStickerFrom(not_null<DocumentData*> document) {
 				media->bytes(),
 				stickerSize());
 		}
-		_sticker->setRepaintCallback([=] { update(); });
+		_sticker->setRepaintCallback([=] {
+			if (_stickerRepaintBoundsKnown) {
+				update(_stickerRepaintBounds);
+			} else {
+				update();
+			}
+		});
 		update();
 	}, lifetime());
 }
