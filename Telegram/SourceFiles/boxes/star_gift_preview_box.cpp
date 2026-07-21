@@ -883,11 +883,12 @@ void Delegate::update(
 			}
 		}
 	}
-	if (_progress != progress) {
+	const auto progressChanged = (_progress != progress);
+	if (progressChanged) {
 		_progress = progress;
 		_backdropDirty = true;
 	}
-	if (!wasDirty && _backdropDirty) {
+	if ((!wasDirty && _backdropDirty) || progressChanged) {
 		_repaint(SharedAnimationRepaint::PatternAndBackdrop);
 	}
 }
