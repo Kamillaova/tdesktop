@@ -25,6 +25,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animations.h"
 #include "ui/effects/fireworks_animation.h"
 #include "ui/emoji_config.h"
+#include "ui/paint/damage.h"
 #include "ui/power_saving.h"
 #include "ui/qt_object_factory.h"
 #include "ui/rect.h"
@@ -109,6 +110,7 @@ private:
 	struct Sticker {
 		std::shared_ptr<Data::DocumentMedia> media;
 		std::unique_ptr<StickerPlayer> player;
+		QSize box;
 		bool usesTextColor = false;
 	};
 
@@ -132,6 +134,12 @@ private:
 	void paintConfetti(QPainter &p);
 	void paintDigits(QPainter &p);
 	void destroy();
+	void requestNormalRepaint();
+
+	[[nodiscard]] QRect confettiGeometry(QSize size) const;
+	[[nodiscard]] QPointF digitCenter(int index) const;
+	[[nodiscard]] QRectF digitGeometry(int index, QSizeF size) const;
+	[[nodiscard]] QRect normalAnimationBounds() const;
 
 	[[nodiscard]] bool paused() const {
 		return _paused && _paused();
@@ -145,6 +153,7 @@ private:
 	Ui::Animations::Basic _animation;
 	crl::time _lastTickTime = 0;
 	float64 _progress = 0.;
+	QRect _normalAnimationBounds;
 	bool _started = false;
 	bool _destroying = false;
 
@@ -283,7 +292,7 @@ void BirthdayEffect::startDigits(const EmojiDocuments &byEmoji) {
 				found,
 				ChatHelpers::StickerLottieSize::StickerSet,
 				Size(_digitSide),
-				[=] { update(); });
+				[=] { requestNormalRepaint(); });
 		}
 	}
 }
@@ -294,6 +303,7 @@ void BirthdayEffect::loadInto(
 		ChatHelpers::StickerLottieSize sizeTag,
 		QSize box,
 		Fn<void()> ready) {
+	slot->box = box;
 	slot->media = document->createMediaView();
 	slot->media->checkStickerLarge();
 	slot->media->goodThumbnailWanted();
@@ -326,7 +336,7 @@ void BirthdayEffect::loadInto(
 				media->bytes(),
 				box);
 		}
-		player->setRepaintCallback([=] { update(); });
+		player->setRepaintCallback([=] { requestNormalRepaint(); });
 		slot->usesTextColor = media->owner()->emojiUsesTextColor();
 		slot->player = std::move(player);
 		ready();
@@ -340,8 +350,9 @@ void BirthdayEffect::startAnimation() {
 	_started = true;
 	_lastTickTime = 0;
 	_progress = 0.;
+	_normalAnimationBounds = QRect();
 	_animation.start();
-	update();
+	requestNormalRepaint();
 }
 
 void BirthdayEffect::tick(crl::time now) {
@@ -355,11 +366,82 @@ void BirthdayEffect::tick(crl::time now) {
 			0.,
 			1.);
 	}
-	update();
+	requestNormalRepaint();
 	if (_progress >= 1.) {
 		_animation.stop();
 		destroy();
 	}
+}
+
+void BirthdayEffect::requestNormalRepaint() {
+	if (!_started || _fireworks) {
+		return;
+	}
+	const auto current = normalAnimationBounds();
+	const auto damage = _normalAnimationBounds.isEmpty()
+		? current
+		: current.isEmpty()
+		? _normalAnimationBounds
+		: _normalAnimationBounds.united(current);
+	_normalAnimationBounds = current;
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}
+
+QRect BirthdayEffect::confettiGeometry(QSize size) const {
+	const auto center = rect::center(_userpicGeometry());
+	return QRect(
+		center.x() - (size.width() / 2),
+		std::max(0, center.y() - (size.height() / 2)),
+		size.width(),
+		size.height());
+}
+
+QPointF BirthdayEffect::digitCenter(int index) const {
+	const auto count = int(_digits.size());
+	const auto side = float64(_digitSide);
+	const auto pitch = side * kDigitPitchFactor;
+	const auto userpic = _userpicGeometry();
+	const auto sourceX = float64(rect::center(userpic).x());
+	const auto sourceY = float64(
+		userpic.y() + userpic.height() * kDigitSourceBelowFactor);
+	const auto rowLeft = (width() - pitch * (count - 1)) / 2.;
+	const auto travelX = rowLeft - sourceX;
+	const auto travelY = sourceY + side;
+	const auto local = Cascade(_progress, index, count, kCascadeWaveLength);
+	return {
+		sourceX + (pitch * index) + (local * travelX),
+		sourceY - (travelY * _progress * _progress),
+	};
+}
+
+QRectF BirthdayEffect::digitGeometry(int index, QSizeF size) const {
+	const auto center = digitCenter(index);
+	return QRectF(
+		center.x() - (size.width() / 2.),
+		center.y() - (size.height() / 2.),
+		size.width(),
+		size.height());
+}
+
+QRect BirthdayEffect::normalAnimationBounds() const {
+	auto bounds = QRectF();
+	const auto add = [&](QRectF rect) {
+		if (!rect.isEmpty()) {
+			bounds = bounds.isEmpty() ? rect : bounds.united(rect);
+		}
+	};
+	if (!_confetti.box.isEmpty()) {
+		add(QRectF(confettiGeometry(_confetti.box)));
+	}
+	for (auto i = 0; i != int(_digits.size()); ++i) {
+		const auto &digit = _digits[i];
+		if (!digit.box.isEmpty()) {
+			add(digitGeometry(i, QSizeF(digit.box)));
+		}
+	}
+	return Ui::DamageRect(bounds).intersected(rect());
 }
 
 void BirthdayEffect::paintEvent(QPaintEvent *e) {
@@ -387,22 +469,19 @@ void BirthdayEffect::paintConfetti(QPainter &p) {
 		? st::windowFgActive->c
 		: QColor(0, 0, 0, 0);
 	const auto info = _confetti.player->frame(
-		Size(_confettiSide),
+		_confetti.box,
 		colored,
 		true,
 		crl::now(),
 		frozen);
 	const auto image = info.image;
 	const auto size = image.size() / style::DevicePixelRatio();
-	const auto center = rect::center(_userpicGeometry());
-	const auto x = center.x() - (size.width() / 2);
-	const auto y = std::max(0, center.y() - (size.height() / 2));
 	const auto opacity = (_progress < kFadeOutFrom)
 		? 1.
 		: std::max(0., 1. - (_progress - kFadeOutFrom) / (1. - kFadeOutFrom));
 
 	p.setOpacity(opacity);
-	p.drawImage(Rect(x, y, size), image);
+	p.drawImage(confettiGeometry(size), image);
 	p.setOpacity(1.);
 
 	if (AdvanceFrame(_confetti.player.get(), info.index, frozen)) {
@@ -416,15 +495,6 @@ void BirthdayEffect::paintDigits(QPainter &p) {
 		return;
 	}
 	const auto frozen = paused();
-	const auto sz = float64(_digitSide);
-	const auto pitch = sz * kDigitPitchFactor;
-	const auto userpic = _userpicGeometry();
-	const auto sourceX = float64(rect::center(userpic).x());
-	const auto sourceY = float64(
-		userpic.y() + userpic.height() * kDigitSourceBelowFactor);
-	const auto rowLeft = (width() - pitch * (count - 1)) / 2.;
-	const auto travelX = rowLeft - sourceX;
-	const auto travelY = sourceY + sz;
 	const auto t = _progress;
 
 	for (auto i = count - 1; i >= 0; --i) {
@@ -436,23 +506,18 @@ void BirthdayEffect::paintDigits(QPainter &p) {
 		const auto scale = anim::easeOutQuint(
 			1.,
 			std::clamp(local / kCascadeScalePart, 0., 1.));
-		const auto centerX = sourceX + (pitch * i) + (local * travelX);
-		const auto centerY = sourceY - (travelY * t * t);
-		const auto drawSide = sz * scale;
+		const auto drawSide = _digitSide * scale;
 		const auto colored = digit.usesTextColor
 			? st::windowFgActive->c
 			: QColor(0, 0, 0, 0);
 		const auto info = digit.player->frame(
-			Size(_digitSide),
+			digit.box,
 			colored,
 			false,
 			crl::now(),
 			frozen);
 		p.drawImage(
-			Rect(
-				centerX - (drawSide / 2.),
-				centerY - (drawSide / 2.),
-				Size(drawSide)),
+			digitGeometry(i, Size(drawSide)),
 			info.image);
 		if (AdvanceFrame(digit.player.get(), info.index, frozen)) {
 			digit.player->markFrameShown();
