@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item.h"
 #include "history/view/history_view_element.h"
+#include "history/view/history_view_repaint_request.h"
 #include "history/view/media/history_view_document.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
@@ -113,6 +114,7 @@ private:
 	rpl::variable<bool> _chatWide;
 	std::shared_ptr<Ui::ChatTheme> _theme;
 	std::unique_ptr<HistoryView::Element> _element;
+	HistoryView::ViewRepaintMapper _repaintMapper;
 	QRect _viewport;
 	QRect _elementGeometry;
 	rpl::variable<QRect> _elementInner;
@@ -164,7 +166,11 @@ PreviewWrap::PreviewWrap(
 	session->data().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == _element.get()) {
-			update(_elementGeometry);
+			if (const auto mapped = _repaintMapper.map(data)) {
+				update(*mapped);
+			} else {
+				update(_elementGeometry);
+			}
 		}
 	}, lifetime());
 	session->data().itemViewRefreshRequest(
@@ -303,6 +309,7 @@ void PreviewWrap::createView() {
 void PreviewWrap::clear() {
 	_elementLifetime.destroy();
 	_element = nullptr;
+	_repaintMapper = {};
 }
 
 PreviewWrap::~PreviewWrap() {
@@ -316,6 +323,7 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 
 	auto p = Painter(this);
 	p.translate(_elementGeometry.topLeft());
+	_repaintMapper.record(p);
 	if (!_lastFrameCache.isNull()) {
 		p.drawImage(0, 0, _lastFrameCache);
 	} else {
@@ -326,7 +334,7 @@ void PreviewWrap::paintEvent(QPaintEvent *e) {
 			Rect(_element->currentSize()),
 			!window()->isActiveWindow());
 		context.outbg = _element->hasOutLayout();
-		_element->draw(p, context);
+		_element->draw(p, context.withElementPainter(p));
 	}
 }
 
