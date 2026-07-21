@@ -526,8 +526,12 @@ void TopBar::refreshTags() {
 	const auto padding = st::searchInChatTagsPadding;
 	const auto position = QPoint(padding.left(), padding.top());
 
-	_searchTags->repaintRequests() | rpl::on_next([=] {
-		parent->update();
+	_searchTags->repaintRequests() | rpl::on_next([=](QRect geometry) {
+		if (geometry.isEmpty()) {
+			parent->update();
+		} else {
+			parent->update(geometry.translated(position));
+		}
 	}, _searchTags->lifetime());
 
 	widthValue() | rpl::on_next([=](int width) {

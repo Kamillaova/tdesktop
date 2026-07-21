@@ -149,7 +149,7 @@ void SearchTags::fill(
 			.custom = (customId
 				? _owner->customEmojiManager().create(
 					customId,
-					[=] { _repaintRequests.fire({}); })
+					[=] { repaintTag(id); })
 				: nullptr),
 			.text = text,
 			.textWidth = st::reactionInlineTagFont->width(text),
@@ -187,6 +187,13 @@ void SearchTags::fill(
 	if (_width > 0) {
 		layout();
 		_repaintRequests.fire({});
+	}
+}
+
+void SearchTags::repaintTag(const Data::ReactionId &id) {
+	const auto i = ranges::find(_tags, id, &Tag::id);
+	if (i != end(_tags) && !i->geometry.isEmpty()) {
+		_repaintRequests.fire_copy(i->geometry);
 	}
 }
 
@@ -242,7 +249,7 @@ rpl::producer<int> SearchTags::heightValue() const {
 	return _height.value();
 }
 
-rpl::producer<> SearchTags::repaintRequests() const {
+rpl::producer<QRect> SearchTags::repaintRequests() const {
 	return _repaintRequests.events();
 }
 

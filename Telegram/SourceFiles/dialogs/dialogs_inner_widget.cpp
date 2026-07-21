@@ -4389,9 +4389,16 @@ void InnerWidget::applySearchState(SearchState state) {
 			reactions->myTagsValue(sublist),
 			state.tags);
 
-		_searchTags->repaintRequests() | rpl::on_next([=] {
-			const auto height = _searchTags->height();
-			update(0, 0, width(), height);
+		_searchTags->repaintRequests() | rpl::on_next([=](QRect geometry) {
+			if (geometry.isEmpty()) {
+				const auto height = _searchTags->height();
+				update(0, 0, width(), height);
+			} else {
+				geometry.translate(
+					_searchTagsLeft,
+					st::dialogsSearchTagBottom / 2);
+				update(geometry);
+			}
 		}, _searchTags->lifetime());
 
 		_searchTags->menuRequests(

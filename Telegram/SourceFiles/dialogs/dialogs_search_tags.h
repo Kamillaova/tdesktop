@@ -34,7 +34,7 @@ public:
 	void resizeToWidth(int width);
 	[[nodiscard]] int height() const;
 	[[nodiscard]] rpl::producer<int> heightValue() const;
-	[[nodiscard]] rpl::producer<> repaintRequests() const;
+	[[nodiscard]] rpl::producer<QRect> repaintRequests() const;
 
 	[[nodiscard]] ClickHandlerPtr lookupHandler(QPoint point) const;
 	[[nodiscard]] auto selectedChanges() const
@@ -54,6 +54,7 @@ private:
 	struct Tag;
 
 	void fill(const std::vector<Data::Reaction> &list, bool premium);
+	void repaintTag(const Data::ReactionId &id);
 	void paintCustomFrame(
 		QPainter &p,
 		not_null<Ui::Text::CustomEmoji*> emoji,
@@ -74,7 +75,7 @@ private:
 	std::vector<Tag> _tags;
 	Ui::Text::String _additionalText;
 	rpl::event_stream<> _selectedChanges;
-	rpl::event_stream<> _repaintRequests;
+	rpl::event_stream<QRect> _repaintRequests;
 	rpl::event_stream<Data::ReactionId> _menuRequests;
 	mutable QImage _normalBg;
 	mutable QImage _selectedBg;
