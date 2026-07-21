@@ -21,6 +21,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/fields/input_field.h"
 #include "mtproto/sender.h"
 
+#include <QtGui/QRegion>
+
 enum class SendMediaType;
 class MessageLinksParser;
 struct InlineBotQuery;
@@ -383,6 +385,11 @@ private:
 		Ui::Animations::Simple animation;
 		int startHeight = 0;
 	};
+	struct FieldAnimationRepaintState {
+		QRegion current;
+		QRegion convergence;
+		QRegion scheduled;
+	};
 	enum class TextUpdateEvent {
 		SaveDraft = (1 << 0),
 		SendTyping = (1 << 1),
@@ -414,6 +421,15 @@ private:
 	void createTabbedPanel();
 	void setTabbedPanel(std::unique_ptr<TabbedPanel> panel);
 	void updateField();
+	void repaintFieldAnimation(FieldAnimationRepaintState &state);
+	void scheduleFieldAnimationRepaint(
+		FieldAnimationRepaintState &state,
+		QRegion damage);
+	void recordFieldAnimationPaint(
+		FieldAnimationRepaintState &state,
+		const Painter &p,
+		const QRegion &paintRegion,
+		QRectF painted);
 	void fieldChanged();
 	[[nodiscard]] bool suppressSendAction() const;
 	void fieldFocused();
@@ -642,7 +658,7 @@ private:
 
 	void sendInlineResult(InlineBots::ResultSelected result);
 
-	void drawField(Painter &p, const QRect &rect);
+	void drawField(Painter &p, const QRegion &paintRegion);
 	void paintEditHeader(
 		Painter &p,
 		const QRect &rect,
@@ -795,6 +811,10 @@ private:
 	HistoryView::MediaEditManager _mediaEditManager;
 
 	HistoryItem *_replyEditMsg = nullptr;
+	FieldAnimationRepaintState _replyEditMsgTextRepaint;
+	FieldAnimationRepaintState _replyPreviewAnimationRepaint;
+	FieldAnimationRepaintState _forwardPanelTextRepaint;
+	FieldAnimationRepaintState _forwardPanelPreviewRepaint;
 	Ui::Text::String _replyEditMsgText;
 	std::unique_ptr<Ui::SpoilerAnimation> _replySpoiler;
 	mutable base::Timer _updateEditTimeLeftDisplay;

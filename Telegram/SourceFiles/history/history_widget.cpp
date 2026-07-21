@@ -53,6 +53,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/choose_send_as.h"
 #include "ui/effects/spoiler_mess.h"
 #include "ui/image/image.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/power_saving.h"
@@ -210,8 +211,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_info.h"
 #include "styles/style_iv.h"
 
-#include <QtGui/QWindow>
 #include <QtCore/QMimeData>
+#include <QtGui/QPaintEvent>
+#include <QtGui/QWindow>
 
 namespace {
 
@@ -320,7 +322,10 @@ HistoryWidget::HistoryWidget(
 	controller->uiShow(),
 	_send,
 	st::historySendSize.height()))
-, _forwardPanel(std::make_unique<ForwardPanel>([=] { updateField(); }))
+, _forwardPanel(std::make_unique<ForwardPanel>(
+	[=] { updateField(); },
+	[=] { repaintFieldAnimation(_forwardPanelTextRepaint); },
+	[=] { repaintFieldAnimation(_forwardPanelPreviewRepaint); }))
 , _field(
 	this,
 	st::historyComposeField,
@@ -425,6 +430,7 @@ HistoryWidget::HistoryWidget(
 
 	_mediaEditManager.updateRequests() | rpl::on_next([this] {
 		updateOverStates(mapFromGlobal(QCursor::pos()));
+		updateField();
 	}, lifetime());
 
 	setupSendMenu(_send.get(), [=](SendMenu::Action action, SendMenu::Details) {
@@ -6216,7 +6222,7 @@ void HistoryWidget::updateOverStates(QPoint pos) {
 		_inPhotoEdit = inPhotoEdit;
 		if (_photoEditMedia) {
 			_inPhotoEditOver.start(
-				[=] { updateField(); },
+				[=] { repaintFieldAnimation(_replyPreviewAnimationRepaint); },
 				_inPhotoEdit ? 0. : 1.,
 				_inPhotoEdit ? 1. : 0.,
 				st::defaultMessageBar.duration);
@@ -6236,7 +6242,7 @@ void HistoryWidget::clearOverStates() {
 		_inPhotoEdit = false;
 		if (_photoEditMedia) {
 			_inPhotoEditOver.start(
-				[=] { updateField(); },
+				[=] { repaintFieldAnimation(_replyPreviewAnimationRepaint); },
 				1.,
 				0.,
 				st::defaultMessageBar.duration);
@@ -10667,7 +10673,7 @@ void HistoryWidget::messageDataReceived(
 void HistoryWidget::updateReplyEditText(not_null<HistoryItem*> item) {
 	const auto context = Core::TextContext({
 		.session = &session(),
-		.repaint = [=] { updateField(); },
+		.repaint = [=] { repaintFieldAnimation(_replyEditMsgTextRepaint); },
 	});
 	const auto text = [&] {
 		const auto media = (_replyTo.todoItemId
@@ -10802,8 +10808,77 @@ void HistoryWidget::updateField() {
 	rtlupdate(0, fieldAreaTop, width(), height() - fieldAreaTop);
 }
 
-void HistoryWidget::drawField(Painter &p, const QRect &rect) {
+void HistoryWidget::repaintFieldAnimation(
+		FieldAnimationRepaintState &state) {
+	scheduleFieldAnimationRepaint(
+		state,
+		state.current.united(state.convergence));
+}
+
+void HistoryWidget::scheduleFieldAnimationRepaint(
+		FieldAnimationRepaintState &state,
+		QRegion damage) {
+	damage &= QRegion(rect());
+	const auto request = damage.subtracted(state.scheduled);
+	if (request.isEmpty()) {
+		return;
+	}
+	state.scheduled += request;
+	update(request);
+}
+
+void HistoryWidget::recordFieldAnimationPaint(
+		FieldAnimationRepaintState &state,
+		const Painter &p,
+		const QRegion &paintRegion,
+		QRectF painted) {
+	if (p.device() != this) {
+		return;
+	}
+	const auto widgetRegion = QRegion(rect());
+	const auto repainted = paintRegion.intersected(widgetRegion);
+	state.current &= widgetRegion;
+	state.convergence &= widgetRegion;
+	state.scheduled &= widgetRegion;
+	const auto map = [&](QRectF logicalRect) {
+		return QRegion(Ui::DamageRect(
+			logicalRect,
+			p.transform())).intersected(widgetRegion);
+	};
+	const auto previous = state.current;
+	const auto current = map(painted);
+	const auto relevant = previous
+		.united(current)
+		.united(state.convergence)
+		.united(state.scheduled);
+	state.scheduled -= repainted;
+	state.convergence -= repainted;
+	if (!repainted.intersects(relevant)) {
+		if (previous.isEmpty() && !current.isEmpty()) {
+			scheduleFieldAnimationRepaint(state, current);
+		}
+		return;
+	}
+	if (previous != current) {
+		state.convergence += previous;
+		state.convergence += current;
+		state.convergence -= repainted;
+	}
+	state.current = current;
+	scheduleFieldAnimationRepaint(state, state.convergence);
+}
+
+void HistoryWidget::drawField(
+		Painter &p,
+		const QRegion &paintRegion) {
 	_repaintFieldScheduled = false;
+	const auto rect = paintRegion.boundingRect();
+	const auto canonical = (p.device() == this);
+	auto replyTextRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
+	auto replyTextRepaintRect = QRectF();
+	auto forwardTextRepaintRect = QRectF();
+	auto replyPreviewRect = QRectF();
+	auto forwardPreviewRect = QRectF();
 
 	auto backy = _field->y() - st::historySendPadding;
 	auto backh = fieldHeight() + 2 * st::historySendPadding;
@@ -10851,9 +10926,8 @@ void HistoryWidget::drawField(Painter &p, const QRect &rect) {
 	if (!spoilered) {
 		_replySpoiler = nullptr;
 	} else if (!_replySpoiler) {
-		_replySpoiler = std::make_unique<Ui::SpoilerAnimation>([=] {
-			updateField();
-		});
+		_replySpoiler = std::make_unique<Ui::SpoilerAnimation>(
+			[=] { repaintFieldAnimation(_replyPreviewAnimationRepaint); });
 	}
 
 	if (_previewDrawPreview) {
@@ -10940,6 +11014,9 @@ void HistoryWidget::drawField(Painter &p, const QRect &rect) {
 						st::historyEditMedia.paintInCenter(p, to);
 						p.setOpacity(1.);
 					}
+					if (_replySpoiler || _photoEditMedia) {
+						replyPreviewRect = to;
+					}
 				}
 				replyLeft += st::historyReplyPreview + st::msgReplyBarSkip;
 			}
@@ -10960,23 +11037,38 @@ void HistoryWidget::drawField(Painter &p, const QRect &rect) {
 							- st::msgReplyPadding.right());
 				}
 				p.setPen(st::historyComposeAreaFg);
+				const auto textPosition = QPoint(
+					replyLeft,
+					st::msgReplyPadding.top()
+						+ st::msgServiceNameFont->height
+						+ backy);
+				const auto textAvailableWidth = width()
+					- replyLeft
+					- _fieldBarCancel->width()
+					- st::msgReplyPadding.right();
 				_replyEditMsgText.draw(p, {
-					.position = QPoint(
-						replyLeft,
-						st::msgReplyPadding.top()
-							+ st::msgServiceNameFont->height
-							+ backy),
-					.availableWidth = width()
-						- replyLeft
-						- _fieldBarCancel->width()
-						- st::msgReplyPadding.right(),
+					.position = textPosition,
+					.availableWidth = textAvailableWidth,
 					.palette = &st::historyComposeAreaPalette,
 					.spoiler = Ui::Text::DefaultSpoilerCache(),
 					.now = now,
 					.pausedEmoji = paused || On(PowerSaving::kEmojiChat),
 					.pausedSpoiler = pausedSpoiler,
 					.elisionLines = 1,
+					.customEmojiRepaintBounds = canonical
+						? &replyTextRepaintBounds
+						: nullptr,
 				});
+				replyTextRepaintRect = replyTextRepaintBounds.rect;
+				if (_replyEditMsgText.hasSpoilers()
+					|| !replyTextRepaintBounds.repaintBoundsKnown) {
+					const auto textFallback = QRectF(textPosition, QSizeF(
+						std::max(textAvailableWidth, 0),
+						_replyEditMsgText.lineHeight()));
+					replyTextRepaintRect = replyTextRepaintRect.isEmpty()
+						? textFallback
+						: replyTextRepaintRect.united(textFallback);
+				}
 			}
 		} else {
 			p.setFont(st::msgDateFont);
@@ -11002,10 +11094,37 @@ void HistoryWidget::drawField(Painter &p, const QRect &rect) {
 			- x
 			- _fieldBarCancel->width()
 			- st::msgReplyPadding.right();
-		_forwardPanel->paint(p, x, backy, available, width());
+		_forwardPanel->paint(
+			p,
+			x,
+			backy,
+			available,
+			width(),
+			canonical ? &forwardTextRepaintRect : nullptr,
+			canonical ? &forwardPreviewRect : nullptr);
 	} else if (_suggestOptions) {
 		_suggestOptions->paintBar(p, 0, backy, width());
 	}
+	recordFieldAnimationPaint(
+		_replyEditMsgTextRepaint,
+		p,
+		paintRegion,
+		replyTextRepaintRect);
+	recordFieldAnimationPaint(
+		_replyPreviewAnimationRepaint,
+		p,
+		paintRegion,
+		replyPreviewRect);
+	recordFieldAnimationPaint(
+		_forwardPanelTextRepaint,
+		p,
+		paintRegion,
+		forwardTextRepaintRect);
+	recordFieldAnimationPaint(
+		_forwardPanelPreviewRepaint,
+		p,
+		paintRegion,
+		forwardPreviewRect);
 }
 
 void HistoryWidget::paintEditHeader(
@@ -11109,7 +11228,7 @@ void HistoryWidget::paintEvent(QPaintEvent *e) {
 			|| _kbShown
 			|| _suggestOptions) {
 			if (!isSearching()) {
-				drawField(p, clip);
+				drawField(p, e->region());
 			}
 		}
 	} else {
