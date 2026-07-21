@@ -107,6 +107,7 @@ private:
 	void setup();
 	void validatePatternCache();
 	void setDocument(not_null<DocumentData*> document);
+	void recordPlayerFramePaint(QRect rect);
 
 	const not_null<AttributeDelegate*> _delegate;
 	QImage _hiddenBgCache;
@@ -127,6 +128,7 @@ private:
 	DocumentData *_playerDocument = nullptr;
 	std::unique_ptr<HistoryView::StickerPlayer> _player;
 	rpl::lifetime _mediaLifetime;
+	QRect _playerFrameRect;
 
 };
 
@@ -336,6 +338,7 @@ void AttributeButton::setup() {
 		_document = nullptr;
 		_playerDocument = nullptr;
 		_mediaLifetime.destroy();
+		_playerFrameRect = {};
 		_patternNow = {};
 		_patternNext = {};
 		_patternFrame = QImage();
@@ -364,6 +367,7 @@ void AttributeButton::setDescriptor(const AttributeDescriptor &descriptor) {
 		return;
 	}
 	_descriptor = descriptor;
+	_playerFrameRect = {};
 	_backgroundCache = QImage();
 	setup();
 	update();
@@ -381,6 +385,7 @@ void AttributeButton::setDocument(not_null<DocumentData*> document) {
 
 	const auto destroyed = base::take(_player);
 	_playerDocument = nullptr;
+	_playerFrameRect = {};
 	_mediaLifetime = rpl::single() | rpl::then(
 		document->session().downloaderTaskFinished()
 	) | rpl::filter([=] {
@@ -408,7 +413,13 @@ void AttributeButton::setDocument(not_null<DocumentData*> document) {
 				media->bytes(),
 				st::uniqueAttributeStickerSize);
 		}
-		result->setRepaintCallback([=] { update(); });
+		result->setRepaintCallback([=] {
+			if (_playerFrameRect.isEmpty()) {
+				update();
+			} else {
+				update(_playerFrameRect);
+			}
+		});
 		_playerDocument = media->owner();
 		_player = std::move(result);
 		update();
@@ -419,8 +430,12 @@ void AttributeButton::setDocument(not_null<DocumentData*> document) {
 }
 
 void AttributeButton::setGeometry(QRect inner, QMargins extend) {
+	const auto geometry = inner.marginsAdded(extend);
+	if (_extend != extend || size() != geometry.size()) {
+		_playerFrameRect = {};
+	}
 	_extend = extend;
-	AbstractButton::setGeometry(inner.marginsAdded(extend));
+	AbstractButton::setGeometry(geometry);
 }
 
 void AttributeButton::toggleSelected(bool selected, anim::type animated) {
@@ -628,7 +643,7 @@ void AttributeButton::paintEvent(QPaintEvent *e) {
 	const auto frameSize = st::uniqueAttributeStickerSize;
 	const auto paintFrame = [&](HistoryView::StickerPlayer *player) {
 		if (!player || !player->ready()) {
-			return;
+			return QRect();
 		}
 		auto info = player->frame(frameSize, colored, false, now, paused);
 		const auto finished = (info.index + 1 == player->framesCount());
@@ -636,13 +651,15 @@ void AttributeButton::paintEvent(QPaintEvent *e) {
 			player->markFrameShown();
 		}
 		const auto size = info.image.size() / style::DevicePixelRatio();
+		const auto rect = QRect(
+			(width - size.width()) / 2,
+			st::giftBoxSmallStickerTop,
+			size.width(),
+			size.height());
 		p.drawImage(
-			QRect(
-				(width - size.width()) / 2,
-				st::giftBoxSmallStickerTop,
-				size.width(),
-				size.height()),
+			rect,
 			info.image);
+		return rect;
 	};
 	if (backdrop) {
 		const auto backdropPlayers = _delegate->backdropPlayers();
@@ -658,7 +675,7 @@ void AttributeButton::paintEvent(QPaintEvent *e) {
 			p.setOpacity(1.);
 		}
 	} else {
-		paintFrame(_player.get());
+		recordPlayerFramePaint(paintFrame(_player.get()));
 	}
 
 	const auto singlew = width - _extend.left() - _extend.right();
@@ -706,6 +723,20 @@ void AttributeButton::paintEvent(QPaintEvent *e) {
 	_percent.draw(p, {
 		.position = percent.topLeft(),
 	});
+}
+
+void AttributeButton::recordPlayerFramePaint(QRect rect) {
+	if (rect.isEmpty()) {
+		rect = {};
+	}
+	if (_playerFrameRect == rect) {
+		return;
+	}
+	const auto was = base::take(_playerFrameRect);
+	_playerFrameRect = rect;
+	if (!was.isEmpty()) {
+		update(rect.isEmpty() ? was : was.united(rect));
+	}
 }
 
 Delegate::Delegate(Fn<void()> fullUpdate)
