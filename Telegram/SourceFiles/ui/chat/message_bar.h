@@ -81,9 +81,9 @@ private:
 	struct TextAnimationDamage {
 		QRect current;
 		QRect stale;
+		QRect fallback;
 		bool known = false;
 		bool scheduled = false;
-		bool fallbackUsed = false;
 	};
 	void setup();
 	void paint(Painter &p, const QRegion &repaintRegion);
@@ -93,6 +93,7 @@ private:
 	void invalidateTextAnimationDamage();
 	void recordTextAnimationDamage(
 		QRect current,
+		QRect fallback,
 		bool known,
 		const QRegion &repaintRegion);
 	void scheduleTextAnimationRepaint(QRect damage);
@@ -103,7 +104,6 @@ private:
 	[[nodiscard]] QRect bodyRect(bool withImage) const;
 	[[nodiscard]] QRect bodyRect() const;
 	[[nodiscard]] QRect textRect() const;
-	[[nodiscard]] QRect textAnimationFallbackRect() const;
 
 	auto makeGrabGuard();
 	[[nodiscard]] QPixmap grabBodyOrTextPart(BodyAnimation type);
@@ -132,6 +132,8 @@ private:
 		const MessageBarContent &nextContent);
 
 	const style::MessageBar &_st;
+	TextAnimationDamage _textAnimationDamage;
+	bool _repaintingImageSpoiler = false;
 	RpWidget _widget;
 	Fn<bool()> _customEmojiPaused;
 	MessageBarContent _content;
@@ -140,8 +142,6 @@ private:
 	QPixmap _image, _topBarGradient, _bottomBarGradient;
 	std::unique_ptr<Animation> _animation;
 	std::unique_ptr<SpoilerAnimation> _spoiler;
-	TextAnimationDamage _textAnimationDamage;
-	bool _repaintingImageSpoiler = false;
 
 };
 

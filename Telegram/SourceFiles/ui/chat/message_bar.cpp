@@ -76,18 +76,11 @@ void MessageBar::customEmojiRepaint() {
 		|| (!_text.hasCustomEmoji() && !_text.hasSpoilers())) {
 		return;
 	}
-	if (!_textAnimationDamage.known
-		&& _textAnimationDamage.fallbackUsed) {
-		return;
-	}
 	const auto damage = _textAnimationDamage.known
 		? _textAnimationDamage.stale.united(_textAnimationDamage.current)
-		: _textAnimationDamage.stale.united(textAnimationFallbackRect());
+		: _textAnimationDamage.stale.united(_textAnimationDamage.fallback);
 	if (!damage.intersects(_widget.rect())) {
 		return;
-	}
-	if (!_textAnimationDamage.known) {
-		_textAnimationDamage.fallbackUsed = true;
 	}
 	scheduleTextAnimationRepaint(damage);
 }
@@ -293,40 +286,27 @@ QRect MessageBar::textRect() const {
 	return result;
 }
 
-QRect MessageBar::textAnimationFallbackRect() const {
-	auto result = bodyRect(false);
-	if (_animation
-		&& _animation->bodyAnimation != BodyAnimation::None) {
-		const auto shift = st::msgReplyBarSkip;
-		result = result.translated(0, -shift).united(
-			result.translated(0, shift));
-	} else {
-		const auto top = _title.isEmpty()
-			? result.y()
-				+ (result.height() - st::normalFont->height) / 2
-			: result.y() + st::msgServiceNameFont->height;
-		result = QRect(
-			QPoint(result.x(), top),
-			QSize(result.width(), _text.lineHeight()));
-	}
-	return result.intersected(_widget.rect());
-}
-
 void MessageBar::invalidateTextAnimationDamage() {
 	_textAnimationDamage.stale = _textAnimationDamage.stale.united(
-		_textAnimationDamage.current);
+		_textAnimationDamage.known
+			? _textAnimationDamage.current
+			: _textAnimationDamage.fallback);
 	_textAnimationDamage.current = QRect();
+	_textAnimationDamage.fallback = QRect();
 	_textAnimationDamage.known = false;
-	_textAnimationDamage.fallbackUsed = false;
 }
 
 void MessageBar::recordTextAnimationDamage(
 		QRect current,
+		QRect fallback,
 		bool known,
 		const QRegion &repaintRegion) {
 	const auto widgetRect = _widget.rect();
 	current &= widgetRect;
 	_textAnimationDamage.stale &= widgetRect;
+	fallback &= widgetRect;
+	fallback = fallback.united(current);
+	_textAnimationDamage.fallback = fallback;
 	_textAnimationDamage.scheduled = false;
 	if (!known) {
 		if (_textAnimationDamage.known) {
@@ -347,7 +327,6 @@ void MessageBar::recordTextAnimationDamage(
 	}
 	_textAnimationDamage.current = current;
 	_textAnimationDamage.known = true;
-	_textAnimationDamage.fallbackUsed = false;
 	if (_textAnimationDamage.stale.isEmpty()) {
 		return;
 	}
@@ -603,6 +582,7 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 				}
 				recordTextAnimationDamage(
 					damage,
+					mappedFallback,
 					customEmojiKnown,
 					repaintRegion);
 			}
