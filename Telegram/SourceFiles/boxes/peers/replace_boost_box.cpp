@@ -1049,6 +1049,7 @@ object_ptr<Ui::RpWidget> CreateGiftTransfer(
 	struct State {
 		QImage layer;
 		QPoint giftPosition;
+		QRect giftRepaintRect;
 		PaintRoundImageCallback paintGift;
 	};
 	const auto st = &st::boostReplaceUserpicsRow;
@@ -1064,17 +1065,31 @@ object_ptr<Ui::RpWidget> CreateGiftTransfer(
 	state->paintGift = GenerateGiftUniqueUserpicCallback(
 		&to->session(),
 		unique,
-		[=] { raw->update(); });
+		crl::guard(overlay, [=] {
+			const auto rect = state->giftRepaintRect;
+			if (rect.isEmpty()) {
+				overlay->update();
+			} else {
+				overlay->update(rect);
+			}
+		}));
 
 	raw->widthValue(
 	) | rpl::on_next([=](int width) {
+		const auto was = state->giftRepaintRect;
 		const auto skip = st::boostReplaceUserpicsSkip;
 		const auto total = right->width() + skip + right->width();
 		auto x = (width - total) / 2;
 		state->giftPosition = QPoint(x, 0);
+		state->giftRepaintRect = QRect(
+			state->giftPosition,
+			QSize(right->width(), right->width()));
 		x += right->width() + skip;
 		right->moveToLeft(x, 0);
 		overlay->setGeometry(QRect(0, 0, width, raw->height()));
+		if (!was.isEmpty() && was != state->giftRepaintRect) {
+			overlay->update(was.united(state->giftRepaintRect));
+		}
 	}, raw->lifetime());
 
 	overlay->paintRequest(
