@@ -208,8 +208,9 @@ private:
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mouseReleaseEvent(QMouseEvent *e) override;
 
-	void paint(QPainter &p, float64 craftProgress = 0.);
+	QRect paint(QPainter &p, float64 craftProgress = 0.);
 	void paintBackground(QPainter &p, const QImage &background);
+	void recordPlayerFramePaint(QRect rect);
 	void cacheUniqueBackground(
 		not_null<Data::UniqueGift*> unique,
 		int width,
@@ -265,6 +266,7 @@ private:
 
 	QRect _button;
 	QMargins _extend;
+	QRect _playerFrameRect;
 
 	DocumentData *_resolvedDocument = nullptr;
 

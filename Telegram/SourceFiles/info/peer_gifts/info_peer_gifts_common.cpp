@@ -208,6 +208,7 @@ void GiftButton::setDescriptor(const GiftDescriptor &descriptor, Mode mode) {
 	}
 	const auto starsType = Ui::Premium::MiniStarsType::SlowStars;
 	unsubscribe();
+	_playerFrameRect = {};
 	update();
 
 	const auto format = [=](int64 number) {
@@ -419,7 +420,13 @@ void GiftButton::setDocument(not_null<DocumentData*> document) {
 				media->bytes(),
 				stickerSize());
 		}
-		result->setRepaintCallback([=] { update(); });
+		result->setRepaintCallback([=] {
+			if (_playerFrameRect.isEmpty()) {
+				update();
+			} else {
+				update(_playerFrameRect);
+			}
+		});
 		_playerDocument = media->owner();
 		_player = std::move(result);
 		update();
@@ -430,8 +437,12 @@ void GiftButton::setDocument(not_null<DocumentData*> document) {
 }
 
 void GiftButton::setGeometry(QRect inner, QMargins extend) {
+	const auto geometry = inner.marginsAdded(extend);
+	if (_extend != extend || size() != geometry.size()) {
+		_playerFrameRect = {};
+	}
 	_extend = extend;
-	AbstractButton::setGeometry(inner.marginsAdded(extend));
+	AbstractButton::setGeometry(geometry);
 }
 
 QMargins GiftButton::currentExtend() const {
@@ -610,7 +621,7 @@ bool GiftButton::makeCraftFrameIsFinal(
 		frame.fill(Qt::transparent);
 	}
 	auto p = QPainter(&frame);
-	paint(p, progress);
+	static_cast<void>(paint(p, progress));
 	return (progress == 1.)
 		&& (!_uniquePatternEmoji || _uniquePatternEmoji->ready())
 		&& (!_player || (_player->ready() && _playerFinished));
@@ -698,7 +709,7 @@ void GiftButton::paintEvent(QPaintEvent *e) {
 
 	auto p = QPainter(this);
 	if (!canCraftAt || base::unixtime::now() >= canCraftAt) {
-		paint(p);
+		recordPlayerFramePaint(paint(p));
 		return;
 	}
 	const auto ratio = style::DevicePixelRatio();
@@ -714,14 +725,15 @@ void GiftButton::paintEvent(QPaintEvent *e) {
 	}
 	cache.fill(Qt::transparent);
 	auto q = QPainter(&cache);
-	paint(q);
+	const auto playerFrame = paint(q);
 	q.end();
 
 	p.setOpacity(kCraftUnavailableOpacity);
 	p.drawImage(rect(), cache, QRect(0, 0, w, h));
+	recordPlayerFramePaint(playerFrame);
 }
 
-void GiftButton::paint(QPainter &p, float64 craftProgress) {
+QRect GiftButton::paint(QPainter &p, float64 craftProgress) {
 	const auto stargift = std::get_if<GiftTypeStars>(&_descriptor);
 	const auto unique = stargift ? stargift->info.unique.get() : nullptr;
 	const auto onsale = unique && unique->starsForResale && small();
@@ -832,6 +844,7 @@ void GiftButton::paint(QPainter &p, float64 craftProgress) {
 	}
 
 	auto frame = QImage();
+	auto playerFrame = QRect();
 	if (_player && _player->ready()) {
 		const auto paused = !isOver() || isHidden();
 		auto info = _player->frame(
@@ -846,29 +859,28 @@ void GiftButton::paint(QPainter &p, float64 craftProgress) {
 			_player->markFrameShown();
 		}
 		const auto size = frame.size() / style::DevicePixelRatio();
-		p.drawImage(
-			QRect(
-				(width - size.width()) / 2,
-				((_mode == Mode::CraftPreview
-					|| _mode == Mode::Minimal
-					|| _mode == Mode::Craft)
-					? (extend.top()
-						+ ((height
-							- extend.top()
-							- extend.bottom()
-							- size.height()) / 2))
-					: small()
-					? st::giftBoxSmallStickerTop
-					: _text.isEmpty()
-					? (unique
-						? st::giftBoxStickerUniqueTop
-						: st::giftBoxStickerStarTop)
-					: _byStars.isEmpty()
-					? st::giftBoxStickerTop
-					: st::giftBoxStickerTopByStars),
-				size.width(),
-				size.height()),
-			frame);
+		playerFrame = QRect(
+			(width - size.width()) / 2,
+			((_mode == Mode::CraftPreview
+				|| _mode == Mode::Minimal
+				|| _mode == Mode::Craft)
+				? (extend.top()
+					+ ((height
+						- extend.top()
+						- extend.bottom()
+						- size.height()) / 2))
+				: small()
+				? st::giftBoxSmallStickerTop
+				: _text.isEmpty()
+				? (unique
+					? st::giftBoxStickerUniqueTop
+					: st::giftBoxStickerStarTop)
+				: _byStars.isEmpty()
+				? st::giftBoxStickerTop
+				: st::giftBoxStickerTopByStars),
+			size.width(),
+			size.height());
+		p.drawImage(playerFrame, frame);
 	}
 	if (hidden) {
 		const auto topleft = QPoint(
@@ -1135,6 +1147,22 @@ void GiftButton::paint(QPainter &p, float64 craftProgress) {
 				.align = style::al_top,
 			});
 		}
+	}
+
+	return playerFrame;
+}
+
+void GiftButton::recordPlayerFramePaint(QRect rect) {
+	if (rect.isEmpty()) {
+		rect = {};
+	}
+	if (_playerFrameRect == rect) {
+		return;
+	}
+	const auto was = base::take(_playerFrameRect);
+	_playerFrameRect = rect;
+	if (!was.isEmpty()) {
+		update(rect.isEmpty() ? was : was.united(rect));
 	}
 }
 
