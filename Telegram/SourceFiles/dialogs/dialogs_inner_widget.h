@@ -360,7 +360,9 @@ private:
 	void repaintDialogRow(FilterId filterId, not_null<Row*> row);
 	void repaintDialogRowAnimation(not_null<Entry*> entry);
 	void repaintDialogRowAnimationAt(not_null<Row*> row, int top);
-	void repaintCommunityRows(not_null<Entry*> entry, bool animationOnly);
+	void repaintCommunityRows(
+		not_null<History*> history,
+		bool animationOnly);
 	void repaintDialogRow(RowDescriptor row);
 	void refreshDialogRow(RowDescriptor row);
 	bool updateEntryHeight(not_null<Entry*> entry);

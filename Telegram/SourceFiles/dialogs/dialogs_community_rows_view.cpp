@@ -17,14 +17,14 @@ CommunityRowsView::CommunityRowsView() = default;
 
 CommunityRowsView::~CommunityRowsView() = default;
 
-void CommunityRowsView::setRepaint(Fn<void()> repaint) {
+void CommunityRowsView::setRepaint(Fn<void(not_null<History*>)> repaint) {
 	_repaint = std::move(repaint);
 }
 
 void CommunityRowsView::clear() {
+	_forumsLifetime.destroy();
 	_rows.clear();
 	_tops.clear();
-	_forumsLifetime.destroy();
 }
 
 void CommunityRowsView::add(not_null<History*> history, float64 narrowRatio) {
@@ -32,7 +32,9 @@ void CommunityRowsView::add(not_null<History*> history, float64 narrowRatio) {
 		forum->preloadTopics();
 		if (_repaint) {
 			forum->chatsListChanges(
-			) | rpl::on_next(_repaint, _forumsLifetime);
+			) | rpl::on_next([=] {
+				_repaint(history);
+			}, _forumsLifetime);
 		}
 	}
 	auto row = std::make_unique<Row>(Key(history), 0, 0);

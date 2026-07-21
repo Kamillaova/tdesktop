@@ -73,6 +73,7 @@ private:
 	};
 
 	void rebuild();
+	void repaintRow(not_null<History*> history);
 	void updateSelected(QPoint local);
 	void setSelected(int selected);
 	void setPressed(int pressed);

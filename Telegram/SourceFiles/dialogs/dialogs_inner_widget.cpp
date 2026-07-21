@@ -312,7 +312,9 @@ InnerWidget::InnerWidget(
 	setAttribute(Qt::WA_OpaquePaintEvent, true);
 	setAccessibleName(tr::lng_recent_chats(tr::now));
 
-	_communityViewable.setRepaint([=] { update(); });
+	_communityViewable.setRepaint([=](not_null<History*> history) {
+		repaintCommunityRows(history, false);
+	});
 
 	style::PaletteChanged(
 	) | rpl::on_next([=] {
@@ -555,7 +557,10 @@ InnerWidget::InnerWidget(
 		} else if (const auto links = entry->chatListLinks(repaintId)) {
 				repaintDialogRow(repaintId, links->main);
 		}
-		repaintCommunityRows(entry, animationOnly);
+		const auto history = entry->asHistory();
+		if (history) {
+			repaintCommunityRows(history, animationOnly);
+		}
 		if (!animationOnly
 			&& session().supportMode()
 			&& !session().settings().supportAllSearchResults()) {
@@ -3472,23 +3477,21 @@ void InnerWidget::repaintDialogRowAnimationAt(
 }
 
 void InnerWidget::repaintCommunityRows(
-		not_null<Entry*> entry,
+		not_null<History*> history,
 		bool animationOnly) {
 	if ((_state != WidgetState::Default) || !communityModeShown()) {
 		return;
 	}
-	if (!animationOnly) {
-		invalidatePaintedRows(entry);
-	}
 	for (auto index = 0; index != _communityViewable.size(); ++index) {
 		const auto row = _communityViewable.rowAt(index);
-		if (row->entry().get() != entry.get()) {
+		if (row->history() != history) {
 			continue;
 		}
 		const auto top = communityRowAbsoluteTop(index);
 		if (animationOnly) {
 			repaintDialogRowAnimationAt(row, top);
 		} else {
+			invalidatePaintedRows(row->entry());
 			update(0, top, width(), row->height());
 		}
 	}

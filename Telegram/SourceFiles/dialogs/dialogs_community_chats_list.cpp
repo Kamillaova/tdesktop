@@ -50,7 +50,9 @@ CommunityChatsList::CommunityChatsList(
 , _kind(kind)
 , _st(&st::communityInfoDialogRow) {
 	setMouseTracking(true);
-	_view.setRepaint([=] { update(); });
+	_view.setRepaint([=](not_null<History*> history) {
+		repaintRow(history);
+	});
 
 	// linkedPeersValue() fires immediately on subscription, which performs
 	// the first rebuild below.
@@ -170,6 +172,18 @@ void CommunityChatsList::rebuild() {
 	update();
 	if (underMouse()) {
 		updateSelected(mapFromGlobal(QCursor::pos()));
+	}
+}
+
+void CommunityChatsList::repaintRow(not_null<History*> history) {
+	for (auto index = 0; index != _view.size(); ++index) {
+		const auto row = _view.rowAt(index);
+		if (row->history() != history) {
+			continue;
+		}
+		_paintedRows.erase(row);
+		update(0, _view.rowTop(index), width(), row->height());
+		return;
 	}
 }
 

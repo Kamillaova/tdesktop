@@ -19,7 +19,7 @@ public:
 	CommunityRowsView();
 	~CommunityRowsView();
 
-	void setRepaint(Fn<void()> repaint);
+	void setRepaint(Fn<void(not_null<History*>)> repaint);
 
 	void clear();
 	void add(not_null<History*> history, float64 narrowRatio);
@@ -45,7 +45,7 @@ public:
 		Fn<void(not_null<Row*>, int index, int top)> paintRow) const;
 
 private:
-	Fn<void()> _repaint;
+	Fn<void(not_null<History*>)> _repaint;
 	std::vector<std::unique_ptr<Row>> _rows;
 	std::vector<int> _tops;
 	rpl::lifetime _forumsLifetime;
