@@ -442,7 +442,7 @@ private:
 	void showPreviewAt(QPoint globalPos);
 
 	void updateItems();
-	void updateLottieItems();
+	void updateLottieItems(const Lottie::MultiUpdate &update);
 	void updateItem(int index, not_null<DocumentData*> document);
 	void scheduleItemsUpdate();
 	void repaintPendingItems(crl::time now = 0);
@@ -465,9 +465,9 @@ private:
 		not_null<DocumentData*>,
 		std::unique_ptr<Ui::Text::CustomEmoji>> _customEmoji;
 	base::flat_map<not_null<DocumentData*>, std::vector<int>> _elementIndices;
+	base::flat_map<Lottie::Animation*, int> _lottieElementIndices;
 	base::flat_set<int> _repaintIndices;
 	bool _repaintAllItems = false;
-	bool _repaintLottieItems = false;
 
 	StickersPack _pack;
 	base::flat_map<EmojiPtr, StickersPack> _emoji;
@@ -1138,6 +1138,7 @@ void StickerSetBox::Inner::applySet(const TLStickerSet &set) {
 	_emoji.clear();
 	_elements.clear();
 	_elementIndices.clear();
+	_lottieElementIndices.clear();
 	_repaintIndices.clear();
 	_selected = -1;
 	setCursor(style::cur_default);
@@ -1976,10 +1977,15 @@ QPoint StickerSetBox::Inner::posFromIndex(int index) const {
 
 void StickerSetBox::Inner::rebuildElementIndices() {
 	_elementIndices.clear();
+	_lottieElementIndices.clear();
 	for (auto index = 0, count = int(_elements.size());
 			index != count;
 			++index) {
-		_elementIndices[_elements[index].document].push_back(index);
+		const auto &element = _elements[index];
+		_elementIndices[element.document].push_back(index);
+		if (const auto lottie = element.lottie) {
+			_lottieElementIndices.emplace(lottie, index);
+		}
 	}
 }
 
@@ -2000,8 +2006,8 @@ not_null<Lottie::MultiPlayer*> StickerSetBox::Inner::getLottiePlayer() {
 			Lottie::Quality::Default,
 			Lottie::MakeFrameRenderer());
 		_lottiePlayer->updates(
-		) | rpl::on_next([=] {
-			updateLottieItems();
+		) | rpl::on_next([=](const Lottie::MultiUpdate &update) {
+			updateLottieItems(update);
 		}, lifetime());
 	}
 	return _lottiePlayer.get();
@@ -2187,6 +2193,7 @@ void StickerSetBox::Inner::setupLottie(int index) {
 		element.documentMedia.get(),
 		ChatHelpers::StickerLottieSize::StickerSet,
 		boundingBoxSize() * style::DevicePixelRatio());
+	_lottieElementIndices.emplace(element.lottie, index);
 }
 
 void StickerSetBox::Inner::setupWebm(int index) {
@@ -2564,9 +2571,26 @@ void StickerSetBox::Inner::updateItems() {
 	scheduleItemsUpdate();
 }
 
-void StickerSetBox::Inner::updateLottieItems() {
-	_repaintLottieItems = true;
-	scheduleItemsUpdate();
+void StickerSetBox::Inner::updateLottieItems(
+		const Lottie::MultiUpdate &update) {
+	auto changed = false;
+	for (const auto animation : update.animations) {
+		const auto i = _lottieElementIndices.find(animation.get());
+		if (i == end(_lottieElementIndices)) {
+			continue;
+		}
+		const auto index = i->second;
+		if (index < 0
+			|| index >= int(_elements.size())
+			|| _elements[index].lottie != animation.get()) {
+			continue;
+		}
+		_repaintIndices.emplace(index);
+		changed = true;
+	}
+	if (changed) {
+		scheduleItemsUpdate();
+	}
 }
 
 void StickerSetBox::Inner::updateItem(
@@ -2597,7 +2621,6 @@ void StickerSetBox::Inner::scheduleItemsUpdate() {
 
 void StickerSetBox::Inner::repaintPendingItems(crl::time now) {
 	if (!_repaintAllItems
-		&& !_repaintLottieItems
 		&& _repaintIndices.empty()) {
 		return;
 	}
@@ -2626,14 +2649,6 @@ void StickerSetBox::Inner::repaintPendingItems(crl::time now) {
 	const auto tillIndex = std::min(
 		tillRow * _perRow,
 		int(_elements.size()));
-	const auto repaintLottie = base::take(_repaintLottieItems);
-	if (repaintLottie) {
-		for (auto index = fromIndex; index != tillIndex; ++index) {
-			if (_elements[index].lottie) {
-				_repaintIndices.emplace(index);
-			}
-		}
-	}
 	const auto indices = base::take(_repaintIndices);
 	auto visible = std::vector<int>();
 	visible.reserve(indices.size());
@@ -2670,7 +2685,6 @@ void StickerSetBox::Inner::repaintPendingItems(crl::time now) {
 
 void StickerSetBox::Inner::repaintItems(crl::time now) {
 	_repaintAllItems = false;
-	_repaintLottieItems = false;
 	_repaintIndices.clear();
 	_lastUpdatedAt = now ? now : crl::now();
 	update();
