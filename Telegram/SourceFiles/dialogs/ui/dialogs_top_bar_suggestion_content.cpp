@@ -110,6 +110,9 @@ namespace {
 [[nodiscard]] QRect MapAnimationRect(
 		const QPainter &p,
 		QRectF rect) {
+	if (rect.isEmpty()) {
+		return QRect();
+	}
 	return p.transform().mapRect(rect).toAlignedRect();
 }
 

@@ -88,6 +88,9 @@ std::optional<QRect> ChatPaintContext::mapToElement(
 	if (!hasElementPainter(p)) {
 		return std::nullopt;
 	}
+	if (rect.isEmpty()) {
+		return QRect();
+	}
 	auto invertible = false;
 	const auto inverted = elementTransform->inverted(&invertible);
 	if (!invertible) {

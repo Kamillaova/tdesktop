@@ -477,6 +477,9 @@ void FillSponsoredMessageBar(
 					|| state->contentText.hasSpoilers())) {
 				state->contentTextPaintedBounds = paintedBounds;
 				const auto mapRect = [&](QRectF rect) {
+					if (rect.isEmpty()) {
+						return QRect();
+					}
 					return p.transform().mapRect(rect).toAlignedRect();
 				};
 				const auto fallback = mapRect(QRectF(
