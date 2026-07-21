@@ -11,6 +11,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 #include "ui/text/text.h"
 
+#include <QtGui/QRegion>
+
 class HistoryItem;
 
 namespace ChatHelpers {
@@ -48,10 +50,29 @@ protected:
 	void resizeEvent(QResizeEvent *e) override;
 
 private:
+	struct AnimationDamage {
+		QRegion current;
+		QRegion stale;
+		QRegion fallback;
+		bool known = false;
+		bool scheduled = false;
+	};
+
 	void resolveMessageData();
 	void setShownMessage(HistoryItem *item);
 	void updateShownMessageText();
-	void customEmojiRepaint();
+	void textAnimationRepaint();
+	void previewSpoilerRepaint();
+	void invalidateAnimationDamage(AnimationDamage &damage);
+	void recordAnimationDamage(
+		AnimationDamage &damage,
+		QRegion current,
+		QRegion fallback,
+		bool known,
+		const QRegion &repaintRegion);
+	void scheduleAnimationRepaint(
+		AnimationDamage &state,
+		QRegion damage);
 	void animationCallback();
 
 	const std::shared_ptr<ChatHelpers::Show> _show;
@@ -60,10 +81,11 @@ private:
 	const not_null<Ui::IconButton*> _cancel;
 
 	HistoryItem *_shownMessage = nullptr;
+	AnimationDamage _textAnimationDamage;
+	AnimationDamage _previewSpoilerDamage;
 	Ui::Text::String _shownMessageName;
 	Ui::Text::String _shownMessageText;
 	std::unique_ptr<Ui::SpoilerAnimation> _previewSpoiler;
-	bool _repaintScheduled = false;
 
 	Ui::Animations::Simple _showAnimation;
 	rpl::variable<int> _desiredHeight = 0;

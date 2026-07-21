@@ -31,10 +31,25 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat_helpers.h"
 #include "styles/style_dialogs.h"
 
+#include <QtGui/QPaintEvent>
+
 namespace SendFiles {
 namespace {
 
 constexpr auto kAnimationDuration = crl::time(180);
+
+struct PaintedAnimationDamage final {
+	QRegion current;
+	QRegion fallback;
+	bool known = true;
+};
+
+[[nodiscard]] QRegion MapPaintRegion(const QPainter &p, QRectF rect) {
+	if (rect.isEmpty()) {
+		return QRegion();
+	}
+	return QRegion(p.transform().mapRect(rect).toAlignedRect());
+}
 
 } // namespace
 
@@ -65,11 +80,15 @@ ReplyPillHeader::ReplyPillHeader(
 		return (update.item == _shownMessage);
 	}) | rpl::on_next([=](const Data::MessageUpdate &update) {
 		if (update.flags & Data::MessageUpdate::Flag::Destroyed) {
+			invalidateAnimationDamage(_textAnimationDamage);
+			invalidateAnimationDamage(_previewSpoilerDamage);
 			_shownMessage = nullptr;
 			_shownMessageName.clear();
 			_shownMessageText.clear();
+			_previewSpoiler = nullptr;
 			hideAnimated();
 		} else {
+			invalidateAnimationDamage(_previewSpoilerDamage);
 			updateShownMessageText();
 			RpWidget::update();
 		}
@@ -145,6 +164,8 @@ void ReplyPillHeader::resolveMessageData() {
 }
 
 void ReplyPillHeader::setShownMessage(HistoryItem *item) {
+	invalidateAnimationDamage(_textAnimationDamage);
+	invalidateAnimationDamage(_previewSpoilerDamage);
 	_shownMessage = item;
 	if (item) {
 		updateShownMessageText();
@@ -171,9 +192,10 @@ void ReplyPillHeader::setShownMessage(HistoryItem *item) {
 void ReplyPillHeader::updateShownMessageText() {
 	Expects(_shownMessage != nullptr);
 
+	invalidateAnimationDamage(_textAnimationDamage);
 	const auto context = Core::TextContext({
 		.session = &_data->session(),
-		.repaint = [=] { customEmojiRepaint(); },
+		.repaint = [=] { textAnimationRepaint(); },
 	});
 	_shownMessageText.setMarkedText(
 		st::messageTextStyle,
@@ -184,25 +206,151 @@ void ReplyPillHeader::updateShownMessageText() {
 		context);
 }
 
-void ReplyPillHeader::customEmojiRepaint() {
-	if (_repaintScheduled) {
+void ReplyPillHeader::textAnimationRepaint() {
+	if (!_shownMessageText.hasCustomEmoji()
+		&& !_shownMessageText.hasSpoilers()) {
 		return;
 	}
-	_repaintScheduled = true;
-	update();
+	auto &state = _textAnimationDamage;
+	if (state.scheduled) {
+		return;
+	}
+	const auto damage = state.known
+		? state.stale.united(state.current)
+		: state.stale.united(state.fallback);
+	if (damage.isEmpty()) {
+		return;
+	}
+	scheduleAnimationRepaint(state, damage);
+}
+
+void ReplyPillHeader::previewSpoilerRepaint() {
+	if (!_previewSpoiler) {
+		return;
+	}
+	auto &state = _previewSpoilerDamage;
+	if (state.scheduled) {
+		return;
+	}
+	const auto damage = state.known
+		? state.stale.united(state.current)
+		: state.stale.united(state.fallback);
+	if (damage.isEmpty()) {
+		return;
+	}
+	scheduleAnimationRepaint(state, damage);
+}
+
+void ReplyPillHeader::invalidateAnimationDamage(AnimationDamage &damage) {
+	damage.stale += (damage.known ? damage.current : damage.fallback);
+	damage.current = QRegion();
+	damage.fallback = QRegion();
+	damage.known = false;
+}
+
+void ReplyPillHeader::recordAnimationDamage(
+		AnimationDamage &state,
+		QRegion current,
+		QRegion fallback,
+		bool known,
+		const QRegion &repaintRegion) {
+	const auto widgetRegion = QRegion(rect());
+	state.current &= widgetRegion;
+	state.stale &= widgetRegion;
+	state.fallback &= widgetRegion;
+	current &= widgetRegion;
+	fallback &= widgetRegion;
+	fallback += current;
+	const auto repainted = repaintRegion.intersected(widgetRegion);
+	const auto relevant = state.current
+		.united(state.stale)
+		.united(state.fallback)
+		.united(current)
+		.united(fallback);
+	if (!repainted.intersects(relevant)) {
+		return;
+	}
+	state.fallback = fallback;
+	state.scheduled = false;
+	if (!known) {
+		if (state.known) {
+			state.stale += state.current;
+		}
+		state.current = QRegion();
+		state.known = false;
+		if (state.stale.subtracted(repainted).isEmpty()) {
+			state.stale = QRegion();
+		}
+		return;
+	}
+	if (!state.known) {
+		const auto required = state.stale.united(state.fallback);
+		if (!required.subtracted(repainted).isEmpty()) {
+			scheduleAnimationRepaint(state, required);
+			return;
+		}
+		state.current = current;
+		state.stale = QRegion();
+		state.known = true;
+		return;
+	}
+	const auto combined = state.stale
+		.united(state.current)
+		.united(current);
+	if (!combined.subtracted(repainted).isEmpty()) {
+		state.current += current;
+		scheduleAnimationRepaint(state, combined);
+		return;
+	}
+	state.current = current;
+	state.stale = QRegion();
+}
+
+void ReplyPillHeader::scheduleAnimationRepaint(
+		AnimationDamage &state,
+		QRegion damage) {
+	if (state.scheduled) {
+		return;
+	}
+	damage &= QRegion(rect());
+	if (!damage.isEmpty()) {
+		state.scheduled = true;
+		update(damage);
+	}
 }
 
 void ReplyPillHeader::resizeEvent(QResizeEvent *e) {
+	invalidateAnimationDamage(_textAnimationDamage);
+	invalidateAnimationDamage(_previewSpoilerDamage);
 	_cancel->moveToRight(
 		st::boxPhotoPadding.right() + st::sendBoxAlbumGroupSkipRight,
 		(st::historyReplyHeight - _cancel->height()) / 2);
 }
 
 void ReplyPillHeader::paintEvent(QPaintEvent *e) {
-	_repaintScheduled = false;
-
 	Painter p(this);
 	p.setInactive(_show->paused(Window::GifPauseReason::Layer));
+	const auto canonical = (p.device() == this);
+	const auto repaintRegion = e->region();
+	auto textDamage = PaintedAnimationDamage();
+	auto previewDamage = PaintedAnimationDamage();
+	const auto recordDamage = gsl::finally([&] {
+		if (!canonical) {
+			return;
+		}
+		recordAnimationDamage(
+			_textAnimationDamage,
+			std::move(textDamage.current),
+			std::move(textDamage.fallback),
+			textDamage.known,
+			repaintRegion);
+		recordAnimationDamage(
+			_previewSpoilerDamage,
+			std::move(previewDamage.current),
+			std::move(previewDamage.fallback),
+			previewDamage.known,
+			repaintRegion);
+	});
 
 	const auto left = st::boxPhotoPadding.left();
 	const auto right = st::boxPhotoPadding.right();
@@ -315,32 +463,40 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 		_previewSpoiler = nullptr;
 	} else if (!_previewSpoiler) {
 		_previewSpoiler = std::make_unique<Ui::SpoilerAnimation>([=] {
-			update();
+			previewSpoilerRepaint();
 		});
 	}
 	const auto previewSkipValue = st::historyReplyPreview + st::msgReplyBarSkip;
 	const auto previewSkip = (hasPreview && preview) ? previewSkipValue : 0;
 	const auto contentLeft = textLeft + previewSkip;
 	const auto contentAvailable = availableWidth - previewSkip;
-
-	if (preview) {
-		const auto to = QRect(
+	const auto previewRect = hasPreview
+		? QRect(
 			textLeft,
 			pillCenterY - st::historyReplyPreview / 2,
 			st::historyReplyPreview,
-			st::historyReplyPreview);
-		p.drawPixmap(to.x(), to.y(), preview->pixSingle(
+			st::historyReplyPreview)
+		: QRect();
+	if (canonical && !previewRect.isEmpty()) {
+		previewDamage.fallback = MapPaintRegion(p, previewRect);
+	}
+
+	if (preview) {
+		p.drawPixmap(previewRect.x(), previewRect.y(), preview->pixSingle(
 			preview->size() / style::DevicePixelRatio(),
 			{
 				.options = Images::Option::RoundSmall,
-				.outer = to.size(),
+				.outer = previewRect.size(),
 			}));
 		if (_previewSpoiler) {
 			Ui::FillSpoilerRect(
 				p,
-				to,
+				previewRect,
 				Ui::DefaultImageSpoiler().frame(
 					_previewSpoiler->index(crl::now(), p.inactive())));
+			if (canonical) {
+				previewDamage.current = previewDamage.fallback;
+			}
 		}
 	}
 
@@ -353,12 +509,21 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 		contentAvailable);
 
 	p.setPen(st::historyComposeAreaFg);
+	const auto textPosition = QPoint(
+		contentLeft,
+		pillRect.top()
+			+ st::msgReplyPadding.top()
+			+ st::msgServiceNameFont->height);
+	auto customEmojiPaintedBounds = Ui::Text::CustomEmojiPaintedBounds();
+	if (canonical) {
+		textDamage.fallback = MapPaintRegion(p, QRectF(
+			textPosition,
+			QSize(
+				std::max(contentAvailable, 0),
+				_shownMessageText.lineHeight())));
+	}
 	_shownMessageText.draw(p, {
-		.position = QPoint(
-			contentLeft,
-			pillRect.top()
-				+ st::msgReplyPadding.top()
-				+ st::msgServiceNameFont->height),
+		.position = textPosition,
 		.availableWidth = contentAvailable,
 		.palette = &st::historyComposeAreaPalette,
 		.spoiler = Ui::Text::DefaultSpoilerCache(),
@@ -366,7 +531,23 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 		.pausedEmoji = p.inactive() || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = p.inactive() || On(PowerSaving::kChatSpoiler),
 		.elisionLines = 1,
+		.customEmojiPaintedBounds = canonical
+			? &customEmojiPaintedBounds
+			: nullptr,
 	});
+	if (canonical) {
+		const auto hasCustomEmoji = _shownMessageText.hasCustomEmoji();
+		textDamage.known = !hasCustomEmoji
+			|| customEmojiPaintedBounds.repaintRectKnown();
+		if (_shownMessageText.hasSpoilers()) {
+			textDamage.current += textDamage.fallback;
+		}
+		if (hasCustomEmoji && textDamage.known) {
+			textDamage.current += MapPaintRegion(
+				p,
+				customEmojiPaintedBounds.repaintRect());
+		}
+	}
 }
 
 } // namespace SendFiles
