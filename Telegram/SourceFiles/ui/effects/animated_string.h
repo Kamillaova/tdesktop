@@ -42,6 +42,7 @@ public:
 		int y,
 		const QColor &color,
 		float64 opacity = 1.) const;
+	[[nodiscard]] QRectF repaintBounds(int x, int y) const;
 
 	[[nodiscard]] float64 currentWidth() const;
 	[[nodiscard]] float64 width() const;
@@ -60,6 +61,16 @@ private:
 	void setInstant(const QString &text);
 	void realSetText(const QString &text);
 	void animationCallback();
+	[[nodiscard]] QPointF currentPartPosition(
+		const Part &part,
+		float64 progress,
+		bool crossfade,
+		float64 verticalShift) const;
+	[[nodiscard]] QPointF oldPartPosition(
+		const Part &part,
+		float64 progress,
+		float64 verticalShift) const;
+	void refreshRepaintBounds();
 	void drawPart(
 		QPainter &p,
 		float64 x,
@@ -77,6 +88,7 @@ private:
 	std::vector<Part> _oldParts;
 	float64 _currentWidth = 0.;
 	float64 _oldWidth = 0.;
+	QRectF _repaintBounds;
 
 	std::optional<QString> _scheduled;
 	bool _started = false;

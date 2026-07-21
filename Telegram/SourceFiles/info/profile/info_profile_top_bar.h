@@ -222,8 +222,15 @@ private:
 	void applyTabBindings(TabTopBarBindings &&bindings);
 	void updateTabSwapVisibility();
 	void applyTabSwapProgress(float64 progress);
+	[[nodiscard]] QRect tabSubtitleRepaintRect(
+		const QTransform &transform) const;
+	void repaintTabSubtitle();
+	void recordTabSubtitlePaint(
+		const QRect &repaintRect,
+		const QTransform &transform,
+		const QRegion &paintRegion);
 	void refreshTabSubtitle();
-	void paintTabSubtitle(QPainter &p);
+	void paintTabSubtitle(QPainter &p, const QRegion &paintRegion);
 	void updateRightButtonsPosition();
 	void updateTabGroupActive();
 	[[nodiscard]] bool tabSwapActive() const;
@@ -272,6 +279,12 @@ private:
 
 	object_ptr<Ui::FlatLabel> _title;
 	std::unique_ptr<Ui::StarsRating> _starsRating;
+	struct TabSubtitleRepaint {
+		QRect painted;
+		QTransform transform;
+		bool valid = false;
+	};
+	TabSubtitleRepaint _tabSubtitleRepaint;
 	std::unique_ptr<Ui::AnimatedString> _tabSubtitle;
 	QString _tabSubtitleText;
 	std::optional<QColor> _tabSubtitleOverride;

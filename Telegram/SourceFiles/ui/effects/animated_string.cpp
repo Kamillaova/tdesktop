@@ -302,6 +302,7 @@ void AnimatedString::setInstant(const QString &text) {
 		_currentParts.push_back({ text, 0., width, -1 });
 		_currentWidth = width;
 	}
+	refreshRepaintBounds();
 }
 
 void AnimatedString::realSetText(const QString &text) {
@@ -349,6 +350,7 @@ void AnimatedString::realSetText(const QString &text) {
 			_oldWidth += width;
 		}
 	}
+	refreshRepaintBounds();
 
 	_animation.start(
 		[=] { animationCallback(); },
@@ -359,9 +361,6 @@ void AnimatedString::realSetText(const QString &text) {
 }
 
 void AnimatedString::animationCallback() {
-	if (_update) {
-		_update();
-	}
 	if (!_animation.animating()) {
 		_oldParts.clear();
 		_oldText = QString();
@@ -371,6 +370,80 @@ void AnimatedString::animationCallback() {
 			_scheduled.reset();
 			if (next != _currentText) {
 				realSetText(next);
+			} else {
+				refreshRepaintBounds();
+			}
+		} else {
+			refreshRepaintBounds();
+		}
+	}
+	if (_update) {
+		_update();
+	}
+}
+
+QPointF AnimatedString::currentPartPosition(
+		const Part &part,
+		float64 progress,
+		bool crossfade,
+		float64 verticalShift) const {
+	if (!crossfade) {
+		return QPointF(part.offset, 0.);
+	} else if (part.opposite >= 0) {
+		const auto &old = _oldParts[part.opposite];
+		return QPointF(
+			old.offset + (part.offset - old.offset) * progress,
+			0.);
+	}
+	return QPointF(
+		part.offset,
+		-verticalShift * (1. - progress));
+}
+
+QPointF AnimatedString::oldPartPosition(
+		const Part &part,
+		float64 progress,
+		float64 verticalShift) const {
+	return QPointF(
+		part.offset,
+		verticalShift * progress);
+}
+
+void AnimatedString::refreshRepaintBounds() {
+	_repaintBounds = QRectF();
+	const auto &metrics = _font->metrics();
+	const auto add = [&](const QRectF &partBounds, const QPointF &position) {
+		const auto bounds = partBounds.translated(
+			position + QPointF(0., _font->ascent));
+		if (!bounds.isEmpty()) {
+			_repaintBounds = _repaintBounds.isEmpty()
+				? bounds
+				: _repaintBounds.united(bounds);
+		}
+	};
+	const auto crossfade = !_oldParts.empty();
+	const auto verticalShift = !crossfade
+		? 0.
+		: _font->height
+			* _options.moveAmplitude
+			* (_options.moveDown ? 1. : -1.);
+	for (const auto &part : _currentParts) {
+		const auto partBounds = metrics.boundingRect(part.text);
+		add(
+			partBounds,
+			currentPartPosition(part, 0., crossfade, verticalShift));
+		if (crossfade) {
+			add(
+				partBounds,
+				currentPartPosition(part, 1., true, verticalShift));
+		}
+	}
+	if (crossfade) {
+		for (const auto &part : _oldParts) {
+			if (part.opposite < 0) {
+				const auto partBounds = metrics.boundingRect(part.text);
+				add(partBounds, oldPartPosition(part, 0., verticalShift));
+				add(partBounds, oldPartPosition(part, 1., verticalShift));
 			}
 		}
 	}
@@ -417,20 +490,27 @@ void AnimatedString::draw(
 		return;
 	}
 
-	const auto amplitude = _font->height * _options.moveAmplitude;
-	const auto direction = _options.moveDown ? 1. : -1.;
+	const auto verticalShift = _font->height
+		* _options.moveAmplitude
+		* (_options.moveDown ? 1. : -1.);
 	for (const auto &part : _currentParts) {
-		const auto opposite = part.opposite;
-		if (opposite >= 0) {
-			const auto &old = _oldParts[opposite];
-			const auto px = old.offset + (part.offset - old.offset) * t;
-			drawPart(p, x + px, baseline, part.text, initial * opacity);
-		} else {
-			const auto py = -amplitude * (1. - t) * direction;
+		const auto position = currentPartPosition(
+			part,
+			t,
+			true,
+			verticalShift);
+		if (part.opposite >= 0) {
 			drawPart(
 				p,
-				x + part.offset,
-				baseline + py,
+				x + position.x(),
+				baseline + position.y(),
+				part.text,
+				initial * opacity);
+		} else {
+			drawPart(
+				p,
+				x + position.x(),
+				baseline + position.y(),
 				part.text,
 				initial * opacity * t);
 		}
@@ -439,15 +519,19 @@ void AnimatedString::draw(
 		if (part.opposite >= 0) {
 			continue;
 		}
-		const auto py = amplitude * t * direction;
+		const auto position = oldPartPosition(part, t, verticalShift);
 		drawPart(
 			p,
-			x + part.offset,
-			baseline + py,
+			x + position.x(),
+			baseline + position.y(),
 			part.text,
 			initial * opacity * (1. - t));
 	}
 	p.setOpacity(initial);
+}
+
+QRectF AnimatedString::repaintBounds(int x, int y) const {
+	return _repaintBounds.translated(x, y);
 }
 
 float64 AnimatedString::currentWidth() const {
@@ -475,11 +559,14 @@ void AnimatedString::finishAnimating() {
 		const auto next = *_scheduled;
 		_scheduled.reset();
 		setInstant(next);
+		_animation.stop();
+		return;
 	}
 	_animation.stop();
 	_oldParts.clear();
 	_oldText = QString();
 	_oldWidth = 0.;
+	refreshRepaintBounds();
 }
 
 } // namespace Ui

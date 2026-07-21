@@ -2015,7 +2015,7 @@ void TopBar::applyTabBindings(TabTopBarBindings &&bindings) {
 		if (!_tabSubtitle) {
 			_tabSubtitle = std::make_unique<Ui::AnimatedString>(
 				statusStyle().style.font,
-				[=] { update(); },
+				[=] { repaintTabSubtitle(); },
 				Ui::AnimatedString::Options{
 					.splitByWords = true,
 					.duration = st::infoTopBarDuration,
@@ -2406,11 +2406,64 @@ void TopBar::refreshTabSubtitle() {
 	_tabSubtitle->setText(tabSwapActive()
 		? _tabSubtitleText
 		: QString());
-	update();
+	repaintTabSubtitle();
 }
 
-void TopBar::paintTabSubtitle(QPainter &p) {
+QRect TopBar::tabSubtitleRepaintRect(const QTransform &transform) const {
+	return !_tabSubtitle
+		? QRect()
+		: Ui::DamageRect(
+			_tabSubtitle->repaintBounds(
+				statusMostLeft(),
+				_st.subtitlePosition.y()),
+			transform).intersected(rect());
+}
+
+void TopBar::repaintTabSubtitle() {
 	if (!_tabSubtitle) {
+		return;
+	} else if (!_tabSubtitleRepaint.valid) {
+		update();
+		return;
+	}
+	const auto current = tabSubtitleRepaintRect(
+		_tabSubtitleRepaint.transform);
+	const auto damage = _tabSubtitleRepaint.painted.united(current);
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}
+
+void TopBar::recordTabSubtitlePaint(
+		const QRect &repaintRect,
+		const QTransform &transform,
+		const QRegion &paintRegion) {
+	const auto combined = _tabSubtitleRepaint.valid
+		? _tabSubtitleRepaint.painted.united(repaintRect)
+		: repaintRect;
+	const auto uncovered = QRegion(combined).subtracted(paintRegion);
+	_tabSubtitleRepaint.painted = uncovered.isEmpty()
+		? repaintRect
+		: combined;
+	_tabSubtitleRepaint.transform = transform;
+	_tabSubtitleRepaint.valid = true;
+	if (!uncovered.isEmpty() && !combined.isEmpty()) {
+		update(combined);
+	}
+}
+
+void TopBar::paintTabSubtitle(
+		QPainter &p,
+		const QRegion &paintRegion) {
+	if (!_tabSubtitle) {
+		return;
+	}
+	const auto transform = p.transform();
+	const auto repaintRect = tabSubtitleRepaintRect(transform);
+	const auto combined = _tabSubtitleRepaint.valid
+		? _tabSubtitleRepaint.painted.united(repaintRect)
+		: repaintRect;
+	if (!combined.isEmpty() && !paintRegion.intersects(combined)) {
 		return;
 	}
 	const auto color = _tabSubtitleOverride
@@ -2421,6 +2474,10 @@ void TopBar::paintTabSubtitle(QPainter &p) {
 		statusMostLeft(),
 		_st.subtitlePosition.y(),
 		color);
+	recordTabSubtitlePaint(
+		repaintRect,
+		transform,
+		paintRegion);
 }
 
 bool TopBar::tabSwapActive() const {
@@ -2532,7 +2589,7 @@ void TopBar::applyTabSwapProgress(float64 progress) {
 		_status->setVisible(progress < 1.);
 		updateStatusPosition(_progress.current());
 	}
-	update();
+	repaintTabSubtitle();
 }
 
 void TopBar::resizeEvent(QResizeEvent *e) {
@@ -2776,7 +2833,7 @@ void TopBar::paintEvent(QPaintEvent *e) {
 		paintStoryOutline(p, geometry);
 	}
 
-	paintTabSubtitle(p);
+	paintTabSubtitle(p, e->region());
 }
 
 void TopBar::setupButtons(
