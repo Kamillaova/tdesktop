@@ -93,11 +93,19 @@ private:
 	bool elementAnimationsPaused() override;
 	bool elementShownUnread(not_null<const Element*> view) override;
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
+	void elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const HistoryView::PaintContext &,
+		QRectF rect) override;
 
 	void paintEvent(QPaintEvent *e) override;
 
 	void setupCustomChatStylePalette();
 	void cacheBackground();
+	void repaintFakeElement(const Data::RequestViewRepaint &data);
+	void repaintPathGradient();
+	void recordPathGradientPaint(QRect rect);
 	void paintEffectFrame(
 		QPainter &p,
 		not_null<Ui::ReactionFlyAnimation*> effect,
@@ -105,6 +113,7 @@ private:
 	void updateEffectGeometry();
 	void createEffectCanvas();
 	void stopEffect();
+	[[nodiscard]] QRect localContentRect() const;
 
 	Data::SuggestedReaction _data;
 	std::unique_ptr<Ui::ChatStyle> _chatStyle;
@@ -126,6 +135,8 @@ private:
 	float64 _bigSize = 0;
 	float64 _smallOffset = 0;
 	float64 _smallSize = 0;
+	std::optional<QTransform> _fakePaintTransform;
+	QRect _pathGradientRepaintRect;
 
 	std::unique_ptr<Ui::RpWidget> _effectCanvas;
 	std::unique_ptr<Ui::ReactionFlyAnimation> _effect;
@@ -237,7 +248,7 @@ ReactionView::ReactionView(
 	std::make_unique<Ui::PathShiftGradient>(
 		st::shadowFg,
 		st::shadowFg,
-		[=] { update(); }))
+		[=] { repaintPathGradient(); }))
 , _fake(
 	GenerateFakeItem(
 		delegate(),
@@ -279,7 +290,7 @@ ReactionView::ReactionView(
 	session->data().viewRepaintRequest(
 	) | rpl::on_next([=](Data::RequestViewRepaint data) {
 		if (data.view == view) {
-			update();
+			repaintFakeElement(data);
 		}
 	}, lifetime());
 
@@ -299,6 +310,8 @@ void ReactionView::setupCustomChatStylePalette() {
 }
 
 void ReactionView::setAreaGeometry(QRect geometry, float64 radius) {
+	_fakePaintTransform = std::nullopt;
+	_pathGradientRepaintRect = {};
 	_apiGeometry = geometry;
 	_size = std::min(geometry.width(), geometry.height());
 	_bubble = _size * kSuggestedBubbleSize;
@@ -316,6 +329,10 @@ void ReactionView::setAreaGeometry(QRect geometry, float64 radius) {
 }
 
 void ReactionView::setContentRect(QRect rect, int radius) {
+	if (_contentRect != rect) {
+		_fakePaintTransform = std::nullopt;
+		_pathGradientRepaintRect = {};
+	}
 	_contentRect = rect;
 }
 
@@ -338,6 +355,8 @@ void ReactionView::updateReactionsCount(int count) {
 		_counter = { st::storiesLikeCountStyle, _countShort };
 	}
 	if (now != was) {
+		_fakePaintTransform = std::nullopt;
+		_pathGradientRepaintRect = {};
 		_counterAnimation.start(
 			[=] { update(); },
 			was ? 1. : 0.,
@@ -487,7 +506,13 @@ void ReactionView::paintEvent(QPaintEvent *e) {
 		.clip = rect(),
 		.now = crl::now(),
 	};
-	_fake->draw(p, context);
+	if (_counterAnimation.animating()) {
+		_fakePaintTransform = std::nullopt;
+		_pathGradientRepaintRect = {};
+	} else {
+		_fakePaintTransform = p.transform();
+	}
+	_fake->draw(p, context.withElementPainter(p));
 
 	if (counted > 0.) {
 		p.setPen(_data.dark ? Qt::white : Qt::black);
@@ -817,6 +842,70 @@ bool ReactionView::elementShownUnread(
 auto ReactionView::elementPathShiftGradient()
 -> not_null<Ui::PathShiftGradient*> {
 	return _pathGradient.get();
+}
+
+void ReactionView::elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const HistoryView::PaintContext &,
+		QRectF rect) {
+	if (view != _fake.get()
+		|| p.device() != this
+		|| _counterAnimation.animating()) {
+		return;
+	}
+	recordPathGradientPaint(Ui::DamageRect(
+		rect,
+		p.transform()).intersected(localContentRect()));
+}
+
+void ReactionView::repaintFakeElement(
+		const Data::RequestViewRepaint &data) {
+	if (_counterAnimation.animating()
+		|| !_fakePaintTransform
+		|| (data.rect.isEmpty() && data.region.isEmpty())) {
+		update();
+		return;
+	}
+	const auto source = data.region.isEmpty()
+		? QRectF(data.rect)
+		: QRectF(data.region.boundingRect());
+	const auto rect = Ui::DamageRect(
+		source,
+		*_fakePaintTransform).intersected(localContentRect());
+	if (rect.isEmpty()) {
+		return;
+	}
+	update(rect);
+}
+
+void ReactionView::repaintPathGradient() {
+	if (_counterAnimation.animating()
+		|| _pathGradientRepaintRect.isEmpty()) {
+		update();
+	} else {
+		update(_pathGradientRepaintRect);
+	}
+}
+
+void ReactionView::recordPathGradientPaint(QRect rect) {
+	if (rect.isEmpty()) {
+		rect = {};
+	}
+	if (_pathGradientRepaintRect == rect) {
+		return;
+	}
+	const auto previous = _pathGradientRepaintRect;
+	_pathGradientRepaintRect = rect;
+	if (!previous.isEmpty()) {
+		update(rect.isEmpty() ? previous : previous.united(rect));
+	}
+}
+
+QRect ReactionView::localContentRect() const {
+	return _contentRect.isEmpty()
+		? rect()
+		: _contentRect.translated(-geometry().topLeft()).intersected(rect());
 }
 
 } // namespace
