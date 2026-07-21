@@ -75,6 +75,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QClipboard>
 #include <QtGui/QPolygonF>
+#include <QtGui/QRegion>
 #include <QtSvg/QSvgRenderer>
 #include <QtWidgets/QApplication>
 
@@ -86,6 +87,7 @@ constexpr auto kMinRepaintDelay = crl::time(33);
 constexpr auto kMinAfterScrollDelay = crl::time(33);
 constexpr auto kGrayLockOpacity = 0.3;
 constexpr auto kStickerMoveDuration = crl::time(200);
+constexpr auto kMaxPathGradientRepaintRects = 16;
 
 using Data::StickersSet;
 using Data::StickersPack;
@@ -309,6 +311,7 @@ public:
 	[[nodiscard]] rpl::producer<> updateControls() const;
 
 	void setReorderState(bool enabled) {
+		invalidatePathGradientRepaint();
 		_dragging.enabled = enabled;
 		if (enabled) {
 			_shakeAnimation.init([=] { update(); });
@@ -379,7 +382,8 @@ private:
 		QPoint position,
 		int outerWidth,
 		bool paused,
-		crl::time now) const;
+		crl::time now,
+		const QRegion *pathGradientPaintRegion = nullptr) const;
 	void shakeTransform(
 		QPainter &p,
 		int index,
@@ -443,6 +447,8 @@ private:
 	void scheduleItemsUpdate();
 	void repaintPendingItems(crl::time now = 0);
 	void repaintItems(crl::time now = 0);
+	void repaintPathGradient();
+	void invalidatePathGradientRepaint();
 	[[nodiscard]] bool itemVisible(int index) const;
 	[[nodiscard]] QRect nominalItemRect(int index) const;
 	[[nodiscard]] QRect takeItemRepaintRect(int index);
@@ -498,6 +504,9 @@ private:
 	};
 	base::flat_map<int, ShiftAnimation> _shiftAnimations;
 
+	mutable QRegion _pathGradientRepaintRegion;
+	mutable QRect _pathGradientRepaintBounds;
+	mutable bool _pathGradientRepaintBounding = false;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	mutable StickerPremiumMark _premiumMark;
 
@@ -1093,7 +1102,7 @@ StickerSetBox::Inner::Inner(
 , _pathGradient(std::make_unique<Ui::PathShiftGradient>(
 	st::windowBgRipple,
 	st::windowBgOver,
-	[=] { repaintItems(); }))
+	[=] { repaintPathGradient(); }))
 , _premiumMark(_session, st::stickersPremiumLock)
 , _updateItemsTimer([=] { scheduleItemsUpdate(); })
 , _input(set)
@@ -1124,6 +1133,7 @@ StickerSetBox::Inner::Inner(
 }
 
 void StickerSetBox::Inner::applySet(const TLStickerSet &set) {
+	invalidatePathGradientRepaint();
 	_pack.clear();
 	_emoji.clear();
 	_elements.clear();
@@ -1558,6 +1568,7 @@ void StickerSetBox::Inner::mouseReleaseEvent(QMouseEvent *e) {
 		const auto nowPosition = _dragging.lastSelected;
 		const auto finish = [=, this] {
 			requestReorder(document, nowPosition);
+			invalidatePathGradientRepaint();
 			base::reorder(_pack, wasPosition, nowPosition);
 			base::reorder(_elements, wasPosition, nowPosition);
 			rebuildElementIndices();
@@ -2013,6 +2024,7 @@ void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 
 	p.fillRect(e->rect(), st::boxBg);
 	if (_elements.empty()) {
+		invalidatePathGradientRepaint();
 		return;
 	}
 
@@ -2031,6 +2043,7 @@ void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 	const auto now = crl::now();
 	const auto paused = On(PowerSaving::kStickersPanel)
 		|| _show->paused(ChatHelpers::PauseReason::Layer);
+	const auto paintRegion = e->region();
 	for (int32 i = from; i < to; ++i) {
 		for (int32 j = 0; j < _perRow; ++j) {
 			int32 index = i * _perRow + j;
@@ -2046,7 +2059,14 @@ void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 					const auto pos = QPoint(
 						entry.animation.value(toPos.x()),
 						entry.yAnimation.value(toPos.y()));
-					paintSticker(p, index, pos, width(), paused, now);
+					paintSticker(
+						p,
+						index,
+						pos,
+						width(),
+						paused,
+						now,
+						&paintRegion);
 					continue;
 				}
 			}
@@ -2056,7 +2076,14 @@ void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 			const auto pos = QPoint(
 				_padding.left() + j * _singleSize.width(),
 				_padding.top() + i * _singleSize.height());
-			paintSticker(p, index, pos, width(), paused, now);
+			paintSticker(
+				p,
+				index,
+				pos,
+				width(),
+				paused,
+				now,
+				&paintRegion);
 		}
 	}
 	if (_dragging.index >= 0 && _dragging.index < _elements.size()) {
@@ -2067,7 +2094,14 @@ void StickerSetBox::Inner::paintEvent(QPaintEvent *e) {
 			: (style::rtlpoint(
 				mapFromGlobal(QCursor::pos()),
 				width()) - _dragging.point);
-		paintSticker(p, _dragging.index, pos, width(), paused, now);
+		paintSticker(
+			p,
+			_dragging.index,
+			pos,
+			width(),
+			paused,
+			now,
+			&paintRegion);
 	}
 
 	if (hasAddCell()) {
@@ -2303,7 +2337,8 @@ void StickerSetBox::Inner::paintSticker(
 		QPoint position,
 		int outerWidth,
 		bool paused,
-		crl::time now) const {
+		crl::time now,
+		const QRegion *pathGradientPaintRegion) const {
 	if (_dragging.index != index) {
 		const auto over = _elements[index].overAnimation.value(
 			(index == _selected) ? 1. : 0.);
@@ -2409,11 +2444,36 @@ void StickerSetBox::Inner::paintSticker(
 				QImage::Format_ARGB32_Premultiplied);
 		}
 	} else {
-		ChatHelpers::PaintStickerThumbnailPath(
+		const auto painted = ChatHelpers::PaintStickerThumbnailPath(
 			p,
 			media.get(),
 			target,
 			_pathGradient.get());
+		if (painted
+			&& pathGradientPaintRegion
+			&& p.device() == this) {
+				const auto transformed = p.transform().mapRect(
+					QRectF(target)).toAlignedRect().intersected(rect());
+				if (!transformed.isEmpty()
+					&& pathGradientPaintRegion->intersects(transformed)) {
+					_pathGradientRepaintBounds
+						= _pathGradientRepaintBounds.isEmpty()
+						? transformed
+						: _pathGradientRepaintBounds.united(transformed);
+					if (_pathGradientRepaintBounding) {
+						_pathGradientRepaintRegion = QRegion(
+							_pathGradientRepaintBounds);
+					} else {
+						_pathGradientRepaintRegion += transformed;
+						if (_pathGradientRepaintRegion.rectCount()
+								> kMaxPathGradientRepaintRects) {
+							_pathGradientRepaintRegion = QRegion(
+								_pathGradientRepaintBounds);
+							_pathGradientRepaintBounding = true;
+						}
+					}
+				}
+		}
 	}
 	if (premium) {
 		_premiumMark.paint(
@@ -2614,6 +2674,21 @@ void StickerSetBox::Inner::repaintItems(crl::time now) {
 	_repaintIndices.clear();
 	_lastUpdatedAt = now ? now : crl::now();
 	update();
+}
+
+void StickerSetBox::Inner::repaintPathGradient() {
+	const auto region = base::take(_pathGradientRepaintRegion);
+	_pathGradientRepaintBounds = QRect();
+	_pathGradientRepaintBounding = false;
+	if (!_elements.empty() && !region.isEmpty()) {
+		update(region);
+	}
+}
+
+void StickerSetBox::Inner::invalidatePathGradientRepaint() {
+	_pathGradientRepaintRegion = QRegion();
+	_pathGradientRepaintBounds = QRect();
+	_pathGradientRepaintBounding = false;
 }
 
 bool StickerSetBox::Inner::itemVisible(int index) const {
