@@ -37,6 +37,7 @@ struct TopicJumpCache;
 namespace Dialogs {
 
 class Entry;
+class InnerWidget;
 enum class SortMode;
 
 [[nodiscard]] QRect CornerBadgeTTLRect(int photoSize);
@@ -226,7 +227,8 @@ public:
 	FakeRow(
 		Key searchInChat,
 		not_null<HistoryItem*> item,
-		Fn<void()> repaint);
+		Fn<void(not_null<const FakeRow*>)> repaint,
+		Fn<void(not_null<const FakeRow*>)> repaintAnimation);
 
 	[[nodiscard]] Key searchInChat() const {
 		return _searchInChat;
@@ -240,9 +242,8 @@ public:
 	[[nodiscard]] Ui::MessageView &itemView() const {
 		return _itemView;
 	}
-	[[nodiscard]] Fn<void()> repaint() const {
-		return _repaint;
-	}
+	[[nodiscard]] Fn<void()> repaint() const;
+	[[nodiscard]] Fn<void()> repaintAnimation() const;
 	[[nodiscard]] Ui::PeerBadge &badge() const {
 		return _badge;
 	}
@@ -254,16 +255,22 @@ public:
 	void invalidateTopic();
 
 private:
+	friend class InnerWidget;
 	friend class Ui::RowPainter;
 
 	const Key _searchInChat;
 	const not_null<HistoryItem*> _item;
 	Data::ForumTopic *_topic = nullptr;
-	const Fn<void()> _repaint;
+	const Fn<void(not_null<const FakeRow*>)> _repaint;
+	const Fn<void(not_null<const FakeRow*>)> _repaintAnimation;
 	mutable Ui::MessageView _itemView;
 	mutable Ui::PeerBadge _badge;
 	mutable Ui::Text::String _name;
 	mutable DateTextCache _dateCache;
+	mutable QRegion _paintedAnimation;
+	mutable uint64 _paintedAnimationGeneration = 0;
+	mutable uint32 _paintedAnimationValid : 1 = 0;
+	mutable uint32 _messagePreviewPainted : 1 = 0;
 
 };
 

@@ -35,6 +35,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_options.h"
 #include "ui/dynamic_thumbnails.h"
 #include "ui/vertical_list.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/screen_reader_mode.h"
@@ -114,6 +115,47 @@ constexpr auto kPreviewPostsLimit = 3;
 
 [[nodiscard]] uint64 RowsCacheKey(const Row *row) {
 	return uint64(reinterpret_cast<quintptr>(row));
+}
+
+struct AnimationRegionTracking {
+	QRegion stored;
+	QRegion repaint;
+};
+
+[[nodiscard]] QRegion MapAnimationRegion(
+		const QRegion &region,
+		const QTransform &transform,
+		QRect bounds) {
+	auto result = QRegion();
+	for (const auto &rect : region) {
+		result += Ui::DamageRect(QRectF(rect), transform);
+	}
+	return result.intersected(bounds);
+}
+
+[[nodiscard]] AnimationRegionTracking TrackAnimationRegion(
+		const QRegion &previous,
+		QRegion current,
+		const QTransform &transform,
+		const QRegion &repaintRegion,
+		QRect bounds) {
+	const auto combined = previous.united(current);
+	const auto mapped = MapAnimationRegion(combined, transform, bounds);
+	const auto uncovered = mapped.subtracted(repaintRegion);
+	return {
+		.stored = uncovered.isEmpty() ? std::move(current) : combined,
+		.repaint = uncovered.isEmpty() ? QRegion() : mapped,
+	};
+}
+
+[[nodiscard]] int FindFakeRowIndex(
+		const std::vector<std::unique_ptr<FakeRow>> &rows,
+		not_null<const FakeRow*> row) {
+	const auto i = ranges::find(
+		rows,
+		row.get(),
+		[](const auto &entry) { return entry.get(); });
+	return (i == end(rows)) ? -1 : int(i - begin(rows));
 }
 
 [[nodiscard]] InnerWidget::ChatsFilterTagsKey SerializeFilterTagsKey(
@@ -278,6 +320,8 @@ struct InnerWidget::PeerSearchResult {
 	mutable Ui::Text::String name;
 	mutable Ui::PeerBadge badge;
 	BasicRow row;
+	mutable QRegion paintedBadgeAnimation;
+	mutable uint32 paintedBadgeAnimationValid : 1 = 0;
 };
 
 struct InnerWidget::TagCache {
@@ -1531,18 +1575,26 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 							st::dialogsSponsoredButton);
 					}
 
-					paintPeerSearchResult(p, result.get(), {
-						.rightButton = (result->sponsored
-							? &result->sponsored->button
-							: nullptr),
-						.st = &st::defaultDialogRow,
-						.currentBg = currentBg(),
-						.now = ms,
-						.width = fullWidth,
-						.active = active,
-						.selected = selected,
-						.paused = videoPaused,
-					});
+					const auto painted = paintPeerSearchResult(
+						p,
+						result.get(),
+						{
+							.rightButton = (result->sponsored
+								? &result->sponsored->button
+								: nullptr),
+							.st = &st::defaultDialogRow,
+							.currentBg = currentBg(),
+							.now = ms,
+							.width = fullWidth,
+							.active = active,
+							.selected = selected,
+							.paused = videoPaused,
+						});
+					trackPaintedPeerSearchResult(
+						p,
+						result.get(),
+						painted,
+						repaintRegion);
 					p.translate(0, st::dialogsRowHeight);
 				}
 				if (to < _peerSearchResults.size()) {
@@ -1603,22 +1655,30 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 						: (from == (isPressed()
 							? _previewPressed
 							: _previewSelected));
-					Ui::RowPainter::Paint(p, result.get(), {
-						.st = _st,
-						.folder = _openedFolder,
-						.forum = _openedForum,
-						.currentBg = currentBg(),
-						.filter = _filterId,
-						.now = ms,
-						.searchLowerText = QStringView(searchLowerText),
-						.width = fullWidth,
-						.active = active,
-						.selected = selected,
-						.paused = videoPaused,
-						.search = true,
-						.narrow = (fullWidth < st::columnMinimalWidthLeft / 2),
-						.displayUnreadInfo = showUnreadInSearchResults,
-					});
+					const auto painted = Ui::RowPainter::Paint(
+						p,
+						result.get(),
+						{
+							.st = _st,
+							.folder = _openedFolder,
+							.forum = _openedForum,
+							.currentBg = currentBg(),
+							.filter = _filterId,
+							.now = ms,
+							.searchLowerText = QStringView(searchLowerText),
+							.width = fullWidth,
+							.active = active,
+							.selected = selected,
+							.paused = videoPaused,
+							.search = true,
+							.narrow = (fullWidth < st::columnMinimalWidthLeft / 2),
+							.displayUnreadInfo = showUnreadInSearchResults,
+						});
+					trackPaintedFakeRow(
+						p,
+						result.get(),
+						painted,
+						repaintRegion);
 					p.translate(0, _st->height);
 				}
 			}
@@ -1684,22 +1744,30 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 						: (from == (isPressed()
 							? _searchedPressed
 							: _searchedSelected));
-					Ui::RowPainter::Paint(p, result.get(), {
-						.st = _st,
-						.folder = _openedFolder,
-						.forum = _openedForum,
-						.currentBg = currentBg(),
-						.filter = _filterId,
-						.now = ms,
-						.searchLowerText = QStringView(searchLowerText),
-						.width = fullWidth,
-						.active = active,
-						.selected = selected,
-						.paused = videoPaused,
-						.search = true,
-						.narrow = (fullWidth < st::columnMinimalWidthLeft / 2),
-						.displayUnreadInfo = showUnreadInSearchResults,
-					});
+					const auto painted = Ui::RowPainter::Paint(
+						p,
+						result.get(),
+						{
+							.st = _st,
+							.folder = _openedFolder,
+							.forum = _openedForum,
+							.currentBg = currentBg(),
+							.filter = _filterId,
+							.now = ms,
+							.searchLowerText = QStringView(searchLowerText),
+							.width = fullWidth,
+							.active = active,
+							.selected = selected,
+							.paused = videoPaused,
+							.search = true,
+							.narrow = (fullWidth < st::columnMinimalWidthLeft / 2),
+							.displayUnreadInfo = showUnreadInSearchResults,
+						});
+					trackPaintedFakeRow(
+						p,
+						result.get(),
+						painted,
+						repaintRegion);
 					p.translate(0, _st->height);
 				}
 			}
@@ -1881,7 +1949,7 @@ bool InnerWidget::isSearchResultActive(
 		|| (uniqueSearchResults() && peer == entry.key.peer());
 }
 
-void InnerWidget::paintPeerSearchResult(
+QRegion InnerWidget::paintPeerSearchResult(
 		Painter &p,
 		not_null<const PeerSearchResult*> result,
 		const Ui::PaintContext &context) {
@@ -1930,7 +1998,7 @@ void InnerWidget::paintPeerSearchResult(
 				info,
 				peer->owner().customEmojiManager().factory(
 					Data::CustomEmojiSizeTag::Isolated),
-				[=] { updateSearchResult(peer); });
+				[=] { repaintPeerSearchResultAnimation(peer); });
 		}
 		const auto &st = Ui::VerifiedStyle(context);
 		const auto position = rectForName.topLeft();
@@ -1971,7 +2039,9 @@ void InnerWidget::paintPeerSearchResult(
 			: context.selected
 			? &st::dialogsVerifiedIconBgOver
 			: &st::dialogsVerifiedIconBg),
-		.customEmojiRepaint = [=] { updateSearchResult(peer); },
+		.customEmojiRepaint = [=] {
+			repaintPeerSearchResultAnimation(peer);
+		},
 		.now = context.now,
 		.prioritizeVerification = true,
 		.paused = context.paused,
@@ -2001,6 +2071,48 @@ void InnerWidget::paintPeerSearchResult(
 
 	p.setPen(context.active ? st::dialogsTextFgActive : st::dialogsNameFg);
 	result->name.drawElided(p, rectForName.left(), rectForName.top(), rectForName.width());
+
+	return QRegion(result->badge.botVerifiedRect())
+		.united(result->badge.emojiStatusRect());
+}
+
+void InnerWidget::trackPaintedPeerSearchResult(
+		Painter &p,
+		not_null<const PeerSearchResult*> result,
+		QRegion painted,
+		const QRegion &repaintRegion) {
+	const auto tracked = TrackAnimationRegion(
+		result->paintedBadgeAnimationValid
+			? result->paintedBadgeAnimation
+			: QRegion(),
+		std::move(painted),
+		p.transform(),
+		repaintRegion,
+		rect());
+	result->paintedBadgeAnimation = tracked.stored;
+	result->paintedBadgeAnimationValid = true;
+	if (!tracked.repaint.isEmpty()) {
+		update(tracked.repaint);
+	}
+}
+
+void InnerWidget::repaintPeerSearchResultAnimation(
+		not_null<PeerData*> peer) {
+	const auto i = ranges::find(
+		_peerSearchResults,
+		peer,
+		[](const auto &entry) { return entry->peer; });
+	if (i == end(_peerSearchResults)) {
+		return;
+	}
+	const auto result = i->get();
+	const auto index = int(i - begin(_peerSearchResults));
+	const auto top = peerSearchOffset() + index * st::dialogsRowHeight;
+	if (!result->paintedBadgeAnimationValid) {
+		update(0, top, width(), st::dialogsRowHeight);
+	} else {
+		update(result->paintedBadgeAnimation.translated(0, top));
+	}
 }
 
 QBrush InnerWidget::currentBg() const {
@@ -4900,12 +5012,16 @@ void InnerWidget::searchReceived(
 			|| inject->history() == _searchState.inChat.history())) {
 		Assert(_searchResults.empty());
 		Assert(!toPreview);
-		const auto index = int(_searchResults.size());
 		_searchResults.push_back(
 			std::make_unique<FakeRow>(
 				key,
 				inject,
-				[=] { repaintSearchResult(index); }));
+				[=](not_null<const FakeRow*> result) {
+					repaintSearchResult(result);
+				},
+				[=](not_null<const FakeRow*> result) {
+					repaintSearchResultAnimation(result);
+				}));
 		trackResultsHistory(inject->history());
 		++fullCount;
 	}
@@ -4913,12 +5029,28 @@ void InnerWidget::searchReceived(
 	for (const auto &item : messages) {
 		const auto history = item->history();
 		if (toPreview || !uniquePeers || !hasHistoryInResults(history)) {
-			const auto index = int(results.size());
 			const auto repaint = toPreview
-				? Fn<void()>([=] { repaintSearchResult(index); })
-				: [=] { repaintPreviewResult(index); };
+				? Fn<void(not_null<const FakeRow*>)>(
+					[=](not_null<const FakeRow*> result) {
+						repaintPreviewResult(result);
+					})
+				: [=](not_null<const FakeRow*> result) {
+					repaintSearchResult(result);
+				};
+			const auto repaintAnimation = toPreview
+				? Fn<void(not_null<const FakeRow*>)>(
+					[=](not_null<const FakeRow*> result) {
+						repaintPreviewResultAnimation(result);
+					})
+				: [=](not_null<const FakeRow*> result) {
+					repaintSearchResultAnimation(result);
+				};
 			results.push_back(
-				std::make_unique<FakeRow>(key, item, repaint));
+				std::make_unique<FakeRow>(
+					key,
+					item,
+					std::move(repaint),
+					std::move(repaintAnimation)));
 			trackResultsHistory(history);
 			if (!toPreview && uniquePeers && !history->unreadCountKnown()) {
 				history->owner().histories().requestDialogEntry(history);
@@ -5430,20 +5562,93 @@ void InnerWidget::updateSearchIn() {
 	}, _searchState.tab, peerTabType, fromImage, fromName);
 }
 
-void InnerWidget::repaintSearchResult(int index) {
-	rtlupdate(
-		0,
-		searchedOffset() + index * _st->height,
-		width(),
-		_st->height);
+void InnerWidget::repaintSearchResult(
+		not_null<const FakeRow*> result) {
+	const auto index = FindFakeRowIndex(_searchResults, result);
+	if (index >= 0) {
+		update(
+			0,
+			searchedOffset() + index * _st->height,
+			width(),
+			_st->height);
+	}
 }
 
-void InnerWidget::repaintPreviewResult(int index) {
-	rtlupdate(
-		0,
-		previewOffset() + index * _st->height,
-		width(),
-		_st->height);
+void InnerWidget::repaintPreviewResult(
+		not_null<const FakeRow*> result) {
+	const auto index = FindFakeRowIndex(_previewResults, result);
+	if (index >= 0) {
+		update(
+			0,
+			previewOffset() + index * _st->height,
+			width(),
+			_st->height);
+	}
+}
+
+void InnerWidget::repaintSearchResultAnimation(
+		not_null<const FakeRow*> result) {
+	const auto index = FindFakeRowIndex(_searchResults, result);
+	if (index >= 0) {
+		repaintFakeRowAnimation(
+			result,
+			searchedOffset() + index * _st->height);
+	}
+}
+
+void InnerWidget::repaintPreviewResultAnimation(
+		not_null<const FakeRow*> result) {
+	const auto index = FindFakeRowIndex(_previewResults, result);
+	if (index >= 0) {
+		repaintFakeRowAnimation(
+			result,
+			previewOffset() + index * _st->height);
+	}
+}
+
+void InnerWidget::repaintFakeRowAnimation(
+		not_null<const FakeRow*> result,
+		int top) {
+	const auto generation = result->itemView().animationGeneration();
+	if (result->_paintedAnimationValid
+		&& result->_paintedAnimationGeneration == generation) {
+		return;
+	} else if (!result->_paintedAnimationValid) {
+		update(0, top, width(), _st->height);
+		return;
+	}
+	if (result->_messagePreviewPainted
+		&& !result->itemView().prepared(
+			result->item(),
+			nullptr,
+			nullptr)) {
+		update(0, top, width(), _st->height);
+		return;
+	}
+	result->_paintedAnimationGeneration = generation;
+	update(result->_paintedAnimation.translated(0, top));
+}
+
+void InnerWidget::trackPaintedFakeRow(
+		Painter &p,
+		not_null<const FakeRow*> result,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion) {
+	const auto tracked = TrackAnimationRegion(
+		result->_paintedAnimationValid
+			? result->_paintedAnimation
+			: QRegion(),
+		painted.animated,
+		p.transform(),
+		repaintRegion,
+		rect());
+	result->_paintedAnimation = tracked.stored;
+	result->_paintedAnimationGeneration = painted.animationGeneration;
+	result->_paintedAnimationValid = true;
+	result->_messagePreviewPainted = painted.messagePreviewPainted;
+	if (!tracked.repaint.isEmpty()) {
+		update(tracked.repaint);
+	}
 }
 
 bool InnerWidget::computeSearchWithPostsPreview() const {

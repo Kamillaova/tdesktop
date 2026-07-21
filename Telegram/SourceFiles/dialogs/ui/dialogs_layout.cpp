@@ -1383,7 +1383,7 @@ RowPaintResult RowPainter::Paint(
 	auto &animationView = row->itemView();
 	const auto animationGeneration = animationView.animationGeneration();
 	const auto customEmojiRepaint = animationView.trackAnimationRepaint(
-		row->repaint());
+		row->repaintAnimation());
 	const auto topic = context.forum ? row->topic() : nullptr;
 	const auto history = topic ? nullptr : item->history().get();
 	const auto entry = topic ? (Entry*)topic : (Entry*)history;

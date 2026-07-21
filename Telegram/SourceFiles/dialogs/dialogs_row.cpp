@@ -858,11 +858,29 @@ bool Row::topicJumpRipple() const {
 FakeRow::FakeRow(
 	Key searchInChat,
 	not_null<HistoryItem*> item,
-	Fn<void()> repaint)
+	Fn<void(not_null<const FakeRow*>)> repaint,
+	Fn<void(not_null<const FakeRow*>)> repaintAnimation)
 : _searchInChat(searchInChat)
 , _item(item)
-, _repaint(std::move(repaint)) {
+, _repaint(std::move(repaint))
+, _repaintAnimation(std::move(repaintAnimation)) {
 	invalidateTopic();
+}
+
+Fn<void()> FakeRow::repaint() const {
+	return crl::guard(this, [this] {
+		if (_repaint) {
+			_repaint(this);
+		}
+	});
+}
+
+Fn<void()> FakeRow::repaintAnimation() const {
+	return crl::guard(this, [this] {
+		if (_repaintAnimation) {
+			_repaintAnimation(this);
+		}
+	});
 }
 
 void FakeRow::invalidateTopic() {
@@ -874,8 +892,8 @@ void FakeRow::invalidateTopic() {
 			if (!forum->topicDeleted(rootId)) {
 				forum->requestTopic(rootId, crl::guard(this, [=] {
 					_topic = _item->topic();
-					if (_topic) {
-						_repaint();
+					if (_topic && _repaint) {
+						_repaint(this);
 					}
 				}));
 			}

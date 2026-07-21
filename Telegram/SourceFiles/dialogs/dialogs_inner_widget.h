@@ -525,10 +525,17 @@ private:
 		Painter &p,
 		not_null<const CollapsedRow*> row,
 		bool selected) const;
-	void paintPeerSearchResult(
+	[[nodiscard]] QRegion paintPeerSearchResult(
 		Painter &p,
 		not_null<const PeerSearchResult*> result,
 		const Ui::PaintContext &context);
+	void trackPaintedPeerSearchResult(
+		Painter &p,
+		not_null<const PeerSearchResult*> result,
+		QRegion painted,
+		const QRegion &repaintRegion);
+	void repaintPeerSearchResultAnimation(
+		not_null<PeerData*> peer);
 	void paintSearchTags(
 		Painter &p,
 		const Ui::PaintContext &context) const;
@@ -566,8 +573,18 @@ private:
 	[[nodiscard]] bool archiveSearchActive() const;
 	[[nodiscard]] bool communitySearchActive() const;
 	void updateSearchIn();
-	void repaintSearchResult(int index);
-	void repaintPreviewResult(int index);
+	void repaintSearchResult(not_null<const FakeRow*> result);
+	void repaintPreviewResult(not_null<const FakeRow*> result);
+	void repaintSearchResultAnimation(not_null<const FakeRow*> result);
+	void repaintPreviewResultAnimation(not_null<const FakeRow*> result);
+	void repaintFakeRowAnimation(
+		not_null<const FakeRow*> result,
+		int top);
+	void trackPaintedFakeRow(
+		Painter &p,
+		not_null<const FakeRow*> result,
+		const Ui::RowPaintResult &painted,
+		const QRegion &repaintRegion);
 
 	[[nodiscard]] bool computeSearchWithPostsPreview() const;
 
