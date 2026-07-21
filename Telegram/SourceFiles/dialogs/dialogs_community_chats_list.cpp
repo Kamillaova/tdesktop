@@ -221,7 +221,8 @@ void CommunityChatsList::paintEvent(QPaintEvent *e) {
 std::optional<QRegion> CommunityChatsList::paintedAnimationDamage(
 		not_null<Row*> row) {
 	const auto i = _paintedRows.find(row.get());
-	if (i == end(_paintedRows)) {
+	if (i == end(_paintedRows)
+		|| i->second.entry != row->entry().get()) {
 		return std::nullopt;
 	}
 	const auto thread = row->thread();
@@ -270,32 +271,49 @@ void CommunityChatsList::trackPaintedRow(
 		}
 		return result.intersected(this->rect());
 	};
-	const auto current = mapRegion(painted.animated);
 	const auto i = _paintedRows.find(row.get());
-	if (i == end(_paintedRows)) {
-		if (!current.subtracted(repaintRegion).isEmpty()) {
+	if (i == end(_paintedRows)
+		|| i->second.entry != row->entry().get()) {
+		const auto previous = (i == end(_paintedRows))
+			? QRegion()
+			: i->second.animation;
+		const auto combined = previous.united(painted.animated);
+		const auto uncovered = mapRegion(combined).subtracted(repaintRegion);
+		const auto next = uncovered.isEmpty()
+			? painted.animated
+			: combined;
+		if (next.isEmpty()) {
+			if (i != end(_paintedRows)) {
+				_paintedRows.erase(i);
+			}
 			return;
 		}
-		_paintedRows.emplace(row.get(), PaintedRow{
-			.animation = painted.animated,
+		_paintedRows[row.get()] = PaintedRow{
+			.entry = row->entry().get(),
+			.animation = next,
 			.animationGeneration = painted.animationGeneration,
 			.messagePreviewPainted = painted.messagePreviewPainted,
-		});
+		};
+		if (!uncovered.isEmpty()) {
+			update(mapRegion(combined));
+		}
 		return;
 	}
 	const auto previous = i->second.animation;
-	const auto covered = previous.isEmpty()
-		? current
-		: mapRegion(previous);
-	if (!covered.subtracted(repaintRegion).isEmpty()) {
+	const auto combined = previous.united(painted.animated);
+	const auto uncovered = mapRegion(combined).subtracted(repaintRegion);
+	if (!uncovered.isEmpty()) {
+		i->second.animation = combined;
+		i->second.animationGeneration = painted.animationGeneration;
+		i->second.messagePreviewPainted = painted.messagePreviewPainted;
+		update(mapRegion(combined));
 		return;
 	}
 	i->second.animation = painted.animated;
 	i->second.animationGeneration = painted.animationGeneration;
 	i->second.messagePreviewPainted = painted.messagePreviewPainted;
-	const auto added = painted.animated.subtracted(previous);
-	for (const auto &rect : added) {
-		update(transform.mapRect(rect));
+	if (i->second.animation.isEmpty()) {
+		_paintedRows.erase(i);
 	}
 }
 

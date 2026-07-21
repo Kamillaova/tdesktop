@@ -196,10 +196,11 @@ int TopicsView::jumpToTopicWidth() const {
 	return _jumpToTopic ? _titles.front().title.maxWidth() : 0;
 }
 
-void TopicsView::paint(
+QRegion TopicsView::paint(
 		Painter &p,
 		const QRect &geometry,
 		const PaintContext &context) const {
+	auto animated = QRegion();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
@@ -222,12 +223,14 @@ void TopicsView::paint(
 			rect.x(),
 			rect.y() + st::normalFont->ascent,
 			text);
-		return;
+		return animated;
 	}
 	for (const auto &title : _titles) {
 		if (rect.width() < title.title.style()->font->elidew) {
 			break;
 		}
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		title.title.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -237,13 +240,22 @@ void TopicsView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		animated += TextAnimationRegion(
+			title.title,
+			QRect(
+				rect.topLeft(),
+				QSize(rect.width(), context.st->topicsHeight)),
+			customEmojiPaintedBounds,
+			QRect(0, 0, context.width, context.st->height));
 		const auto skip = skipBig
 			? context.st->topicsSkipBig
 			: context.st->topicsSkip;
 		rect.setLeft(rect.left() + title.title.maxWidth() + skip);
 		skipBig = false;
 	}
+	return animated;
 }
 
 bool TopicsView::changeTopicJumpGeometry(JumpToLastGeometry geometry) {

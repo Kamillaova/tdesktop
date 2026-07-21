@@ -118,27 +118,6 @@ TextWithEntities DialogsPreviewText(TextWithEntities text) {
 	return result;
 }
 
-QRect TextAnimationRect(const Text::String &text, QRect geometry) {
-	if (geometry.isEmpty()
-		|| (!text.hasCustomEmoji() && !text.hasSpoilers())) {
-		return QRect();
-	}
-	geometry.setWidth(std::min(geometry.width(), text.maxWidth()));
-	if (geometry.width() <= 0 || !text.hasCustomEmoji()) {
-		return geometry;
-	}
-	const auto add = st::lineWidth - Ui::Emoji::GetCustomSkipNormal();
-	return QRect(
-		geometry.x() - add,
-		geometry.y() - add,
-		geometry.width() + add + add,
-		std::max(
-			geometry.height() + add + add,
-			st::lineWidth
-				+ Ui::Emoji::GetCustomSizeNormal()
-				+ st::lineWidth));
-}
-
 struct MessageView::LoadingContext {
 	std::any context;
 	rpl::lifetime lifetime;
@@ -471,20 +450,7 @@ QRegion MessageView::paint(
 	}
 
 	if (withTopic) {
-		if (_topics->hasAnimatedContent()) {
-			const auto add = st::lineWidth
-				- Ui::Emoji::GetCustomSkipNormal();
-			animated += QRect(
-				rect.x() - add,
-				rect.y() - add,
-				rect.width() + add + add,
-				std::max(
-					context.st->topicsHeight + add + add,
-					st::lineWidth
-						+ Ui::Emoji::GetCustomSizeNormal()
-						+ st::lineWidth));
-		}
-		_topics->paint(p, rect, context);
+		animated += _topics->paint(p, rect, context);
 		rect.setTop(rect.top() + context.st->topicsHeight);
 	}
 
@@ -496,7 +462,8 @@ QRegion MessageView::paint(
 	const auto pausedSpoiler = context.paused
 		|| On(PowerSaving::kChatSpoiler);
 	if (!_senderCache.isEmpty()) {
-		animated += TextAnimationRect(_senderCache, rect);
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		_senderCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -506,7 +473,13 @@ QRegion MessageView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = pausedSpoiler,
 			.elisionHeight = rect.height(),
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		animated += TextAnimationRegion(
+			_senderCache,
+			rect,
+			customEmojiPaintedBounds,
+			QRect(0, 0, context.width, context.st->height));
 		rect.setLeft(rect.x() + _senderCache.maxWidth());
 		if (!_imagesCache.empty() && !_leftIcon) {
 			const auto skip = st::dialogsMiniPreviewSkip
@@ -577,7 +550,8 @@ QRegion MessageView::paint(
 	static const auto ellipsisWidth = st::dialogsTextStyle.font->width(
 		kQEllipsis);
 	if (rect.width() > ellipsisWidth) {
-		animated += TextAnimationRect(_textCache, rect);
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		_textCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -587,7 +561,13 @@ QRegion MessageView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = pausedSpoiler,
 			.elisionHeight = rect.height(),
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		animated += TextAnimationRegion(
+			_textCache,
+			rect,
+			customEmojiPaintedBounds,
+			QRect(0, 0, context.width, context.st->height));
 		rect.setLeft(rect.x() + _textCache.maxWidth());
 	}
 	if (jump1) {

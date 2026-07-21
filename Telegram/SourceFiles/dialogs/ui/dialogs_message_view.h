@@ -44,9 +44,6 @@ struct TopicJumpCache;
 class TopicsView;
 
 [[nodiscard]] TextWithEntities DialogsPreviewText(TextWithEntities text);
-[[nodiscard]] QRect TextAnimationRect(
-	const Text::String &text,
-	QRect geometry);
 
 class MessageView final {
 public:

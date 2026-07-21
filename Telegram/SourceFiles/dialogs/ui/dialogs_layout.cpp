@@ -342,22 +342,24 @@ int PaintWideCounter(
 	return availableWidth - used;
 }
 
-void PaintFolderEntryText(
+[[nodiscard]] QRegion PaintFolderEntryText(
 		Painter &p,
 		not_null<Data::Folder*> folder,
 		const PaintContext &context,
 		QRect rect) {
 	if (rect.isEmpty()) {
-		return;
+		return QRegion();
 	}
 	folder->validateListEntryCache();
+	const auto &text = folder->listEntryCache();
+	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
 		: context.selected
 		? st::dialogsTextFgOver
 		: st::dialogsTextFg);
-	folder->listEntryCache().draw(p, {
+	text.draw(p, {
 		.position = rect.topLeft(),
 		.availableWidth = rect.width(),
 		.palette = &(context.active
@@ -370,7 +372,13 @@ void PaintFolderEntryText(
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.elisionHeight = rect.height(),
+		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 	});
+	return TextAnimationRegion(
+		text,
+		rect,
+		customEmojiPaintedBounds,
+		QRect(0, 0, context.width, context.st->height));
 }
 
 [[nodiscard]] Data::CommunityInfo *CommunityListInfo(History *history) {
@@ -381,22 +389,24 @@ void PaintFolderEntryText(
 	return (info && !info->lastHistories().empty()) ? info : nullptr;
 }
 
-void PaintCommunityEntryText(
+[[nodiscard]] QRegion PaintCommunityEntryText(
 		Painter &p,
 		not_null<Data::CommunityInfo*> info,
 		const PaintContext &context,
 		QRect rect) {
 	if (rect.isEmpty()) {
-		return;
+		return QRegion();
 	}
 	info->validateListEntryCache();
+	const auto &text = info->listEntryCache();
+	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
 		: context.selected
 		? st::dialogsTextFgOver
 		: st::dialogsTextFg);
-	info->listEntryCache().draw(p, {
+	text.draw(p, {
 		.position = rect.topLeft(),
 		.availableWidth = rect.width(),
 		.palette = &(context.active
@@ -409,7 +419,13 @@ void PaintCommunityEntryText(
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.elisionHeight = rect.height(),
+		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 	});
+	return TextAnimationRegion(
+		text,
+		rect,
+		customEmojiPaintedBounds,
+		QRect(0, 0, context.width, context.st->height));
 }
 
 enum class Flag {
@@ -623,7 +639,7 @@ void PaintRow(
 			texttop,
 			availableWidth,
 			st::dialogsTextFont->height);
-		PaintFolderEntryText(p, folder, context, rect);
+		result.animated += PaintFolderEntryText(p, folder, context, rect);
 	} else if (const auto info = CommunityListInfo(history)) {
 		// Unlike the Archive folder (fixed on top), a collapsed community is
 		// a movable pinned entry, so it shows the pinned icon when pinned and
@@ -642,22 +658,25 @@ void PaintRow(
 			texttop,
 			availableWidth,
 			st::dialogsTextFont->height);
-		PaintCommunityEntryText(p, info, context, rect);
+		result.animated += PaintCommunityEntryText(p, info, context, rect);
 	} else if (promoted && !history->topPromotionMessage().isEmpty()) {
 		auto availableWidth = namewidth;
 		p.setFont(st::dialogsTextFont);
-		if (history->cloudDraftTextCache().isEmpty()) {
-			history->cloudDraftTextCache().setText(
+		auto &cache = history->cloudDraftTextCache();
+		if (cache.isEmpty()) {
+			cache.setText(
 				st::dialogsTextStyle,
 				history->topPromotionMessage(),
 				DialogTextOptions());
 		}
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		p.setPen(context.active
 			? st::dialogsTextFgActive
 			: context.selected
 			? st::dialogsTextFgOver
 			: st::dialogsTextFg);
-		history->cloudDraftTextCache().draw(p, {
+		cache.draw(p, {
 			.position = { nameleft, texttop },
 			.availableWidth = availableWidth,
 			.spoiler = Text::DefaultSpoilerCache(),
@@ -665,7 +684,17 @@ void PaintRow(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		result.animated += TextAnimationRegion(
+			cache,
+			QRect(
+				nameleft,
+				texttop,
+				availableWidth,
+				st::dialogsTextFont->height),
+			customEmojiPaintedBounds,
+			geometry);
 	} else if (draft
 		|| (supportMode
 			&& entry->session().supportHelper().isOccupiedBySomeone(history))) {
@@ -749,6 +778,8 @@ void PaintRow(
 				: context.selected
 				? st::dialogsTextFgOver
 				: st::dialogsTextFg);
+			auto customEmojiPaintedBounds
+				= Text::CustomEmojiPaintedBounds();
 			cache.draw(p, {
 				.position = { nameleft, texttop },
 				.availableWidth = availableWidth,
@@ -768,14 +799,17 @@ void PaintRow(
 				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 				.elisionLines = 1,
+				.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 			});
-			result.animated += TextAnimationRect(
+			result.animated += TextAnimationRegion(
 				cache,
 				QRect(
 					nameleft,
 					texttop,
 					availableWidth,
-					st::dialogsTextFont->height));
+					st::dialogsTextFont->height),
+				customEmojiPaintedBounds,
+				geometry);
 		}
 	} else if (!item) {
 		auto availableWidth = namewidth;
@@ -970,11 +1004,19 @@ void PaintRow(
 			: context.selected
 			? st::dialogsNameFgOver
 			: st::dialogsNameFg);
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		rowName.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		result.animated += TextAnimationRegion(
+			rowName,
+			rectForName,
+			customEmojiPaintedBounds,
+			geometry);
 		if (drawMuteIcon) {
 			const auto &muteIcon = ThreeStateIcon(
 				st::dialogsMuteIcon,
@@ -997,11 +1039,20 @@ void PaintRow(
 			: context.selected
 			? st::dialogsNameFgOver
 			: st::dialogsNameFg);
-		hiddenSenderInfo->nameText().draw(p, {
+		const auto &name = hiddenSenderInfo->nameText();
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
+		name.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		result.animated += TextAnimationRegion(
+			name,
+			rectForName,
+			customEmojiPaintedBounds,
+			geometry);
 	} else {
 		p.setPen(context.active
 			? st::dialogsNameFgActive
@@ -1012,11 +1063,19 @@ void PaintRow(
 			: (context.selected
 				? st::dialogsNameFgOver
 				: st::dialogsNameFg));
+		auto customEmojiPaintedBounds
+			= Text::CustomEmojiPaintedBounds();
 		rowName.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
+			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
 		});
+		result.animated += TextAnimationRegion(
+			rowName,
+			rectForName,
+			customEmojiPaintedBounds,
+			geometry);
 	}
 
 	if (const auto tags = context.chatsFilterTags) {
@@ -1129,6 +1188,28 @@ const style::VerifiedBadge &VerifiedStyle(const PaintContext &context) {
 		: context.selected
 		? st::dialogsVerifiedColorsOver
 		: st::dialogsVerifiedColors;
+}
+
+QRegion TextAnimationRegion(
+		const Text::String &text,
+		QRect spoilerGeometry,
+		const Text::CustomEmojiPaintedBounds &customEmojiPaintedBounds,
+		QRect customEmojiFallback) {
+	auto result = QRegion();
+	if (text.hasCustomEmoji()) {
+		result += customEmojiPaintedBounds.repaintRectKnown()
+			? customEmojiPaintedBounds.repaintRect().toAlignedRect()
+			: customEmojiFallback;
+	}
+	if (text.hasSpoilers() && !spoilerGeometry.isEmpty()) {
+		spoilerGeometry.setWidth(std::min(
+			spoilerGeometry.width(),
+			text.maxWidth()));
+		if (spoilerGeometry.width() > 0) {
+			result += spoilerGeometry;
+		}
+	}
+	return result;
 }
 
 RowPaintResult RowPainter::Paint(

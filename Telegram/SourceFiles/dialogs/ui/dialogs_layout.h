@@ -28,6 +28,11 @@ class Thread;
 class CommunityInfo;
 } // namespace Data
 
+namespace Ui::Text {
+class String;
+struct CustomEmojiPaintedBounds;
+} // namespace Ui::Text
+
 namespace Dialogs {
 class Row;
 class FakeRow;
@@ -86,6 +91,12 @@ struct RowPaintResult {
 	uint64 animationGeneration = 0;
 	bool messagePreviewPainted = false;
 };
+
+[[nodiscard]] QRegion TextAnimationRegion(
+	const Text::String &text,
+	QRect spoilerGeometry,
+	const Text::CustomEmojiPaintedBounds &customEmojiPaintedBounds,
+	QRect customEmojiFallback);
 
 extern const char kOptionDialogsMuteIcon[];
 

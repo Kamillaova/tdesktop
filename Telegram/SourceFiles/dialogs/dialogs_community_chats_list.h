@@ -31,6 +31,7 @@ class SessionController;
 
 namespace Dialogs {
 
+class Entry;
 class Row;
 
 namespace Ui {
@@ -65,6 +66,7 @@ protected:
 
 private:
 	struct PaintedRow {
+		Entry *entry = nullptr;
 		QRegion animation;
 		uint64 animationGeneration = 0;
 		bool messagePreviewPainted = false;

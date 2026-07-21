@@ -1175,7 +1175,9 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 			&& (!_pressed || _pressedTopicJump);
 		if (cacheAllowed && _rowsScrollCache.hasFresh(cacheKey, cacheSize)) {
 			const auto i = _paintedRows.find(cacheKey);
-			if (i != end(_paintedRows) && i->second.cache) {
+			if (i != end(_paintedRows)
+				&& i->second.entry == row->entry().get()
+				&& i->second.cache) {
 				context.topicsExpanded = 0.;
 				context.active = false;
 				context.selected = false;
@@ -3659,7 +3661,8 @@ Row *InnerWidget::shownRowByKey(Key key) {
 std::optional<QRegion> InnerWidget::paintedAnimationDamage(
 		not_null<Row*> row) {
 	const auto i = _paintedRows.find(RowsCacheKey(row));
-	if (i == end(_paintedRows)) {
+	if (i == end(_paintedRows)
+		|| i->second.entry != row->entry().get()) {
 		return std::nullopt;
 	}
 	const auto thread = row->thread();
@@ -3801,42 +3804,62 @@ void InnerWidget::trackPaintedRow(
 		}
 		return result.intersected(this->rect());
 	};
-	const auto current = mapRegion(painted.animated);
 	const auto key = RowsCacheKey(row);
 	const auto i = _paintedRows.find(key);
 	if (i == end(_paintedRows)
 		|| i->second.entry != row->entry().get()) {
-		if (!current.subtracted(repaintRegion).isEmpty()) {
+		const auto previous = (i == end(_paintedRows))
+			? QRegion()
+			: i->second.animation;
+		const auto combined = previous.united(painted.animated);
+		const auto uncovered = mapRegion(combined).subtracted(repaintRegion);
+		const auto next = uncovered.isEmpty()
+			? painted.animated
+			: combined;
+		if (next.isEmpty()) {
+			if (i != end(_paintedRows)) {
+				_rowsScrollCache.invalidate(key);
+				_paintedRows.erase(i);
+			}
 			return;
 		}
 		_rowsScrollCache.invalidate(key);
 		auto stored = PaintedRow();
 		stored.entry = row->entry().get();
-		stored.animation = painted.animated;
+		stored.animation = next;
 		stored.animationGeneration = painted.animationGeneration;
 		stored.messagePreviewPainted = painted.messagePreviewPainted;
 		_paintedRows[key] = std::move(stored);
+		if (!uncovered.isEmpty()) {
+			update(mapRegion(combined));
+		}
 		return;
 	}
 	auto &stored = i->second;
 	const auto previous = stored.animation;
-	const auto covered = previous.isEmpty()
-		? current
-		: mapRegion(previous);
-	if (!covered.subtracted(repaintRegion).isEmpty()) {
+	const auto combined = previous.united(painted.animated);
+	const auto uncovered = mapRegion(combined).subtracted(repaintRegion);
+	if (!uncovered.isEmpty()) {
+		stored.animation = combined;
+		stored.animationGeneration = painted.animationGeneration;
+		stored.messagePreviewPainted = painted.messagePreviewPainted;
+		if (stored.cache) {
+			stored.cache->bandDirty = true;
+		}
+		update(mapRegion(combined));
 		return;
 	}
 	if (stored.cache) {
-		stored.animation = previous.united(painted.animated);
+		stored.animation = combined;
 		stored.cache->bandDirty = true;
 	} else {
 		stored.animation = painted.animated;
 	}
 	stored.animationGeneration = painted.animationGeneration;
 	stored.messagePreviewPainted = painted.messagePreviewPainted;
-	const auto added = stored.animation.subtracted(previous);
-	for (const auto &rect : added) {
-		update(transform.mapRect(rect));
+	if (!stored.cache && stored.animation.isEmpty()) {
+		_paintedRows.erase(i);
+		return;
 	}
 }
 

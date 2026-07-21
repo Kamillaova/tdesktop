@@ -7,6 +7,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include <QtGui/QRegion>
+
 class Painter;
 
 namespace style {
@@ -78,7 +80,7 @@ public:
 
 	[[nodiscard]] int jumpToTopicWidth() const;
 
-	void paint(
+	[[nodiscard]] QRegion paint(
 		Painter &p,
 		const QRect &geometry,
 		const PaintContext &context) const;
