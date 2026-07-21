@@ -380,7 +380,7 @@ bool EffectPreview::ready() const {
 void EffectPreview::paintLoading(QPainter &p) {
 	if (!_loading) {
 		_loading = std::make_unique<Ui::InfiniteRadialAnimation>([=] {
-			update();
+			rtlupdate(_iconRect);
 		}, st::effectPreviewLoading);
 		_loading->start(st::defaultInfiniteRadialAnimation.linearPeriod);
 	}
@@ -555,7 +555,7 @@ void EffectPreview::createLottie() {
 	) | rpl::on_next([=](Lottie::Update update) {
 		v::match(update.data, [&](const Lottie::Information &information) {
 		}, [&](const Lottie::DisplayFrameRequest &request) {
-			this->update();
+			this->update(_inner);
 		});
 	}, raw->lifetime());
 }
