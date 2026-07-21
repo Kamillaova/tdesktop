@@ -39,7 +39,10 @@ namespace HistoryView::Controls {
 
 class ForwardPanel final : public base::has_weak_ptr {
 public:
-	explicit ForwardPanel(Fn<void()> repaint);
+	explicit ForwardPanel(
+		Fn<void()> repaint,
+		Fn<void()> textAnimationRepaint = nullptr,
+		Fn<void()> previewAnimationRepaint = nullptr);
 
 	void update(Data::Thread *to, Data::ResolvedForwardDraft draft);
 	void paint(
@@ -47,7 +50,9 @@ public:
 		int x,
 		int y,
 		int available,
-		int outerWidth) const;
+		int outerWidth,
+		QRectF *textAnimationRepaintRect = nullptr,
+		QRectF *previewRepaintRect = nullptr) const;
 
 	[[nodiscard]] rpl::producer<> itemsUpdated() const;
 
@@ -65,6 +70,8 @@ private:
 	void itemRemoved(not_null<const HistoryItem*> item);
 
 	Fn<void()> _repaint;
+	Fn<void()> _textAnimationRepaint;
+	Fn<void()> _previewAnimationRepaint;
 
 	Data::Thread *_to = nullptr;
 	Data::ResolvedForwardDraft _data;

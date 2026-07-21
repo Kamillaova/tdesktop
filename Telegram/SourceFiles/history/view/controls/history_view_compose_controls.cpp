@@ -63,6 +63,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "api/api_compose_with_ai.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/color_int_conversion.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "history/history.h"
@@ -117,6 +118,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_peer_menu.h"
 #include "window/window_session_controller.h"
 #include "mainwindow.h"
+
+#include <QtGui/QPaintEvent>
+#include <QtGui/QRegion>
+
 #include "styles/style_calls.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
@@ -235,16 +240,32 @@ public:
 	[[nodiscard]] rpl::producer<bool> visibleChanged();
 
 private:
+	struct AnimationRepaintState {
+		QRect repaintRect;
+		bool scheduled = false;
+	};
+
 	void updateControlsGeometry(QSize size);
 	void updateVisible();
 	void setShownMessage(HistoryItem *message);
 	void resolveMessageData();
 	void updateShownMessageText();
-	void customEmojiRepaint();
+	void animationRepaint(AnimationRepaintState &state);
+	void recordAnimationPaint(
+		AnimationRepaintState &state,
+		const QPainter &p,
+		const QRegion &paintRegion,
+		QRectF repaintRect);
+	void recordTextAnimationPaint(
+		AnimationRepaintState &state,
+		const QPainter &p,
+		const QRegion &paintRegion,
+		const Ui::Text::CustomEmojiRepaintBounds &customEmojiRepaintBounds,
+		QRectF fallbackRect = QRectF());
 
 	void paintWebPage(Painter &p, not_null<PeerData*> peer);
-	void paintEditOrReplyToMessage(Painter &p);
-	void paintForwardInfo(Painter &p);
+	void paintEditOrReplyToMessage(Painter &p, const QRegion &paintRegion);
+	void paintForwardInfo(Painter &p, const QRegion &paintRegion);
 
 	bool hasPreview() const;
 
@@ -271,6 +292,10 @@ private:
 	rpl::event_stream<> _previewCancelled;
 	rpl::event_stream<> _saveDraftRequests;
 	rpl::lifetime _previewLifetime;
+	AnimationRepaintState _shownMessageTextAnimationRepaint;
+	AnimationRepaintState _forwardPanelTextAnimationRepaint;
+	AnimationRepaintState _shownPreviewAnimationRepaint;
+	AnimationRepaintState _forwardPanelPreviewAnimationRepaint;
 
 	rpl::variable<FullMsgId> _editMsgId;
 	rpl::variable<FullReplyTo> _replyTo;
@@ -286,7 +311,6 @@ private:
 	bool _shownMessageHasPreview : 1 = false;
 	bool _inPhotoEdit : 1 = false;
 	bool _photoEditAllowed : 1 = false;
-	bool _repaintScheduled : 1 = false;
 	bool _inClickable : 1 = false;
 
 	HistoryView::MediaEditManager _mediaEditManager;
@@ -311,8 +335,10 @@ FieldHeader::FieldHeader(
 : RpWidget(parent)
 , _show(std::move(show))
 , _hasSendText(std::move(hasSendText))
-, _forwardPanel(
-	std::make_unique<ForwardPanel>([=] { customEmojiRepaint(); }))
+, _forwardPanel(std::make_unique<ForwardPanel>(
+	[=] { update(); },
+	[=] { animationRepaint(_forwardPanelTextAnimationRepaint); },
+	[=] { animationRepaint(_forwardPanelPreviewAnimationRepaint); }))
 , _data(&_show->session().data())
 , _cancel(Ui::CreateChild<Ui::IconButton>(this, st::historyReplyCancel)) {
 	_cancel->setAccessibleName(tr::lng_cancel(tr::now));
@@ -335,17 +361,32 @@ void FieldHeader::init() {
 	) | rpl::on_next([=](QSize size) {
 		updateControlsGeometry(size);
 	}, lifetime());
+	_mediaEditManager.updateRequests(
+	) | rpl::on_next([=] {
+		update();
+	}, lifetime());
 
 	_forwardPanel->itemsUpdated(
 	) | rpl::on_next([=] {
 		updateVisible();
 	}, lifetime());
 
-	paintRequest(
-	) | rpl::on_next([=] {
+	events(
+	) | rpl::filter([](not_null<QEvent*> event) {
+		return event->type() == QEvent::Paint;
+	}) | rpl::on_next([=](not_null<QEvent*> event) {
+		const auto &paintRegion
+			= static_cast<QPaintEvent*>(event.get())->region();
 		Painter p(this);
 		p.setInactive(_show->paused(Window::GifPauseReason::Any));
 		p.fillRect(rect(), st::historyComposeAreaBg);
+		const auto clearAnimation = [&](AnimationRepaintState &state) {
+			recordAnimationPaint(
+				state,
+				p,
+				paintRegion,
+				QRectF());
+		};
 
 		const auto position = st::historyReplyIconPosition;
 		if (_suggestOptions) {
@@ -365,13 +406,26 @@ void FieldHeader::init() {
 		}
 
 		if (_preview.parsed) {
+			clearAnimation(_shownMessageTextAnimationRepaint);
+			clearAnimation(_forwardPanelTextAnimationRepaint);
+			clearAnimation(_shownPreviewAnimationRepaint);
+			clearAnimation(_forwardPanelPreviewAnimationRepaint);
 			paintWebPage(
 				p,
 				_history ? _history->peer : _data->session().user());
 		} else if (isEditingMessage() || replyingToMessage()) {
-			paintEditOrReplyToMessage(p);
+			clearAnimation(_forwardPanelTextAnimationRepaint);
+			clearAnimation(_forwardPanelPreviewAnimationRepaint);
+			paintEditOrReplyToMessage(p, paintRegion);
 		} else if (readyToForward()) {
-			paintForwardInfo(p);
+			clearAnimation(_shownMessageTextAnimationRepaint);
+			clearAnimation(_shownPreviewAnimationRepaint);
+			paintForwardInfo(p, paintRegion);
+		} else {
+			clearAnimation(_shownMessageTextAnimationRepaint);
+			clearAnimation(_forwardPanelTextAnimationRepaint);
+			clearAnimation(_shownPreviewAnimationRepaint);
+			clearAnimation(_forwardPanelPreviewAnimationRepaint);
 		}
 	}, lifetime());
 
@@ -393,16 +447,17 @@ void FieldHeader::init() {
 		| Data::MessageUpdate::Flag::Destroyed
 	) | rpl::filter([=](const Data::MessageUpdate &update) {
 		return (update.item == _shownMessage);
-	}) | rpl::on_next([=](const Data::MessageUpdate &update) {
-		if (update.flags & Data::MessageUpdate::Flag::Destroyed) {
-			if (_editMsgId.current() == update.item->fullId()) {
+	}) | rpl::on_next([=](const Data::MessageUpdate &messageUpdate) {
+		if (messageUpdate.flags & Data::MessageUpdate::Flag::Destroyed) {
+			if (_editMsgId.current() == messageUpdate.item->fullId()) {
 				_editCancelled.fire({});
 			}
-			if (_replyTo.current().messageId == update.item->fullId()) {
+			if (_replyTo.current().messageId == messageUpdate.item->fullId()) {
 				_replyCancelled.fire({});
 			}
 		} else {
 			updateShownMessageText();
+			update();
 		}
 	}, lifetime());
 
@@ -442,7 +497,7 @@ void FieldHeader::init() {
 			if (_inPhotoEdit != inPhotoEdit) {
 				_inPhotoEdit = inPhotoEdit;
 				_inPhotoEditOver.start(
-					[=] { update(); },
+					[=] { animationRepaint(_shownPreviewAnimationRepaint); },
 					_inPhotoEdit ? 0. : 1.,
 					_inPhotoEdit ? 1. : 0.,
 					st::defaultMessageBar.duration);
@@ -506,7 +561,9 @@ void FieldHeader::updateShownMessageText() {
 
 	const auto context = Core::TextContext({
 		.session = &_data->session(),
-		.repaint = [=] { customEmojiRepaint(); },
+		.repaint = [=] {
+			animationRepaint(_shownMessageTextAnimationRepaint);
+		},
 	});
 	const auto reply = replyingToMessage();
 	_shownMessageText.setMarkedText(
@@ -518,12 +575,70 @@ void FieldHeader::updateShownMessageText() {
 		context);
 }
 
-void FieldHeader::customEmojiRepaint() {
-	if (_repaintScheduled) {
+void FieldHeader::animationRepaint(AnimationRepaintState &state) {
+	if (state.scheduled) {
 		return;
 	}
-	_repaintScheduled = true;
-	update();
+	const auto damage = state.repaintRect;
+	if (damage.isEmpty()) {
+		return;
+	}
+	state.scheduled = true;
+	update(damage);
+}
+
+void FieldHeader::recordAnimationPaint(
+		AnimationRepaintState &state,
+		const QPainter &p,
+		const QRegion &paintRegion,
+		QRectF repaintRect) {
+	if (p.device() != this) {
+		return;
+	}
+	const auto widgetRect = rect();
+	state.repaintRect = state.repaintRect.intersected(widgetRect);
+	const auto previous = state.repaintRect;
+	const auto repaint = Ui::DamageRect(
+		repaintRect,
+		p.transform()).intersected(widgetRect);
+	if (!paintRegion.intersects(previous)
+		&& !paintRegion.intersects(repaint)) {
+		if (previous.isEmpty() && !repaint.isEmpty()) {
+			state.scheduled = true;
+			update(repaint);
+		} else if (previous.isEmpty() && repaint.isEmpty()) {
+			state.scheduled = false;
+		}
+		return;
+	}
+	state.repaintRect = repaint;
+	state.scheduled = false;
+	if (previous == repaint) {
+		return;
+	}
+	const auto changed = QRegion(previous).united(repaint);
+	if (!changed.subtracted(paintRegion).isEmpty()) {
+		state.scheduled = true;
+		update(changed);
+	}
+}
+
+void FieldHeader::recordTextAnimationPaint(
+		AnimationRepaintState &state,
+		const QPainter &p,
+		const QRegion &paintRegion,
+		const Ui::Text::CustomEmojiRepaintBounds &customEmojiRepaintBounds,
+		QRectF fallbackRect) {
+	const auto repaintRect = customEmojiRepaintBounds.rect.isEmpty()
+		? fallbackRect
+		: fallbackRect.isEmpty()
+		? customEmojiRepaintBounds.rect
+		: customEmojiRepaintBounds.rect.united(fallbackRect);
+	recordAnimationPaint(
+		state,
+		p,
+		paintRegion,
+		repaintRect);
 }
 
 void FieldHeader::setShownMessage(HistoryItem *item) {
@@ -600,6 +715,7 @@ void FieldHeader::previewReady(
 			_preview.parsed.description,
 			Ui::DialogTextOptions());
 		updateVisible();
+		update();
 	}, _previewLifetime);
 }
 
@@ -645,9 +761,9 @@ void FieldHeader::paintWebPage(Painter &p, not_null<PeerData*> context) {
 		elidedWidth);
 }
 
-void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
-	_repaintScheduled = false;
-
+void FieldHeader::paintEditOrReplyToMessage(
+		Painter &p,
+		const QRegion &paintRegion) {
 	const auto replySkip = st::historyReplySkip;
 	const auto availableWidth = width()
 		- replySkip
@@ -655,6 +771,16 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 		- st::msgReplyPadding.right();
 
 	if (!_shownMessage) {
+		recordTextAnimationPaint(
+			_shownMessageTextAnimationRepaint,
+			p,
+			paintRegion,
+			Ui::Text::CustomEmojiRepaintBounds());
+		recordAnimationPaint(
+			_shownPreviewAnimationRepaint,
+			p,
+			paintRegion,
+			QRectF());
 		p.setFont(st::msgDateFont);
 		p.setPen(st::historyComposeAreaFgService);
 		const auto top = (st::historyReplyHeight - st::msgDateFont->height) / 2;
@@ -696,7 +822,7 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 		_shownPreviewSpoiler = nullptr;
 	} else if (!_shownPreviewSpoiler) {
 		_shownPreviewSpoiler = std::make_unique<Ui::SpoilerAnimation>([=] {
-			update();
+			animationRepaint(_shownPreviewAnimationRepaint);
 		});
 	}
 	const auto previewSkipValue = st::historyReplyPreview
@@ -704,6 +830,7 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 	const auto previewSkip = _shownMessageHasPreview ? previewSkipValue : 0;
 	const auto textLeft = replySkip + previewSkip;
 	const auto textAvailableWidth = availableWidth - previewSkip;
+	auto previewRepaintRect = QRectF();
 	if (preview) {
 		const auto overEdit = _photoEditAllowed
 			? _inPhotoEditOver.value(_inPhotoEdit ? 1. : 0.)
@@ -713,6 +840,7 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 			(st::historyReplyHeight - st::historyReplyPreview) / 2,
 			st::historyReplyPreview,
 			st::historyReplyPreview);
+		previewRepaintRect = to;
 		p.drawPixmap(to.x(), to.y(), preview->pixSingle(
 			preview->size() / style::DevicePixelRatio(),
 			{
@@ -736,8 +864,18 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 			p.setOpacity(1.);
 		}
 	}
+	recordAnimationPaint(
+		_shownPreviewAnimationRepaint,
+		p,
+		paintRegion,
+		previewRepaintRect);
 
 	if (_suggestOptions) {
+		recordTextAnimationPaint(
+			_shownMessageTextAnimationRepaint,
+			p,
+			paintRegion,
+			Ui::Text::CustomEmojiRepaintBounds());
 		_suggestOptions->paintLines(p, textLeft, 0, width());
 		return;
 	}
@@ -751,10 +889,13 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 		textAvailableWidth);
 
 	p.setPen(st::historyComposeAreaFg);
+	const auto textPosition = QPoint(
+		textLeft,
+		st::msgReplyPadding.top() + st::msgServiceNameFont->height);
+	auto textAnimationRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_shownMessageText.draw(p, {
-		.position = QPoint(
-			textLeft,
-			st::msgReplyPadding.top() + st::msgServiceNameFont->height),
+		.position = textPosition,
 		.availableWidth = textAvailableWidth,
 		.palette = &st::historyComposeAreaPalette,
 		.spoiler = Ui::Text::DefaultSpoilerCache(),
@@ -762,18 +903,50 @@ void FieldHeader::paintEditOrReplyToMessage(Painter &p) {
 		.pausedEmoji = p.inactive() || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = p.inactive() || On(PowerSaving::kChatSpoiler),
 		.elisionLines = 1,
+		.customEmojiRepaintBounds = &textAnimationRepaintBounds,
 	});
+	const auto textFallback = (_shownMessageText.hasSpoilers()
+		|| !textAnimationRepaintBounds.repaintBoundsKnown)
+		? QRectF(textPosition, QSizeF(
+			std::max(textAvailableWidth, 0),
+			_shownMessageText.lineHeight()))
+		: QRectF();
+	recordTextAnimationPaint(
+		_shownMessageTextAnimationRepaint,
+		p,
+		paintRegion,
+		textAnimationRepaintBounds,
+		textFallback);
 }
 
-void FieldHeader::paintForwardInfo(Painter &p) {
-	_repaintScheduled = false;
-
+void FieldHeader::paintForwardInfo(
+		Painter &p,
+		const QRegion &paintRegion) {
 	const auto replySkip = st::historyReplySkip;
 	const auto availableWidth = width()
 		- replySkip
 		- _cancel->width()
 		- st::msgReplyPadding.right();
-	_forwardPanel->paint(p, replySkip, 0, availableWidth, width());
+	auto textAnimationRepaintRect = QRectF();
+	auto previewRepaintRect = QRectF();
+	_forwardPanel->paint(
+		p,
+		replySkip,
+		0,
+		availableWidth,
+		width(),
+		&textAnimationRepaintRect,
+		&previewRepaintRect);
+	recordAnimationPaint(
+		_forwardPanelTextAnimationRepaint,
+		p,
+		paintRegion,
+		textAnimationRepaintRect);
+	recordAnimationPaint(
+		_forwardPanelPreviewAnimationRepaint,
+		p,
+		paintRegion,
+		previewRepaintRect);
 }
 
 void FieldHeader::updateVisible() {

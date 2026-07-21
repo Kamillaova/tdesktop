@@ -37,6 +37,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_changes.h"
 #include "settings/settings_common.h"
 #include "ui/widgets/buttons.h"
+
+#include <algorithm>
+
 #include "styles/style_menu_icons.h"
 #include "styles/style_settings.h"
 
@@ -49,8 +52,19 @@ constexpr auto kNameNoCaptionsVersion = -3;
 
 } // namespace
 
-ForwardPanel::ForwardPanel(Fn<void()> repaint)
-: _repaint(std::move(repaint)) {
+ForwardPanel::ForwardPanel(
+		Fn<void()> repaint,
+		Fn<void()> textAnimationRepaint,
+		Fn<void()> previewAnimationRepaint)
+: _repaint(std::move(repaint))
+, _textAnimationRepaint(std::move(textAnimationRepaint))
+, _previewAnimationRepaint(std::move(previewAnimationRepaint)) {
+	if (!_textAnimationRepaint) {
+		_textAnimationRepaint = _repaint;
+	}
+	if (!_previewAnimationRepaint) {
+		_previewAnimationRepaint = _repaint;
+	}
 }
 
 void ForwardPanel::update(
@@ -83,9 +97,8 @@ void ForwardPanel::update(
 				update(nullptr, {});
 			}, _dataLifetime);
 		}
-
-		updateTexts();
 	}
+	updateTexts();
 	_itemsUpdated.fire({});
 }
 
@@ -130,6 +143,7 @@ void ForwardPanel::updateTexts() {
 	if (empty()) {
 		_from.clear();
 		_text.clear();
+		_spoiler = nullptr;
 		return;
 	}
 	QString from;
@@ -200,7 +214,7 @@ void ForwardPanel::updateTexts() {
 	_from.setText(st::msgNameStyle, from, Ui::NameTextOptions());
 	const auto context = Core::TextContext({
 		.session = &_to->session(),
-		.repaint = _repaint,
+		.repaint = _textAnimationRepaint,
 	});
 	_text.setMarkedText(
 		st::defaultTextStyle,
@@ -211,7 +225,11 @@ void ForwardPanel::updateTexts() {
 
 void ForwardPanel::refreshTexts() {
 	_nameVersion = kUnknownVersion;
-	checkTexts();
+	if (empty()) {
+		updateTexts();
+	} else {
+		checkTexts();
+	}
 }
 
 void ForwardPanel::itemRemoved(not_null<const HistoryItem*> item) {
@@ -275,7 +293,15 @@ void ForwardPanel::paint(
 		int x,
 		int y,
 		int available,
-		int outerWidth) const {
+		int outerWidth,
+		QRectF *textAnimationRepaintRect,
+		QRectF *previewRepaintRect) const {
+	if (textAnimationRepaintRect) {
+		*textAnimationRepaintRect = QRectF();
+	}
+	if (previewRepaintRect) {
+		*previewRepaintRect = QRectF();
+	}
 	if (empty()) {
 		return;
 	}
@@ -293,7 +319,8 @@ void ForwardPanel::paint(
 	if (!spoiler) {
 		_spoiler = nullptr;
 	} else if (!_spoiler) {
-		_spoiler = std::make_unique<Ui::SpoilerAnimation>(_repaint);
+		_spoiler = std::make_unique<Ui::SpoilerAnimation>(
+			_previewAnimationRepaint);
 	}
 	if (preview) {
 		auto to = QRect(
@@ -301,6 +328,9 @@ void ForwardPanel::paint(
 			y + (st::historyReplyHeight - st::historyReplyPreview) / 2,
 			st::historyReplyPreview,
 			st::historyReplyPreview);
+		if (previewRepaintRect) {
+			*previewRepaintRect = to;
+		}
 		p.drawPixmap(to.x(), to.y(), preview->pixSingle(
 			preview->size() / style::DevicePixelRatio(),
 			{
@@ -322,10 +352,13 @@ void ForwardPanel::paint(
 		y + st::msgReplyPadding.top(),
 		available);
 	p.setPen(st::historyComposeAreaFg);
+	const auto textPosition = QPoint(
+		x,
+		y + st::msgReplyPadding.top() + st::msgServiceNameFont->height);
+	auto textAnimationRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_text.draw(p, {
-		.position = QPoint(
-			x,
-			y + st::msgReplyPadding.top() + st::msgServiceNameFont->height),
+		.position = textPosition,
 		.availableWidth = available,
 		.palette = &st::historyComposeAreaPalette,
 		.spoiler = Ui::Text::DefaultSpoilerCache(),
@@ -333,7 +366,23 @@ void ForwardPanel::paint(
 		.pausedEmoji = paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = pausedSpoiler,
 		.elisionLines = 1,
+		.customEmojiRepaintBounds = textAnimationRepaintRect
+			? &textAnimationRepaintBounds
+			: nullptr,
 	});
+	if (textAnimationRepaintRect) {
+		*textAnimationRepaintRect = textAnimationRepaintBounds.rect;
+	}
+	if (textAnimationRepaintRect
+		&& (_text.hasSpoilers()
+			|| !textAnimationRepaintBounds.repaintBoundsKnown)) {
+		const auto fallback = QRectF(textPosition, QSizeF(
+			std::max(available, 0),
+			_text.lineHeight()));
+		*textAnimationRepaintRect = textAnimationRepaintRect->isEmpty()
+			? fallback
+			: textAnimationRepaintRect->united(fallback);
+	}
 }
 
 void ClearDraftReplyTo(
