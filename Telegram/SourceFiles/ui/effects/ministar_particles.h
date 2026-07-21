@@ -25,6 +25,7 @@ public:
 	void setVisible(float visible);
 	void setColor(const QColor &color);
 	void setColors(std::vector<QColor> colors);
+	[[nodiscard]] QRectF repaintBounds(const QRect &rect) const;
 	void paint(QPainter &p, const QRect &rect, crl::time now, bool paused);
 
 private:

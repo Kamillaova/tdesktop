@@ -12,6 +12,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/ministar_particles.h"
 #include "ui/layers/generic_box.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/text/text_utilities.h"
 #include "ui/top_background_gradient.h"
@@ -73,6 +74,9 @@ void AddCocoonBoxCover(not_null<Ui::VerticalLayout*> container) {
 		QImage gradient;
 		Ui::Animations::Basic animation;
 		std::optional<Ui::StarParticles> particles;
+		QRect logoRect;
+		QRect particlesRect;
+		QRect particlesRepaintRect;
 		style::owned_color subtitleFg = style::owned_color{ textColor };
 		style::owned_color subtitleBoldFg = style::owned_color{ boldColor };
 		style::FlatLabel subtitleSt = st::cocoonSubtitle;
@@ -81,7 +85,7 @@ void AddCocoonBoxCover(not_null<Ui::VerticalLayout*> container) {
 	state->subtitleSt.textFg = state->subtitleFg.color();
 	state->subtitleSt.palette.linkFg = state->subtitleBoldFg.color();
 	state->animation.init([=] {
-		cover->update();
+		cover->update(state->particlesRepaintRect);
 		if (anim::Disabled()) {
 			state->animation.stop();
 		}
@@ -103,6 +107,18 @@ void AddCocoonBoxCover(not_null<Ui::VerticalLayout*> container) {
 			float64(i) / (kParticleColors - 1)));
 	}
 	state->particles->setColors(std::move(particleColors));
+	const auto updateParticlesGeometry = [=](int width) {
+		state->logoRect = QRect(
+			(width - logoSize) / 2,
+			logoTop,
+			logoSize,
+			logoSize);
+		const auto paddingAdd = int(base::SafeRound(logoTop * 1.2));
+		state->particlesRect = state->logoRect.marginsAdded(
+			{ paddingAdd, paddingAdd, paddingAdd, paddingAdd });
+		state->particlesRepaintRect = Ui::DamageRect(
+			state->particles->repaintBounds(state->particlesRect));
+	};
 
 	const auto subtitle = CreateChild<Ui::FlatLabel>(
 		cover,
@@ -114,6 +130,7 @@ void AddCocoonBoxCover(not_null<Ui::VerticalLayout*> container) {
 	subtitle->setTryMakeSimilarLines(true);
 
 	cover->widthValue() | rpl::on_next([=](int width) {
+		updateParticlesGeometry(width);
 		const auto available = width
 			- st::boxRowPadding.left()
 			- st::boxRowPadding.right();
@@ -160,20 +177,15 @@ void AddCocoonBoxCover(not_null<Ui::VerticalLayout*> container) {
 		}
 		p.drawImage(0, 0, state->gradient);
 
-		const auto logoRect = QRect(
-			(width - logoSize) / 2,
-			logoTop,
-			logoSize,
-			logoSize);
-		const auto paddingAdd = int(base::SafeRound(logoTop * 1.2));
-		const auto particlesRect = logoRect.marginsAdded(
-			{ paddingAdd, paddingAdd, paddingAdd, paddingAdd });
-
-		state->particles->paint(p, particlesRect, crl::now(), false);
+		state->particles->paint(
+			p,
+			state->particlesRect,
+			crl::now(),
+			false);
 		if (!anim::Disabled() && !state->animation.animating()) {
 			state->animation.start();
 		}
-		p.drawImage(logoRect, logo);
+		p.drawImage(state->logoRect, logo);
 	}, cover->lifetime());
 }
 

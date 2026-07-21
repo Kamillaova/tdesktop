@@ -15,6 +15,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtMath>
 
 namespace Ui {
+namespace {
+
+constexpr auto kOutsideField = 0.1;
+
+} // namespace
 
 StarParticles::StarParticles(Type type, int count, int size)
 : _type(type)
@@ -140,6 +145,14 @@ void StarParticles::generate() {
 	}
 }
 
+QRectF StarParticles::repaintBounds(const QRect &rect) const {
+	const auto starRadius = _starSize / std::sqrt(2.);
+	const auto horizontal = rect.width() * kOutsideField + starRadius;
+	const auto vertical = rect.height() * kOutsideField + starRadius;
+	return QRectF(rect).marginsAdded(
+		QMarginsF(horizontal, vertical, horizontal, vertical));
+}
+
 void StarParticles::paint(
 		QPainter &p,
 		const QRect &rect,
@@ -195,8 +208,10 @@ void StarParticles::paint(
 		particle.y += particle.vy * _speed * dt;
 		particle.rotation += particle.vrotation * dt;
 
-		if (particle.x < -0.1 || particle.x > 1.1
-			|| particle.y < -0.1 || particle.y > 1.1) {
+		if (particle.x < -kOutsideField
+			|| particle.x > 1. + kOutsideField
+			|| particle.y < -kOutsideField
+			|| particle.y > 1. + kOutsideField) {
 			auto random = bytes::vector(1);
 			base::RandomFill(random.data(), random.size());
 			particle.x = (_type == Type::Right) ? 0. : 0.5;
