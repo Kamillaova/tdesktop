@@ -708,6 +708,24 @@ struct VideoPreviewDocument {
 	const auto left = (st::boxWideWidth - width) / 2;
 	const auto top = alignToBottom ? (st::premiumPreviewHeight - height) : 0;
 	state->frame = GenerateFrame(left, top, width, height, alignToBottom);
+	const auto outerFrameThickness = 12.;
+	const auto framePadding = (style::ConvertScaleExact(
+		outerFrameThickness) / 2.) + 1.;
+	const auto frameRepaintRect = state->frame.boundingRect().adjusted(
+		-framePadding,
+		-framePadding,
+		framePadding,
+		framePadding
+	).toAlignedRect();
+	const auto starSize = st::premiumVideoStarSize;
+	const auto starRect = QRectF(
+		QPointF(
+			left + (width - starSize.width()) / 2.,
+			top + (height - starSize.height()) / 2.),
+		starSize);
+	const auto starRepaintRect = starRect.adjusted(-2., -2., 2., 2.)
+		.toAlignedRect();
+	const auto videoRepaintRect = frameRepaintRect.united(starRepaintRect);
 	const auto check = [=] {
 		if (state->instance.playerLocked()) {
 			return;
@@ -730,15 +748,15 @@ struct VideoPreviewDocument {
 				state->readyInvoked = true;
 				readyCallback();
 			}
-			result->update();
+			result->update(videoRepaintRect);
 		}
 	}, [=](::Media::Streaming::Error &&error) {
-		result->update();
+		result->update(videoRepaintRect);
 	}, state->instance.lifetime());
 
 	state->loading.init([=] {
 		if (!anim::Disabled()) {
-			result->update();
+			result->update(starRepaintRect);
 		}
 	});
 
@@ -774,7 +792,7 @@ struct VideoPreviewDocument {
 				.outer = size,
 				.rounding = rounding,
 			});
-		paintFrame(QColor(0, 0, 0, 128), 12.);
+		paintFrame(QColor(0, 0, 0, 128), outerFrameThickness);
 		p.drawImage(QRect(left, top, width, height), frame);
 		paintFrame(Qt::black, 6.6);
 		if (ready) {
@@ -794,12 +812,7 @@ struct VideoPreviewDocument {
 				+ (kStarOpacityOn - kStarOpacityOff) * ratio;
 			p.setOpacity(opacity);
 
-			const auto starSize = st::premiumVideoStarSize;
-			state->star.render(&p, QRectF(
-				QPointF(
-					left + (width - starSize.width()) / 2.,
-					top + (height - starSize.height()) / 2.),
-				starSize));
+			state->star.render(&p, starRect);
 		}
 	}, lifetime);
 
