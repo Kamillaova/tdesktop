@@ -7,10 +7,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
+#include "base/timer.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+
+#include <QtGui/QRegion>
 
 namespace Ui {
 class DynamicImage;
@@ -119,10 +122,23 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent *) override;
+	void resizeEvent(QResizeEvent *) override;
 	int resizeGetHeight(int newWidth) override;
 
 private:
-	void draw(QPainter &p);
+	struct AnimationDamage {
+		QRegion painted;
+		QRegion fallback;
+		bool complete = true;
+	};
+
+	[[nodiscard]] AnimationDamage draw(QPainter &p);
+	void requestAnimationRepaint();
+	void scheduleAnimationRepaint(QRegion damage);
+	void trackAnimationDamage(
+		AnimationDamage damage,
+		const QRegion &repaintRegion);
+	void invalidateAnimationDamage();
 	void releaseCollapseSnapshot();
 
 	const style::TextStyle &_titleSt;
@@ -149,6 +165,13 @@ private:
 	Fn<bool()> _emojiPaused;
 	Fn<void()> _suggestionClickCallback;
 	Fn<void()> _narrowExpandCallback;
+	QRegion _animationDamage;
+	QRegion _staleAnimationDamage;
+	QRegion _animationFallback;
+	QRegion _pendingAnimationDamage;
+	bool _animationDamageKnown = false;
+	bool _animationFallbackKnown = false;
+	base::Timer _animationRepaintTimer;
 
 	int _leftPadding = 0;
 	TopBarSuggestionGeometry _geometry;

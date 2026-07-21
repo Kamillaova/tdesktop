@@ -43,6 +43,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_settings.h"
 #include "styles/style_window.h"
 
+#include <QtGui/QPaintEvent>
+
 namespace Dialogs {
 namespace {
 
@@ -82,6 +84,33 @@ namespace {
 
 [[nodiscard]] bool TopBarSuggestionNarrow(int width) {
 	return (width < st::columnMinimalWidthLeft / 2);
+}
+
+[[nodiscard]] Ui::Text::GeometryDescriptor TopBarSuggestionTextGeometry(
+		int availableWidth,
+		int lineHeight) {
+	return {
+		.layout = [=](int line) -> Ui::Text::LineGeometry {
+			line++;
+			const auto diff = st::sponsoredMessageBarMaxHeight
+				- line * lineHeight;
+			if (diff < 3 * lineHeight) {
+				return {
+					.width = availableWidth,
+					.elided = true,
+				};
+			} else if (diff < 2 * lineHeight) {
+				return {};
+			}
+			return { .width = availableWidth };
+		},
+	};
+}
+
+[[nodiscard]] QRect MapAnimationRect(
+		const QPainter &p,
+		QRectF rect) {
+	return p.transform().mapRect(rect).toAlignedRect();
 }
 
 } // namespace
@@ -302,7 +331,13 @@ TopBarSuggestionContent::TopBarSuggestionContent(
 , _contentTitleSt(st::dialogsTopBarSuggestionTitleStyle)
 , _contentTextSt(st::dialogsTopBarSuggestionAboutStyle)
 , _shadow(st::dialogsTopBarSuggestionShadow)
-, _emojiPaused(std::move(emojiPaused)) {
+, _emojiPaused(std::move(emojiPaused))
+, _animationRepaintTimer([=] {
+	const auto damage = base::take(_pendingAnimationDamage);
+	if (!damage.isEmpty()) {
+		update(damage);
+	}
+}) {
 	_leftPadding = st::dialogsTopBarLeftPadding;
 	setRightIcon(RightIcon::Close);
 	Ui::AbstractButton::setClickedCallback([=] {
@@ -329,6 +364,7 @@ void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
 	if (icon == _rightIcon) {
 		return;
 	}
+	invalidateAnimationDamage();
 	_rightHide = nullptr;
 	_rightArrow = nullptr;
 	_rightIcon = icon;
@@ -379,6 +415,9 @@ void TopBarSuggestionContent::setRightIcon(RightIcon icon) {
 void TopBarSuggestionContent::setRightButton(
 		rpl::producer<TextWithEntities> text,
 		Fn<void()> callback) {
+	if (_rightHide || _rightArrow) {
+		invalidateAnimationDamage();
+	}
 	_rightHide = nullptr;
 	_rightArrow = nullptr;
 	_rightIcon = RightIcon::None;
@@ -415,6 +454,9 @@ void TopBarSuggestionContent::setRightButton(
 }
 
 void TopBarSuggestionContent::setRightBadge(rpl::producer<int> count) {
+	if (_rightButton || _rightHide || _rightArrow) {
+		invalidateAnimationDamage();
+	}
 	_rightButton = nullptr;
 	_rightHide = nullptr;
 	_rightArrow = nullptr;
@@ -425,6 +467,7 @@ void TopBarSuggestionContent::setRightBadge(rpl::producer<int> count) {
 		if (_rightBadgeText == text && !_rightBadgeSize.isEmpty()) {
 			return;
 		}
+		invalidateAnimationDamage();
 		_rightBadgeText = text;
 		auto st = Ui::UnreadBadgeStyle();
 		_rightBadgeSize = Ui::CountUnreadBadgeSize(_rightBadgeText, st);
@@ -433,7 +476,31 @@ void TopBarSuggestionContent::setRightBadge(rpl::producer<int> count) {
 	}, _rightBadgeLifetime);
 }
 
-void TopBarSuggestionContent::draw(QPainter &p) {
+TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
+		QPainter &p) {
+	auto result = AnimationDamage();
+	const auto addTextDamage = [&](
+			const Ui::Text::String &text,
+			QRect fallback,
+			const Ui::Text::CustomEmojiPaintedBounds &paintedBounds) {
+		if (!text.hasCustomEmoji() && !text.hasSpoilers()) {
+			return;
+		}
+		const auto mappedFallback = MapAnimationRect(p, fallback);
+		result.fallback += mappedFallback;
+		if (text.hasCustomEmoji()) {
+			if (paintedBounds.repaintRectKnown()) {
+				result.painted += MapAnimationRect(
+					p,
+					paintedBounds.repaintRect());
+			} else {
+				result.complete = false;
+			}
+		}
+		if (text.hasSpoilers()) {
+			result.painted += mappedFallback;
+		}
+	};
 	const auto outer = Ui::RpWidget::rect();
 	const auto setControlsVisible = [&](bool visible) {
 		const auto widgets = std::array<Ui::RpWidget*, 4>{
@@ -458,7 +525,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 			_shadow,
 			_geometry.cornerRadius);
 		if (pill.isEmpty()) {
-			return;
+			return result;
 		}
 		auto clipPath = QPainterPath();
 		clipPath.addRoundedRect(pill, radius, radius);
@@ -477,7 +544,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 			st::dialogsRequestsBubbleIconBg);
 		background.paint(p, accent);
 		st::dialogsRequestsBubbleIcon.paintInCenter(p, accent);
-		return;
+		return result;
 	}
 	setControlsVisible(true);
 	const auto &margins = st::dialogsTopBarSuggestionMargins;
@@ -489,7 +556,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 		_shadow,
 		_geometry.cornerRadius);
 	if (pill.isEmpty()) {
-		return;
+		return result;
 	}
 
 	auto clipPath = QPainterPath();
@@ -523,6 +590,7 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 	{
 		const auto left = leftPadding;
 		const auto top = topPadding;
+		auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
 		_contentTitle.draw(p, {
 			.position = QPoint(left, top),
 			.outerWidth = hasSecondLineTitle
@@ -531,7 +599,19 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 			.availableWidth = availableWidth,
 			.pausedEmoji = paused,
 			.elisionLines = hasSecondLineTitle ? 2 : 1,
+			.customEmojiPaintedBounds = &paintedBounds,
 		});
+		if (availableWidth > 0) {
+			const auto lines = hasSecondLineTitle ? 2 : 1;
+			addTextDamage(
+				_contentTitle,
+				QRect(
+					left,
+					top,
+					availableWidth,
+					lines * _contentTitle.lineHeight()),
+				paintedBounds);
+		}
 	}
 	{
 		const auto left = leftPadding;
@@ -541,30 +621,28 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 				+ _contentTitleSt.font->height)
 			: topPadding + _titleSt.font->height;
 		const auto lineHeight = _contentTextSt.font->height;
-		const auto lineLayout = [=](int line) -> Ui::Text::LineGeometry {
-			line++;
-			const auto diff = (st::sponsoredMessageBarMaxHeight)
-				- line * lineHeight;
-			if (diff < 3 * lineHeight) {
-				return {
-					.width = availableWidth,
-					.elided = true,
-				};
-			} else if (diff < 2 * lineHeight) {
-				return {};
-			}
-			return { .width = availableWidth };
-		};
+		auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
 		p.setPen(_descriptionColorOverride.value_or(st::windowSubTextFg->c));
 		_contentText.draw(p, {
 			.position = QPoint(left, top),
 			.outerWidth = availableWidth,
 			.availableWidth = availableWidth,
-			.geometry = Ui::Text::GeometryDescriptor{
-				.layout = std::move(lineLayout),
-			},
+			.geometry = TopBarSuggestionTextGeometry(
+				availableWidth,
+				lineHeight),
 			.pausedEmoji = paused,
+			.customEmojiPaintedBounds = &paintedBounds,
 		});
+		if (availableWidth > 0) {
+			addTextDamage(
+				_contentText,
+				QRect(
+					left,
+					top,
+					availableWidth,
+					std::max(0, outer.y() + outer.height() - top)),
+				paintedBounds);
+		}
 	}
 	if (!_rightBadgeText.isEmpty()) {
 		auto st = Ui::UnreadBadgeStyle();
@@ -577,6 +655,88 @@ void TopBarSuggestionContent::draw(QPainter &p) {
 			+ (_geometry.cardInnerHeight - st.size) / 2;
 		Ui::PaintUnreadBadge(p, _rightBadgeText, badgeRight, badgeTop, st);
 	}
+	return result;
+}
+
+void TopBarSuggestionContent::requestAnimationRepaint() {
+	if (!_collapseSnapshot.isNull()) {
+		return;
+	}
+	const auto fallback = _animationFallbackKnown
+		? _animationFallback
+		: QRegion(rect());
+	const auto damage = _animationDamageKnown
+		? _animationDamage
+		: _staleAnimationDamage.united(fallback);
+	scheduleAnimationRepaint(damage);
+}
+
+void TopBarSuggestionContent::scheduleAnimationRepaint(QRegion damage) {
+	damage &= QRegion(rect());
+	if (damage.isEmpty()) {
+		return;
+	}
+	_pendingAnimationDamage += damage;
+	if (!_animationRepaintTimer.isActive()) {
+		_animationRepaintTimer.callOnce(0);
+	}
+}
+
+void TopBarSuggestionContent::trackAnimationDamage(
+		AnimationDamage damage,
+		const QRegion &repaintRegion) {
+	const auto widgetRegion = QRegion(rect());
+	_staleAnimationDamage &= widgetRegion;
+	damage.painted &= widgetRegion;
+	damage.fallback &= widgetRegion;
+	damage.fallback += damage.painted;
+	const auto repainted = repaintRegion.intersected(widgetRegion);
+	_animationFallback = damage.complete
+		? damage.fallback
+		: widgetRegion;
+	_animationFallbackKnown = true;
+
+	if (!damage.complete) {
+		if (_animationDamageKnown) {
+			_staleAnimationDamage = _animationDamage;
+		}
+		_animationDamage = QRegion();
+		_animationDamageKnown = false;
+		return;
+	}
+	if (!_animationDamageKnown) {
+		const auto required = _staleAnimationDamage.united(
+			_animationFallback);
+		if (!required.subtracted(repainted).isEmpty()) {
+			scheduleAnimationRepaint(required);
+			return;
+		}
+		_animationDamage = damage.painted;
+		_staleAnimationDamage = QRegion();
+		_animationDamageKnown = true;
+		return;
+	}
+	const auto combined = _animationDamage.united(damage.painted);
+	if (!combined.subtracted(repainted).isEmpty()) {
+		_animationDamage = combined;
+		scheduleAnimationRepaint(combined);
+		return;
+	}
+	_animationDamage = damage.painted;
+	_staleAnimationDamage = QRegion();
+}
+
+void TopBarSuggestionContent::invalidateAnimationDamage() {
+	if (_animationDamageKnown) {
+		_staleAnimationDamage += _animationDamage;
+	} else if (_animationFallbackKnown) {
+		_staleAnimationDamage += _animationFallback;
+	}
+	_animationDamage = QRegion();
+	_animationFallback = QRegion();
+	_animationDamageKnown = false;
+	_animationFallbackKnown = false;
+	scheduleAnimationRepaint(_staleAnimationDamage);
 }
 
 void TopBarSuggestionContent::setContent(
@@ -584,9 +744,10 @@ void TopBarSuggestionContent::setContent(
 		TextWithEntities description,
 		std::optional<Ui::Text::MarkedContext> context,
 		std::optional<QColor> descriptionColorOverride) {
+	invalidateAnimationDamage();
 	_descriptionColorOverride = descriptionColorOverride;
 	if (context) {
-		context->repaint = [=] { update(); };
+		context->repaint = [=] { requestAnimationRepaint(); };
 		_contentTitle.setMarkedText(
 			_contentTitleSt,
 			std::move(title),
@@ -605,17 +766,23 @@ void TopBarSuggestionContent::setContent(
 	update();
 }
 
-void TopBarSuggestionContent::paintEvent(QPaintEvent *) {
+void TopBarSuggestionContent::paintEvent(QPaintEvent *event) {
 	auto p = QPainter(this);
 	if (!_collapseSnapshot.isNull()) {
 		p.drawPixmap(0, 0, _collapseSnapshot);
 		return;
 	}
-	draw(p);
+	trackAnimationDamage(draw(p), event->region());
+}
+
+void TopBarSuggestionContent::resizeEvent(QResizeEvent *event) {
+	invalidateAnimationDamage();
+	Ui::RippleButton::resizeEvent(event);
 }
 
 void TopBarSuggestionContent::prepareCollapseSnapshot() {
 	_collapseSnapshot = Ui::GrabWidget(this);
+	invalidateAnimationDamage();
 	for (const auto child : children()) {
 		if (const auto widget = qobject_cast<QWidget*>(child)) {
 			widget->hide();
@@ -629,6 +796,7 @@ void TopBarSuggestionContent::releaseCollapseSnapshot() {
 		return;
 	}
 	_collapseSnapshot = QPixmap();
+	invalidateAnimationDamage();
 	for (const auto child : children()) {
 		if (const auto widget = qobject_cast<QWidget*>(child)) {
 			widget->show();
@@ -681,22 +849,8 @@ int TopBarSuggestionContent::resizeGetHeight(int newWidth) {
 		: (topPadding + _titleSt.font->height);
 
 	const auto lineHeight = _contentTextSt.font->height;
-	auto lineLayout = [=](int line) -> Ui::Text::LineGeometry {
-		line++;
-		const auto diff = (st::sponsoredMessageBarMaxHeight)
-			- line * lineHeight;
-		if (diff < 3 * lineHeight) {
-			return {
-				.width = availableWidth,
-				.elided = true,
-			};
-		} else if (diff < 2 * lineHeight) {
-			return {};
-		}
-		return { .width = availableWidth };
-	};
 	const auto dims = _contentText.countDimensions(
-		Ui::Text::GeometryDescriptor{ .layout = std::move(lineLayout) });
+		TopBarSuggestionTextGeometry(availableWidth, lineHeight));
 	const auto natural = textTop + dims.height + bottomPadding;
 	const auto capped = std::min(
 		natural,
@@ -734,6 +888,7 @@ void TopBarSuggestionContent::setLeadingWidget(Ui::RpWidget *widget) {
 	const auto basePadding = st::dialogsTopBarLeftPadding;
 	if (!widget) {
 		if (_leftPadding != basePadding) {
+			invalidateAnimationDamage();
 			_leftPadding = basePadding;
 			resizeToWidth(width());
 			update();
@@ -763,6 +918,7 @@ void TopBarSuggestionContent::setLeadingWidget(Ui::RpWidget *widget) {
 		? _geometry.leadingTextSkip
 		: row.nameLeft) - margins.left();
 	if (_leftPadding != padding) {
+		invalidateAnimationDamage();
 		_leftPadding = padding;
 		resizeToWidth(width());
 		update();
@@ -771,6 +927,7 @@ void TopBarSuggestionContent::setLeadingWidget(Ui::RpWidget *widget) {
 
 void TopBarSuggestionContent::setGeometryOverride(
 		TopBarSuggestionGeometry geometry) {
+	invalidateAnimationDamage();
 	_geometry = geometry;
 	resizeToWidth(width());
 	update();
