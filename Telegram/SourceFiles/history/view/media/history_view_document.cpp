@@ -2169,7 +2169,8 @@ void Document::repaintPlayback() const {
 	}
 	if (_playbackRepaintRect && _playbackRepaintRect->isEmpty()) {
 		return;
-	} else if (_parent->delegate()->elementContext() == Context::TTLViewer) {
+	} else if (!IsHostedInstantViewMedia(_parent)
+		&& _parent->delegate()->elementContext() == Context::TTLViewer) {
 		repaint();
 		return;
 	} else if (_playbackRepaintPending) {

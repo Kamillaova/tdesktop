@@ -2312,7 +2312,8 @@ void Element::validateText() {
 		if (Has<HistoryMessageRichPage>()) {
 			RemoveComponents(0
 				| HistoryMessageRichPage::Bit()
-				| InstantViewMediaRuntime::Bit());
+				| InstantViewMediaRuntime::Bit()
+				| HostedMediaPlayback::Bit());
 			invalidateTextSizeCache();
 		}
 	};
@@ -2323,10 +2324,12 @@ void Element::validateText() {
 			clearRichPage();
 			return;
 		}
-		if (!Has<HistoryMessageRichPage>()) {
+		if (!Has<HistoryMessageRichPage>()
+			|| !Has<HostedMediaPlayback>()) {
 			AddComponents(0
 				| HistoryMessageRichPage::Bit()
-				| InstantViewMediaRuntime::Bit());
+				| InstantViewMediaRuntime::Bit()
+				| HostedMediaPlayback::Bit());
 		}
 		const auto runtime = Get<HistoryMessageRichPage>();
 		const auto needsBinding = (runtime->article.mediaBlockHost()

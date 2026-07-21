@@ -384,6 +384,9 @@ IvHistoryViewBlock::IvHistoryViewBlock(
 		_media->initDimensions();
 	}
 	_supported = _media && probeSupport();
+	if (_supported && _kind == IvHistoryViewMediaKind::Audio) {
+		_host->registerPlaybackMedia(not_null{ _media.get() });
+	}
 }
 
 IvHistoryViewBlock::~IvHistoryViewBlock() {
@@ -1292,6 +1295,8 @@ IvHistoryViewMediaHost::State::State(
 , itemId(item->fullId()) {
 	static_cast<HistoryView::Message*>(view)->setInstantViewMediaRuntime(
 		this->pageUrl);
+	static_cast<HistoryView::Message*>(view)
+		->suppressBackingMediaForHostedPlayback();
 	watchItemLifetime();
 }
 
@@ -1313,6 +1318,8 @@ IvHistoryViewMediaHost::State::State(
 , itemId(this->item->fullId()) {
 	static_cast<HistoryView::Message*>(view)->setInstantViewMediaRuntime(
 		this->pageUrl);
+	static_cast<HistoryView::Message*>(view)
+		->suppressBackingMediaForHostedPlayback();
 	watchItemLifetime();
 }
 
@@ -1440,6 +1447,14 @@ void IvHistoryViewMediaHost::unregisterViewRequestBridge(MediaBlockHost *host) {
 	_state->bridgeHostReferences = 0;
 	_state->bridgeHost = nullptr;
 	_state->bridgeLifetime.destroy();
+}
+
+void IvHistoryViewMediaHost::registerPlaybackMedia(
+		not_null<HistoryView::Media*> media) const {
+	if (_state->view) {
+		static_cast<HistoryView::Message*>(_state->view)
+			->registerHostedMediaPlayback(media);
+	}
 }
 
 void IvHistoryViewMediaHost::registerPhoto(not_null<PhotoData*> photo) const {

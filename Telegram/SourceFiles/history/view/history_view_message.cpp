@@ -6181,16 +6181,54 @@ WebPage *Message::factcheckBlock() const {
 void Message::playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const {
-	Element::playbackUpdated(item, document);
-	if (const auto page = logEntryOriginal()) {
-		static_cast<void>(page->playbackUpdated(item, document));
+	const auto hosted = Get<HostedMediaPlayback>();
+	if (!hosted || !hosted->suppressBackingMedia) {
+		Element::playbackUpdated(item, document);
+		if (const auto page = logEntryOriginal()) {
+			static_cast<void>(page->playbackUpdated(item, document));
+		}
+		if (const auto page = factcheckBlock()) {
+			static_cast<void>(page->playbackUpdated(item, document));
+		}
 	}
-	if (const auto page = factcheckBlock()) {
-		static_cast<void>(page->playbackUpdated(item, document));
+	if (!hosted) {
+		return;
 	}
-	if (Has<InstantViewMediaRuntime>() || Has<HistoryMessageRichPage>()) {
-		repaint();
+	const auto i = hosted->mediaByDocument.find(document.get());
+	if (i == end(hosted->mediaByDocument)) {
+		return;
 	}
+	for (const auto &weak : i->second) {
+		if (const auto media = weak.get()) {
+			static_cast<void>(media->playbackUpdated(item, document));
+		}
+	}
+}
+
+void Message::suppressBackingMediaForHostedPlayback() {
+	AddComponents(HostedMediaPlayback::Bit());
+	Get<HostedMediaPlayback>()->suppressBackingMedia = true;
+}
+
+void Message::registerHostedMediaPlayback(not_null<Media*> media) {
+	const auto document = media->getDocument();
+	if (!document) {
+		return;
+	}
+	const auto hosted = Get<HostedMediaPlayback>();
+	Expects(hosted != nullptr);
+	auto &list = hosted->mediaByDocument[document];
+	for (auto i = begin(list); i != end(list);) {
+		const auto existing = i->get();
+		if (!existing) {
+			i = list.erase(i);
+		} else if (existing == media.get()) {
+			return;
+		} else {
+			++i;
+		}
+	}
+	list.push_back(base::make_weak(media.get()));
 }
 
 bool Message::toggleSelectionByHandlerClick(

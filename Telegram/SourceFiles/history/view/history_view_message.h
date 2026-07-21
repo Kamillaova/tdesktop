@@ -81,6 +81,14 @@ struct InstantViewMediaRuntime
 	double mediaPixelScale = 1.;
 };
 
+struct HostedMediaPlayback
+: RuntimeComponent<HostedMediaPlayback, Element> {
+	base::flat_map<
+		DocumentData*,
+		std::vector<base::weak_ptr<Media>>> mediaByDocument;
+	bool suppressBackingMedia = false;
+};
+
 struct HistoryMessageRichPage
 : RuntimeComponent<HistoryMessageRichPage, Element> {
 	HistoryMessageRichPage();
@@ -292,6 +300,8 @@ public:
 	void playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const override;
+	void suppressBackingMediaForHostedPlayback();
+	void registerHostedMediaPlayback(not_null<Media*> media);
 
 	VerticalRepaintRange verticalRepaintRange() const override;
 

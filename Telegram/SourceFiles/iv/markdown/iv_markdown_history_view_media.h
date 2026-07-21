@@ -60,6 +60,7 @@ public:
 	[[nodiscard]] bool needsViewRequestBridge() const;
 	void registerViewRequestBridge(MediaBlockHost *host);
 	void unregisterViewRequestBridge(MediaBlockHost *host);
+	void registerPlaybackMedia(not_null<HistoryView::Media*> media) const;
 
 	void registerPhoto(not_null<PhotoData*> photo) const;
 	void registerDocument(not_null<DocumentData*> document) const;
