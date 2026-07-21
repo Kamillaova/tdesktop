@@ -58,12 +58,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_dialogs.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtGui/QRegion>
 #include <QtWidgets/QApplication>
 
 namespace ChatHelpers {
 namespace {
 
 constexpr auto kEphemeralHintHoverDelay = crl::time(500);
+constexpr auto kMaxPathGradientRepaintRects = 16;
 
 [[nodiscard]] QString PrimaryUsername(not_null<UserData*> user) {
 	const auto &usernames = user->usernames();
@@ -147,6 +149,9 @@ private:
 	void setupWebm(StickerSuggestion &suggestion);
 	void repaintSticker(not_null<DocumentData*> document);
 	void repaintStickerAtIndex(int index);
+	void addPathGradientRepaintRect(QRect rect);
+	void clearPathGradientRepaint();
+	void repaintPathGradient();
 	std::shared_ptr<Lottie::FrameRenderer> getLottieRenderer();
 	void clipCallback(
 		Media::Clip::Notification notification,
@@ -177,6 +182,9 @@ private:
 
 	bool _adjustShadowLeft = false;
 
+	QRegion _pathGradientRepaintRegion;
+	QRect _pathGradientRepaintBounds;
+	bool _pathGradientRepaintBounding = false;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	StickerPremiumMark _premiumMark;
 
@@ -1047,7 +1055,7 @@ FieldAutocomplete::Inner::Inner(
 , _pathGradient(std::make_unique<Ui::PathShiftGradient>(
 	_st.pathBg,
 	_st.pathFg,
-	[=] { update(); }))
+	[=] { repaintPathGradient(); }))
 , _premiumMark(_session, st::stickersPremiumLock)
 , _previewTimer([=] { showPreview(); }) {
 	_session->downloaderTaskFinished(
@@ -1146,11 +1154,17 @@ void FieldAutocomplete::Inner::paintEvent(QPaintEvent *e) {
 				} else if (const auto image = media->getStickerSmall()) {
 					p.drawPixmapLeft(ppos, width(), image->pix(size));
 				} else {
-					PaintStickerThumbnailPath(
+					const auto target = QRect(ppos, size);
+					const auto painted = PaintStickerThumbnailPath(
 						p,
 						media.get(),
-						QRect(ppos, size),
+						target,
 						_pathGradient.get());
+					if (painted) {
+						const auto transformed = p.transform().mapRect(
+							QRectF(target)).toAlignedRect();
+						addPathGradientRepaintRect(transformed);
+					}
 				}
 
 				if (document->isPremiumSticker()) {
@@ -1330,6 +1344,7 @@ void FieldAutocomplete::Inner::paintEvent(QPaintEvent *e) {
 }
 
 void FieldAutocomplete::Inner::resizeEvent(QResizeEvent *e) {
+	clearPathGradientRepaint();
 	_stickersPerRow = qMax(1, int32(width() - 2 * st::stickerPanPadding) / int32(st::stickerPanSize.width()));
 }
 
@@ -1681,6 +1696,7 @@ void FieldAutocomplete::Inner::setSel(int sel, bool scroll) {
 }
 
 void FieldAutocomplete::Inner::rowsUpdated() {
+	clearPathGradientRepaint();
 	if (_srows->empty()) {
 		_stickersLifetime.destroy();
 	}
@@ -1752,6 +1768,40 @@ void FieldAutocomplete::Inner::repaintStickerAtIndex(int index) {
 		st::stickerPanPadding + row * st::stickerPanSize.height(),
 		st::stickerPanSize.width(),
 		st::stickerPanSize.height());
+}
+
+void FieldAutocomplete::Inner::addPathGradientRepaintRect(QRect rect) {
+	rect = rect.intersected(this->rect());
+	if (rect.isEmpty()) {
+		return;
+	}
+	_pathGradientRepaintBounds = _pathGradientRepaintBounds.isEmpty()
+		? rect
+		: _pathGradientRepaintBounds.united(rect);
+	if (_pathGradientRepaintBounding) {
+		_pathGradientRepaintRegion = QRegion(_pathGradientRepaintBounds);
+		return;
+	}
+	_pathGradientRepaintRegion += rect;
+	if (_pathGradientRepaintRegion.rectCount()
+			> kMaxPathGradientRepaintRects) {
+		_pathGradientRepaintRegion = QRegion(_pathGradientRepaintBounds);
+		_pathGradientRepaintBounding = true;
+	}
+}
+
+void FieldAutocomplete::Inner::clearPathGradientRepaint() {
+	_pathGradientRepaintRegion = QRegion();
+	_pathGradientRepaintBounds = QRect();
+	_pathGradientRepaintBounding = false;
+}
+
+void FieldAutocomplete::Inner::repaintPathGradient() {
+	const auto region = _pathGradientRepaintRegion;
+	clearPathGradientRepaint();
+	if (!region.isEmpty()) {
+		update(region);
+	}
 }
 
 void FieldAutocomplete::Inner::clipCallback(
