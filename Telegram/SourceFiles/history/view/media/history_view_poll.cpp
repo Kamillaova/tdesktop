@@ -1671,6 +1671,7 @@ struct Poll::Header : public Poll::Part {
 	mutable QImage _attachedMediaCache;
 	mutable Ui::BubbleRounding _attachedMediaCacheRounding;
 	mutable bool _attachedMediaCacheBlurred = false;
+	mutable RepaintState _attachedMediaRepaint;
 	std::vector<RecentVoter> _recentVoters;
 	QImage _recentVotersImage;
 	mutable ClickHandlerPtr _showSolutionLink;
@@ -1707,10 +1708,12 @@ void Poll::Header::draw(
 		const PaintContext &context) const {
 	const auto stm = context.messageStyle();
 	auto tshift = countTopContentSkip();
+	auto attachedMediaRepaintRegion = QRegion();
 	auto descriptionRepaintRegion = QRegion();
 	auto descriptionRepaintKnown = context.hasElementPainter(p);
 
 	if (const auto mediaHeight = countTopMediaHeight()) {
+		const auto target = countTopMediaRect(tshift);
 		if (_attachedMediaAttach) {
 			const auto sideSkip = st::historyPollMediaSideSkip;
 			_attachedMediaAttach->setBubbleRounding(
@@ -1721,8 +1724,8 @@ void Poll::Header::draw(
 				context.translated(-sideSkip, -tshift)
 					.withSelection(TextSelection()));
 			p.translate(-sideSkip, -tshift);
+			attachedMediaRepaintRegion = QRegion(target);
 		} else {
-			const auto target = countTopMediaRect(tshift);
 			p.setPen(Qt::NoPen);
 			p.setBrush(stm->msgFileBg);
 			PainterHighQualityEnabler hq(p);
@@ -1763,8 +1766,13 @@ void Poll::Header::draw(
 					p.setClipPath(path);
 					p.drawImage(geometry, image, source);
 					p.restore();
+					attachedMediaRepaintRegion = QRegion(
+						Ui::DamageRect(geometry));
+				} else {
+					attachedMediaRepaintRegion = QRegion(target);
 				}
 			} else {
+				attachedMediaRepaintRegion = QRegion(target);
 				validateTopMediaCache(target.size());
 				if (!_attachedMediaCache.isNull()) {
 					p.drawImage(target.topLeft(),
@@ -1774,6 +1782,11 @@ void Poll::Header::draw(
 		}
 		tshift += mediaHeight + st::historyPollMediaSkip;
 	}
+	_owner->recordRepaintGeometry(
+		_attachedMediaRepaint,
+		p,
+		context,
+		attachedMediaRepaintRegion);
 
 	if (const auto descriptionHeight
 			= countDescriptionHeight(innerWidth)) {
@@ -2739,6 +2752,7 @@ void Poll::repaintRegion(const QRegion &region) const {
 void Poll::invalidateFiniteRepaintGeometries() const {
 	invalidateRepaintGeometry(_fireworksRepaint);
 	invalidateRepaintGeometry(_wrongAnswerRepaint);
+	invalidateRepaintGeometry(_headerPart->_attachedMediaRepaint);
 	invalidateRepaintGeometry(_headerPart->_solutionButtonRepaint);
 	invalidateRepaintGeometry(_addOptionPart->_rippleRepaint);
 	invalidateRepaintGeometry(_footerPart->_contentRepaint);
@@ -3374,7 +3388,7 @@ void Poll::Header::updateAttachedMedia() {
 			crl::guard(_owner, [=] {
 				if (!_owner->_parent->delegate()->elementAnimationsPaused()) {
 					_attachedMediaCache = QImage();
-					_owner->repaint();
+					_owner->repaintGeometry(_attachedMediaRepaint);
 				}
 			}));
 	}
@@ -4118,6 +4132,10 @@ void Poll::draw(Painter &p, const PaintContext &context) const {
 	}
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) {
 		if (context.hasElementPainter(p)) {
+			recordRepaintGeometry(
+				_headerPart->_attachedMediaRepaint,
+				QRegion(),
+				true);
 			recordRepaintGeometry(
 				_headerPart->_solutionButtonRepaint,
 				QRegion(),
