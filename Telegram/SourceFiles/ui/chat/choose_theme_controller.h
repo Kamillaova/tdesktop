@@ -58,7 +58,7 @@ private:
 	void close();
 
 	void clearCurrentBackgroundState();
-	void paintEntry(QPainter &p, const Entry &entry);
+	void paintEntry(QPainter &p, Entry &entry);
 	void applyInitialInnerLeft();
 	void updateInnerLeft(int now);
 

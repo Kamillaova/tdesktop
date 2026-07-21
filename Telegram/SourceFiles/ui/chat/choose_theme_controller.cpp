@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_theme.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/shadow.h"
 #include "ui/widgets/labels.h"
@@ -212,6 +213,8 @@ struct ChooseThemeController::Entry {
 	QImage preview;
 	QRect userpic;
 	QRect geometry;
+	QRect customEmojiRepaintRect;
+	bool customEmojiRepaintKnown = false;
 	bool chosen = false;
 };
 
@@ -393,12 +396,16 @@ void ChooseThemeController::initButtons() {
 	});
 }
 
-void ChooseThemeController::paintEntry(QPainter &p, const Entry &entry) {
+void ChooseThemeController::paintEntry(QPainter &p, Entry &entry) {
 	const auto geometry = entry.geometry;
 	p.drawImage(geometry, entry.preview);
 	if (const auto userpic = entry.takenUserpic.get()) {
+		const auto key = entry.key;
 		userpic->subscribeToUpdates([=] {
-			_inner->update();
+			const auto i = ranges::find(_entries, key, &Entry::key);
+			if (i != end(_entries)) {
+				_inner->update(i->userpic.translated(i->geometry.topLeft()));
+			}
 		});
 		p.drawImage(
 			entry.userpic.translated(geometry.topLeft()),
@@ -419,10 +426,18 @@ void ChooseThemeController::paintEntry(QPainter &p, const Entry &entry) {
 	if (const auto emoji = entry.emoji) {
 		Ui::Emoji::Draw(p, emoji, size, emojiLeft, emojiTop);
 	} else if (const auto custom = entry.custom.get()) {
-		custom->paint(p, {
+		const auto transform = p.transform();
+		const auto repaintBounds = custom->paint(p, {
 			.textColor = st::windowFg->c,
 			.position = { emojiLeft + customSkip, emojiTop + customSkip },
-		});
+		}).repaintBounds();
+		if (p.device() == _inner.get()) {
+			const auto mapped = Ui::DamageRect(repaintBounds, transform);
+			if (!mapped.isEmpty()) {
+				entry.customEmojiRepaintRect = mapped;
+				entry.customEmojiRepaintKnown = true;
+			}
+		}
 	}
 
 	if (entry.chosen) {
@@ -450,7 +465,7 @@ void ChooseThemeController::initList() {
 	_inner->paintRequest(
 	) | rpl::on_next([=](QRect clip) {
 		auto p = QPainter(_inner.get());
-		for (const auto &entry : _entries) {
+		for (auto &entry : _entries) {
 			if (entry.preview.isNull() || !clip.intersects(entry.geometry)) {
 				continue;
 			}
@@ -682,6 +697,17 @@ void ChooseThemeController::fill(
 			const auto themeUser = theme.unique
 				? theme.unique->themeUser
 				: nullptr;
+			const auto geometry = QRect(QPoint(x, skip), single);
+			const auto repaintCustomEmoji = [=] {
+				const auto i = ranges::find(_entries, key, &Entry::key);
+				if (i == end(_entries)) {
+					_inner->update(geometry);
+					return;
+				}
+				_inner->update(i->customEmojiRepaintKnown
+					? i->customEmojiRepaintRect
+					: i->geometry);
+			};
 			_entries.push_back({
 				.token = token,
 				.key = key,
@@ -692,13 +718,13 @@ void ChooseThemeController::fill(
 				.custom = (theme.unique
 					? manager->create(
 						theme.unique->model.document,
-						[=] { _inner->update(); },
+						repaintCustomEmoji,
 						Data::CustomEmojiSizeTag::Large)
 					: nullptr),
 				.emoji = (theme.emoticon.isEmpty()
 					? nullptr
 					: Ui::Emoji::Find(theme.emoticon)),
-				.geometry = QRect(QPoint(x, skip), single),
+				.geometry = geometry,
 				.chosen = isChosen,
 			});
 			_controller->cachedChatThemeValue(
