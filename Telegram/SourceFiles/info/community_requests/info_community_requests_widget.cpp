@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/numbers_animation.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/round_rect.h"
 #include "ui/rp_widget.h"
@@ -84,6 +85,37 @@ constexpr auto kPendingRowOpacity = 0.4;
 	return result;
 }
 
+[[nodiscard]] QRect UndoCountdownGeometry(
+		not_null<const QWidget*> button,
+		int width) {
+	return QRect(
+		width - st::toastUndoSkip - st::toastUndoDiameter,
+		(button->height() - st::toastUndoDiameter) / 2,
+		st::toastUndoDiameter,
+		st::toastUndoDiameter);
+}
+
+void RepaintUndoCountdown(not_null<QWidget*> button, int width) {
+	const auto inner = UndoCountdownGeometry(button, width);
+	const auto stroke = qreal(st::toastUndoStroke);
+	const auto envelope = Ui::DamageRect(QRectF(inner).marginsAdded({
+		stroke,
+		stroke,
+		stroke,
+		stroke,
+	}));
+	const auto strip = [=](QRect rect) {
+		return QRect(rect.x(), 0, rect.width(), button->height());
+	};
+	const auto arc = strip(envelope);
+	if (style::RightToLeft()) {
+		button->update(QRegion(arc).united(
+			strip(style::rtlrect(envelope, width))));
+	} else {
+		button->update(arc);
+	}
+}
+
 [[nodiscard]] not_null<Ui::AbstractButton*> MakeUndoButton(
 		not_null<QWidget*> parent,
 		int width,
@@ -96,10 +128,10 @@ constexpr auto kPendingRowOpacity = 0.4;
 	result->setClickedCallback(std::move(click));
 
 	struct State {
-		explicit State(not_null<QWidget*> button)
+		State(not_null<QWidget*> button, int width)
 		: countdown(
 			st::toastUndoFont,
-			[=] { button->update(); }) {
+			[=] { RepaintUndoCountdown(button, width); }) {
 		}
 
 		Ui::NumbersAnimation countdown;
@@ -109,7 +141,7 @@ constexpr auto kPendingRowOpacity = 0.4;
 		Fn<void()> update;
 		base::Timer timer;
 	};
-	const auto state = result->lifetime().make_state<State>(result);
+	const auto state = result->lifetime().make_state<State>(result, width);
 	const auto updateLeft = [=] {
 		const auto now = crl::now();
 		const auto left = state->finish - now;
@@ -136,7 +168,7 @@ constexpr auto kPendingRowOpacity = 0.4;
 			state->timer.cancel();
 		}
 		updateLeft();
-		result->update();
+		RepaintUndoCountdown(result, width);
 	};
 
 	result->paintRequest() | rpl::on_next([=] {
@@ -149,11 +181,7 @@ constexpr auto kPendingRowOpacity = 0.4;
 		p.setFont(font);
 		p.drawText(0, top + font->ascent, text);
 
-		const auto inner = QRect(
-			width - st::toastUndoSkip - st::toastUndoDiameter,
-			(result->height() - st::toastUndoDiameter) / 2,
-			st::toastUndoDiameter,
-			st::toastUndoDiameter);
+		const auto inner = UndoCountdownGeometry(result, width);
 		state->countdown.paint(
 			p,
 			inner.x() + (inner.width() - state->countdown.countWidth()) / 2,
