@@ -97,6 +97,8 @@ private:
 	bool finishDragging();
 	void subscribeUserpic(Entry &entry);
 	void unsubscribeUserpics(bool all = false);
+	void repaintUserpic(uint64 id);
+	void repaintRipple(uint64 id);
 	void paintUserpic(Painter &p, int x, int y, int index, bool selected);
 	void clearSelection();
 	void selectByMouse(QPoint globalPosition);

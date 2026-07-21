@@ -33,6 +33,8 @@ struct TopPeersStrip::Entry {
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	Ui::Animations::Simple onlineShown;
 	QImage userpicFrame;
+	QRect userpicRect;
+	QRect rippleRect;
 	float64 userpicFrameOnline = 0.;
 	QString badgeString;
 	uint32 badge : 27 = 0;
@@ -275,7 +277,7 @@ void TopPeersStrip::stripMousePressEvent(QMouseEvent *e) {
 				Ui::RippleAnimation::RoundRectMask(
 					innerRounded().size(),
 					st::topPeersRadius),
-				[=] { update(); });
+				[=, id = entry.id] { repaintRipple(id); });
 		}
 		const auto layout = currentLayout();
 		const auto expanded = _expanded.current();
@@ -367,8 +369,8 @@ void TopPeersStrip::subscribeUserpic(Entry &entry) {
 			[&](const Entry &entry) { return entry.userpic.get(); });
 		if (i != end(_entries)) {
 			i->userpicFrameDirty = 1;
+			repaintUserpic(i->id);
 		}
-		update();
 	});
 	entry.subscribed = true;
 }
@@ -673,7 +675,7 @@ void TopPeersStrip::apply(Entry &entry, const TopPeersEntry &data) {
 			entry.onlineShown.stop();
 		} else {
 			entry.onlineShown.start(
-				[=] { update(); },
+				[=, id = entry.id] { repaintUserpic(id); },
 				entry.online ? 0. : 1.,
 				entry.online ? 1. : 0.,
 				st::dialogsOnlineBadgeDuration);
@@ -706,6 +708,56 @@ QRect TopPeersStrip::outer() const {
 
 QRect TopPeersStrip::innerRounded() const {
 	return outer().marginsRemoved(st::topPeersMargin);
+}
+
+void TopPeersStrip::repaintUserpic(uint64 id) {
+	const auto i = ranges::find(_entries, id, &Entry::id);
+	if (i == end(_entries)) {
+		return;
+	}
+	const auto index = int(i - begin(_entries));
+	const auto layout = currentLayout();
+	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
+	if (_expandAnimation.animating()
+		|| i->userpicRect.isEmpty()
+		|| i->userpicRect.y() != rowTop + st::topPeers.photoTop) {
+		_strip.update();
+		return;
+	}
+	if (_expanded.current()) {
+		_strip.update(0, rowTop, _strip.width(), st::topPeers.height);
+		return;
+	}
+	if (i->userpicRect.intersects(_strip.rect())) {
+		_strip.update(i->userpicRect);
+	}
+}
+
+void TopPeersStrip::repaintRipple(uint64 id) {
+	const auto i = ranges::find(_entries, id, &Entry::id);
+	if (i == end(_entries)) {
+		return;
+	}
+	const auto index = int(i - begin(_entries));
+	const auto layout = currentLayout();
+	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
+	if (_expandAnimation.animating()
+		|| i->rippleRect.isEmpty()
+		|| i->rippleRect.y() != rowTop + innerRounded().y()) {
+		_strip.update();
+		return;
+	}
+	if (_expanded.current()) {
+		_strip.update(0, rowTop, _strip.width(), st::topPeers.height);
+		return;
+	}
+	if (style::RightToLeft()) {
+		_strip.update();
+		return;
+	}
+	if (i->rippleRect.intersects(_strip.rect())) {
+		_strip.update(i->rippleRect);
+	}
 }
 
 int TopPeersStrip::scrollLeft() const {
@@ -754,6 +806,9 @@ void TopPeersStrip::paintStrip(QRect clip) {
 				_selection.paint(p, innerRounded().translated(x, y));
 			}
 			if (entry.ripple) {
+				entry.rippleRect = style::rtlrect(
+					innerRounded().translated(x, y),
+					width());
 				entry.ripple->paint(
 					p,
 					x + st::topPeersMargin.left(),
@@ -761,7 +816,10 @@ void TopPeersStrip::paintStrip(QRect clip) {
 					width());
 				if (entry.ripple->empty()) {
 					entry.ripple = nullptr;
+					entry.rippleRect = QRect();
 				}
+			} else {
+				entry.rippleRect = QRect();
 			}
 
 			if (!entry.subscribed) {
@@ -794,6 +852,7 @@ void TopPeersStrip::paintUserpic(
 	const auto &st = st::topPeers;
 	const auto size = st.photo;
 	const auto rect = QRect(x + st.photoLeft, y + st.photoTop, size, size);
+	entry.userpicRect = rect;
 
 	const auto online = entry.onlineShown.value(entry.online ? 1. : 0.);
 	const auto useFrame = !entry.userpicFrame.isNull()
