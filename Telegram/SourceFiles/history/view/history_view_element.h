@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class History;
 class HistoryBlock;
 class HistoryItem;
+class QPainter;
 class UserData;
 struct HistoryMessageReply;
 struct PreparedServiceText;
@@ -153,6 +154,11 @@ public:
 	virtual void elementHandleViaClick(not_null<UserData*> bot) = 0;
 	virtual ElementChatMode elementChatMode() = 0;
 	virtual not_null<Ui::PathShiftGradient*> elementPathShiftGradient() = 0;
+	virtual void elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect);
 	virtual void elementReplyTo(const FullReplyTo &to) = 0;
 	virtual void elementStartInteraction(not_null<const Element*> view) = 0;
 	virtual void elementStartPremium(
@@ -173,6 +179,30 @@ public:
 [[nodiscard]] std::unique_ptr<Ui::PathShiftGradient> MakePathShiftGradient(
 	not_null<const Ui::ChatStyle*> st,
 	Fn<void()> update);
+
+class PathShiftGradientRepaintTracker final {
+public:
+	PathShiftGradientRepaintTracker(
+		Fn<QRect()> repaintArea,
+		Fn<void(const QRegion &)> repaint);
+
+	void record(
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect,
+		QPoint ownerOffset);
+	void recordUnknown();
+	void repaint();
+
+private:
+	const Fn<QRect()> _repaintArea;
+	const Fn<void(const QRegion &)> _repaint;
+	QRegion _pending;
+	QRect _pendingBounds;
+	bool _bounding = false;
+	bool _unknown = false;
+
+};
 
 class DefaultElementDelegate : public ElementDelegate {
 public:

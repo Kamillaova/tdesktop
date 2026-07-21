@@ -3600,6 +3600,14 @@ void Message::paintRichText(
 			}
 		};
 	}
+	const auto pathShiftGradientPainted = Fn<void(QRect)>(
+		[&, this](QRect articleRect) {
+			delegate()->elementPathShiftGradientPainted(
+				this,
+				p,
+				context,
+				articleRect);
+		});
 	const auto stm = context.messageStyle();
 	const auto paletteVersion = context.st->paletteVersion();
 	if (rich->paletteVersion != paletteVersion) {
@@ -3645,6 +3653,7 @@ void Message::paintRichText(
 			contentColorIndex()),
 		.thinking = &rich->thinkingPaintCache,
 		.pathShiftGradient = delegate()->elementPathShiftGradient().get(),
+		.pathShiftGradientPainted = &pathShiftGradientPainted,
 		.colors = context.st->highlightColors(),
 		.st = &stm->richPageStyle,
 		.repaint = [

@@ -458,10 +458,18 @@ ListWidget::ListWidget(
 	[=](not_null<const Element*> view) { return itemTop(view); }))
 , _context(_delegate->listContext())
 , _itemAverageHeight(itemMinimalHeight())
+, _pathGradientRepaint(
+	[=] {
+		const auto height = _visibleBottom - _visibleTop;
+		return (height > 0)
+			? QRect(0, _visibleTop, width(), height)
+			: rect();
+	},
+	[=](const QRegion &region) { update(region); })
 , _pathGradient(
 	MakePathShiftGradient(
 		_delegate->listChatStyle(),
-		[=] { update(); }))
+		[=] { _pathGradientRepaint.repaint(); }))
 , _reactionsManager(_delegate->listMakeReactionsManager(
 	this,
 	[=](QRect updated) { update(updated); }))
@@ -2162,6 +2170,26 @@ ElementChatMode ListWidget::elementChatMode() {
 
 not_null<Ui::PathShiftGradient*> ListWidget::elementPathShiftGradient() {
 	return _pathGradient.get();
+}
+
+void ListWidget::elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect) {
+	if (p.device() != this) {
+		return;
+	}
+	const auto top = itemTopForRepaint(view);
+	if (top < 0) {
+		_pathGradientRepaint.recordUnknown();
+	} else {
+		_pathGradientRepaint.record(
+			p,
+			context,
+			rect,
+			QPoint(0, top));
+	}
 }
 
 void ListWidget::elementReplyTo(const FullReplyTo &to) {

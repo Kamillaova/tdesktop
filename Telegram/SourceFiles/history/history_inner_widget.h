@@ -46,6 +46,7 @@ enum class ElementChatMode : char;
 class ElementOverlayHost;
 class EmptyPainter;
 class Element;
+class PathShiftGradientRepaintTracker;
 class TranslateTracker;
 class ReadMetricsTracker;
 struct PinnedId;
@@ -232,6 +233,11 @@ public:
 	void elementHandleViaClick(not_null<UserData*> bot);
 	HistoryView::ElementChatMode elementChatMode();
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient();
+	void elementPathShiftGradientPainted(
+		not_null<const HistoryView::Element*> view,
+		const QPainter &p,
+		const Ui::ChatPaintContext &context,
+		QRectF rect);
 	void elementReplyTo(const FullReplyTo &to);
 	void elementStartInteraction(not_null<const Element*> view);
 	void elementStartPremium(
@@ -630,6 +636,8 @@ private:
 	HistoryView::KeyboardTextSelection _keyboardTextSelection;
 	std::optional<Data::ReportInput> _chooseForReportReason;
 
+	const std::unique_ptr<
+		HistoryView::PathShiftGradientRepaintTracker> _pathGradientRepaint;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	QPainterPath _highlightPathCache;
 	bool _isChatWide = false;

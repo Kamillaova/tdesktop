@@ -96,6 +96,7 @@ namespace {
 // A new message from the same sender is attached to previous within 15 minutes.
 constexpr int kAttachMessageToPreviousSecondsDelta = 900;
 constexpr auto kMaxShownLine = 1024 * 1024;
+constexpr auto kMaxPathShiftGradientRepaintRects = 16;
 
 [[nodiscard]] QMargins CustomEmojiTextRepaintMargins() {
 	const auto inner = st::emojiSize;
@@ -513,6 +514,67 @@ std::unique_ptr<Ui::PathShiftGradient> MakePathShiftGradient(
 		st->msgServiceBgSelected(),
 		std::move(update),
 		st->paletteChanged());
+}
+
+PathShiftGradientRepaintTracker::PathShiftGradientRepaintTracker(
+	Fn<QRect()> repaintArea,
+	Fn<void(const QRegion &)> repaint)
+: _repaintArea(std::move(repaintArea))
+, _repaint(std::move(repaint)) {
+}
+
+void PathShiftGradientRepaintTracker::record(
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect,
+		QPoint ownerOffset) {
+	if (!context.hasElementPainter(p)) {
+		_unknown = true;
+		return;
+	}
+	const auto mapped = context.mapToElement(p, rect);
+	if (!mapped || mapped->isEmpty()) {
+		_unknown = true;
+		return;
+	}
+	const auto ownerRect = mapped->translated(ownerOffset);
+	_pendingBounds = _pendingBounds.isEmpty()
+		? ownerRect
+		: _pendingBounds.united(ownerRect);
+	if (_bounding) {
+		_pending = QRegion(_pendingBounds);
+		return;
+	}
+	_pending += ownerRect;
+	if (_pending.rectCount() > kMaxPathShiftGradientRepaintRects) {
+		_pending = QRegion(_pendingBounds);
+		_bounding = true;
+	}
+}
+
+void PathShiftGradientRepaintTracker::recordUnknown() {
+	_unknown = true;
+}
+
+void PathShiftGradientRepaintTracker::repaint() {
+	const auto area = _repaintArea();
+	const auto region = _unknown
+		? QRegion(area)
+		: _pending.intersected(area);
+	_pending = QRegion();
+	_pendingBounds = QRect();
+	_bounding = false;
+	_unknown = false;
+	if (!region.isEmpty()) {
+		_repaint(region);
+	}
+}
+
+void ElementDelegate::elementPathShiftGradientPainted(
+		not_null<const Element*>,
+		const QPainter &,
+		const PaintContext &,
+		QRectF) {
 }
 
 bool DefaultElementDelegate::elementUnderCursor(

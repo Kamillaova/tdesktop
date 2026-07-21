@@ -165,6 +165,7 @@ struct MarkdownArticlePaintCaches {
 	Ui::Text::QuotePaintCache *blockquote = nullptr;
 	MarkdownArticleThinkingPaintCache *thinking = nullptr;
 	Ui::PathShiftGradient *pathShiftGradient = nullptr;
+	const Fn<void(QRect)> *pathShiftGradientPainted = nullptr;
 	std::span<Ui::Text::SpecialColor> colors;
 	const style::Markdown *st = nullptr;
 	Fn<void()> repaint;

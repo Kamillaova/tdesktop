@@ -477,6 +477,11 @@ public:
 	void elementHandleViaClick(not_null<UserData*> bot) override;
 	ElementChatMode elementChatMode() override;
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
+	void elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect) override;
 	void elementReplyTo(const FullReplyTo &to) override;
 	void elementStartInteraction(not_null<const Element*> view) override;
 	void elementStartPremium(
@@ -879,6 +884,7 @@ private:
 	base::flat_map<not_null<PeerData*>, Ui::PeerUserpicView> _userpicsCache;
 	base::flat_map<MsgId, Ui::PeerUserpicView> _hiddenSenderUserpics;
 
+	PathShiftGradientRepaintTracker _pathGradientRepaint;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	QPainterPath _highlightPathCache;
 

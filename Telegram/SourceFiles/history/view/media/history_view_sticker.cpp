@@ -444,12 +444,19 @@ void Sticker::paintPath(
 		pathGradient->clearOverridenColors();
 	}
 	p.setBrush(context.imageStyle()->msgServiceBg);
-	ChatHelpers::PaintStickerThumbnailPath(
+	const auto painted = ChatHelpers::PaintStickerThumbnailPath(
 		p,
 		_dataMedia.get(),
 		r,
 		pathGradient,
 		mirrorHorizontal());
+	if (painted) {
+		_parent->delegate()->elementPathShiftGradientPainted(
+			_parent,
+			p,
+			context,
+			r);
+	}
 	if (helper) {
 		pathGradient->clearOverridenColors();
 	}

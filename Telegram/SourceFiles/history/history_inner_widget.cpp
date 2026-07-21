@@ -312,6 +312,19 @@ public:
 
 		return _widget->elementPathShiftGradient();
 	}
+	void elementPathShiftGradientPainted(
+			not_null<const Element*> view,
+			const QPainter &p,
+			const HistoryView::PaintContext &context,
+			QRectF rect) override {
+		if (_widget) {
+			_widget->elementPathShiftGradientPainted(
+				view,
+				p,
+				context,
+				rect);
+		}
+	}
 	void elementReplyTo(const FullReplyTo &to) override {
 		if (_widget) {
 			_widget->elementReplyTo(to);
@@ -377,10 +390,22 @@ HistoryInner::HistoryInner(
 , _translateTracker(std::make_unique<HistoryView::TranslateTracker>(history))
 , _readMetricsTracker(std::make_unique<HistoryView::ReadMetricsTracker>(
 	_peer))
+, _pathGradientRepaint(std::make_unique<
+	HistoryView::PathShiftGradientRepaintTracker>(
+	[=] {
+		if (_widget->skipItemRepaint()) {
+			return QRect();
+		}
+		const auto height = _visibleAreaBottom - _visibleAreaTop;
+		return (height > 0)
+			? QRect(0, _visibleAreaTop, width(), height)
+			: rect();
+	},
+	[=](const QRegion &region) { update(region); }))
 , _pathGradient(
 	HistoryView::MakePathShiftGradient(
 		controller->chatStyle(),
-		[=] { update(); }))
+		[=] { _pathGradientRepaint->repaint(); }))
 , _reactionsManager(
 	std::make_unique<HistoryView::Reactions::Manager>(
 		this,
@@ -5117,6 +5142,26 @@ HistoryView::ElementChatMode HistoryInner::elementChatMode() {
 
 not_null<Ui::PathShiftGradient*> HistoryInner::elementPathShiftGradient() {
 	return _pathGradient.get();
+}
+
+void HistoryInner::elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const Ui::ChatPaintContext &context,
+		QRectF rect) {
+	if (p.device() != this) {
+		return;
+	}
+	const auto top = itemTopForRepaint(view);
+	if (top < 0) {
+		_pathGradientRepaint->recordUnknown();
+	} else {
+		_pathGradientRepaint->record(
+			p,
+			context,
+			rect,
+			QPoint(0, top));
+	}
 }
 
 void HistoryInner::elementReplyTo(const FullReplyTo &to) {

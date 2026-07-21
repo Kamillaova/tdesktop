@@ -267,10 +267,18 @@ InnerWidget::InnerWidget(
 , _channel(channel)
 , _history(channel->owner().history(channel))
 , _api(&_channel->session().mtp())
+, _pathGradientRepaint(
+	[=] {
+		const auto height = _visibleBottom - _visibleTop;
+		return (height > 0)
+			? QRect(0, _visibleTop, width(), height)
+			: rect();
+	},
+	[=](const QRegion &region) { update(region); })
 , _pathGradient(
 	HistoryView::MakePathShiftGradient(
 		controller->chatStyle(),
-		[=] { update(); }))
+		[=] { _pathGradientRepaint.repaint(); }))
 , _highlighter(
 	&_history->owner(),
 	[=](const HistoryItem *item) { return viewForItem(item); },
@@ -878,6 +886,26 @@ HistoryView::ElementChatMode InnerWidget::elementChatMode() {
 
 not_null<Ui::PathShiftGradient*> InnerWidget::elementPathShiftGradient() {
 	return _pathGradient.get();
+}
+
+void InnerWidget::elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const Ui::ChatPaintContext &context,
+		QRectF rect) {
+	if (p.device() != this) {
+		return;
+	}
+	const auto top = itemTop(view);
+	if (top < 0) {
+		_pathGradientRepaint.recordUnknown();
+	} else {
+		_pathGradientRepaint.record(
+			p,
+			context,
+			rect,
+			QPoint(0, top));
+	}
 }
 
 void InnerWidget::elementReplyTo(const FullReplyTo &to) {

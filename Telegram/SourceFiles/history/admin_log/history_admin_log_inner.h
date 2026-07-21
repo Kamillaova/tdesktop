@@ -166,6 +166,11 @@ public:
 	void elementHandleViaClick(not_null<UserData*> bot) override;
 	HistoryView::ElementChatMode elementChatMode() override;
 	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
+	void elementPathShiftGradientPainted(
+		not_null<const HistoryView::Element*> view,
+		const QPainter &p,
+		const Ui::ChatPaintContext &context,
+		QRectF rect) override;
 	void elementReplyTo(const FullReplyTo &to) override;
 	void elementStartInteraction(
 		not_null<const HistoryView::Element*> view) override;
@@ -362,6 +367,7 @@ private:
 	const not_null<History*> _history;
 	MTP::Sender _api;
 
+	HistoryView::PathShiftGradientRepaintTracker _pathGradientRepaint;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	std::shared_ptr<Ui::ChatTheme> _theme;
 

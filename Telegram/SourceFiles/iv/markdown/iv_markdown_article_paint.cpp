@@ -2940,6 +2940,10 @@ void PaintThinkingBlock(
 		PaintHorizontalScrollbar(p, block, st, context);
 		return;
 	}
+	if (!contentClip.isEmpty()
+		&& context.caches.pathShiftGradientPainted) {
+		(*context.caches.pathShiftGradientPainted)(contentClip);
+	}
 
 	p.save();
 	p.setClipRect(contentClip, Qt::IntersectClip);
