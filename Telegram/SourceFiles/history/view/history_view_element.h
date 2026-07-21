@@ -18,7 +18,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class History;
 class HistoryBlock;
 class HistoryItem;
+class QPaintDevice;
 class QPainter;
+class QWidget;
 class UserData;
 struct HistoryMessageReply;
 struct PreparedServiceText;
@@ -195,10 +197,16 @@ public:
 		const PaintContext &context,
 		QRectF rect,
 		QPoint ownerOffset);
+	void record(
+		const QPainter &p,
+		QRectF rect,
+		const QPaintDevice *device);
 	void recordUnknown();
 	void repaint();
 
 private:
+	void add(QRect rect);
+
 	const Fn<QRect()> _repaintArea;
 	const Fn<void(const QRegion &)> _repaint;
 	QRegion _pending;
@@ -264,6 +272,33 @@ public:
 		Element *replacing) override;
 	QString elementAuthorRank(not_null<const Element*> view) override;
 	bool elementHideTopicButton(not_null<const Element*> view) override;
+
+};
+
+class WidgetElementDelegate : public DefaultElementDelegate {
+public:
+	WidgetElementDelegate(
+		not_null<QWidget*> widget,
+		not_null<const Ui::ChatStyle*> st);
+	WidgetElementDelegate(
+		not_null<QWidget*> widget,
+		not_null<const Ui::ChatStyle*> st,
+		Fn<bool()> animationsPaused);
+	~WidgetElementDelegate();
+
+	bool elementAnimationsPaused() override;
+	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
+	void elementPathShiftGradientPainted(
+		not_null<const Element*> view,
+		const QPainter &p,
+		const PaintContext &context,
+		QRectF rect) override;
+
+private:
+	const not_null<QWidget*> _widget;
+	const Fn<bool()> _animationsPaused;
+	PathShiftGradientRepaintTracker _pathGradientRepaint;
+	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 
 };
 

@@ -69,23 +69,57 @@ constexpr auto kToggleDuration = crl::time(400);
 
 class Delegate final : public HistoryView::DefaultElementDelegate {
 public:
-	Delegate(not_null<Ui::PathShiftGradient*> pathGradient)
-	: _pathGradient(pathGradient) {
-	}
+	Delegate(
+		not_null<Ui::ChatStyle*> st,
+		Fn<QRect()> repaintArea,
+		Fn<void(const QRegion &)> repaint);
+
+	void setPaintDevice(const QPaintDevice *device);
 
 private:
 	bool elementAnimationsPaused() override {
 		return false;
 	}
-	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override {
-		return _pathGradient;
-	}
+	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
+	void elementPathShiftGradientPainted(
+		not_null<const HistoryView::Element*> view,
+		const QPainter &p,
+		const HistoryView::PaintContext &context,
+		QRectF rect) override;
 	HistoryView::Context elementContext() override {
 		return HistoryView::Context::ContactPreview;
 	}
 
-	const not_null<Ui::PathShiftGradient*> _pathGradient;
+	HistoryView::PathShiftGradientRepaintTracker _pathGradientRepaint;
+	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
+	const QPaintDevice *_paintDevice = nullptr;
 };
+
+Delegate::Delegate(
+		not_null<Ui::ChatStyle*> st,
+		Fn<QRect()> repaintArea,
+		Fn<void(const QRegion &)> repaint)
+: _pathGradientRepaint(std::move(repaintArea), std::move(repaint))
+, _pathGradient(HistoryView::MakePathShiftGradient(
+	st,
+	[=] { _pathGradientRepaint.repaint(); })) {
+}
+
+void Delegate::setPaintDevice(const QPaintDevice *device) {
+	_paintDevice = device;
+}
+
+not_null<Ui::PathShiftGradient*> Delegate::elementPathShiftGradient() {
+	return _pathGradient.get();
+}
+
+void Delegate::elementPathShiftGradientPainted(
+		not_null<const HistoryView::Element*>,
+		const QPainter &p,
+		const HistoryView::PaintContext &,
+		QRectF rect) {
+	_pathGradientRepaint.record(p, rect, _paintDevice);
+}
 
 class EffectPreview final : public Ui::RpWidget {
 public:
@@ -126,7 +160,6 @@ private:
 	const std::shared_ptr<ChatHelpers::Show> _show;
 	const std::shared_ptr<Ui::ChatTheme> _theme;
 	const std::unique_ptr<Ui::ChatStyle> _chatStyle;
-	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	const std::unique_ptr<Delegate> _delegate;
 	const not_null<History*> _history;
 	const AdminLog::OwnedItem _replyTo;
@@ -145,6 +178,7 @@ private:
 
 	QRect _inner;
 	QImage _bg;
+	bool _backgroundStale = false;
 	QPoint _itemShift;
 	QRect _iconRect;
 	Ui::BoxShadow _boxShadow;
@@ -247,9 +281,17 @@ EffectPreview::EffectPreview(
 , _chatStyle(
 	std::make_unique<Ui::ChatStyle>(
 		_show->session().colorIndicesValue()))
-, _pathGradient(
-	HistoryView::MakePathShiftGradient(_chatStyle.get(), [=] { update(); }))
-, _delegate(std::make_unique<Delegate>(_pathGradient.get()))
+, _delegate(std::make_unique<Delegate>(
+	_chatStyle.get(),
+	[=] {
+		return QRect(
+			QPoint(),
+			_inner.size() + QSize(0, _bottom->height()));
+	},
+	[=](const QRegion &region) {
+		_backgroundStale = true;
+		update(region.translated(_inner.topLeft()));
+	}))
 , _history(show->session().data().history(
 	PeerData::kServiceNotificationsId))
 , _replyTo(HistoryView::GenerateItem(
@@ -302,6 +344,9 @@ EffectPreview::EffectPreview(
 
 void EffectPreview::paintEvent(QPaintEvent *e) {
 	checkIconBecameLoaded();
+	if (_backgroundStale) {
+		repaintBackground();
+	}
 
 	const auto progress = _shownAnimation.value(_hiding ? 0. : 1.);
 	if (!progress) {
@@ -433,6 +478,7 @@ void EffectPreview::setupItem() {
 }
 
 void EffectPreview::repaintBackground() {
+	_backgroundStale = false;
 	const auto ratio = style::DevicePixelRatio();
 	const auto inner = _inner.size() + QSize(0, _bottom->height());
 	auto bg = QImage(
@@ -460,7 +506,9 @@ void EffectPreview::repaintBackground() {
 			rect,
 			false);
 		context.outbg = _item->hasOutLayout();
+		_delegate->setPaintDevice(&bg);
 		_item->draw(p, context);
+		_delegate->setPaintDevice(nullptr);
 		p.translate(_inner.topLeft() - _itemShift);
 
 		auto hq = PainterHighQualityEnabler(p);

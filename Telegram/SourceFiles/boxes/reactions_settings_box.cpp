@@ -62,9 +62,9 @@ void AddMessage(
 			0,
 			st::settingsPrivacySkipTop));
 
-	class Delegate final : public HistoryView::SimpleElementDelegate {
+	class Delegate final : public HistoryView::WidgetElementDelegate {
 	public:
-		using HistoryView::SimpleElementDelegate::SimpleElementDelegate;
+		using HistoryView::WidgetElementDelegate::WidgetElementDelegate;
 	private:
 		HistoryView::Context elementContext() override {
 			return HistoryView::Context::ContactPreview;
@@ -72,23 +72,27 @@ void AddMessage(
 	};
 
 	struct State {
+		std::unique_ptr<Ui::ChatStyle> style;
+		std::unique_ptr<Delegate> delegate;
 		AdminLog::OwnedItem reply;
 		AdminLog::OwnedItem item;
-		std::unique_ptr<Delegate> delegate;
-		std::unique_ptr<Ui::ChatStyle> style;
 
 		struct {
 			std::vector<rpl::lifetime> lifetimes;
 			bool flag = false;
 		} icons;
 	};
-	const auto state = container->lifetime().make_state<State>();
-	state->delegate = std::make_unique<Delegate>(
-		controller,
-		crl::guard(widget, [=] { widget->update(); }));
+	const auto state = widget->lifetime().make_state<State>();
 	state->style = std::make_unique<Ui::ChatStyle>(
 		controller->session().colorIndicesValue());
 	state->style->apply(controller->defaultChatTheme().get());
+	state->delegate = std::make_unique<Delegate>(
+		widget,
+		state->style.get(),
+		[=] {
+			return controller->isGifPausedAtLeastFor(
+				Window::GifPauseReason::Any);
+		});
 	state->icons.lifetimes = std::vector<rpl::lifetime>(2);
 
 	const auto history = controller->session().data().history(

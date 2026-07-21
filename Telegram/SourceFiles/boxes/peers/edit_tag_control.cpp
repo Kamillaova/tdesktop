@@ -23,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
-#include "ui/effects/path_shift_gradient.h"
 #include "ui/painter.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/fields/input_field.h"
@@ -100,34 +99,27 @@ void TextLinesPart::draw(
 	}
 }
 
-class TagPreviewDelegate final : public DefaultElementDelegate {
+class TagPreviewDelegate final : public WidgetElementDelegate {
 public:
 	TagPreviewDelegate(
-		not_null<QWidget*> parent,
-		not_null<Ui::ChatStyle*> st,
-		Fn<void()> update);
+		not_null<QWidget*> widget,
+		not_null<Ui::ChatStyle*> st);
 
 	void setTagText(const QString &text);
 	[[nodiscard]] const QString &tagText() const;
 
-	bool elementAnimationsPaused() override;
-	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
 	Context elementContext() override;
 	QString elementAuthorRank(not_null<const Element*> view) override;
 
 private:
-	const not_null<QWidget*> _parent;
-	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	QString _tagText;
 
 };
 
 TagPreviewDelegate::TagPreviewDelegate(
-	not_null<QWidget*> parent,
-	not_null<Ui::ChatStyle*> st,
-	Fn<void()> update)
-: _parent(parent)
-, _pathGradient(MakePathShiftGradient(st, std::move(update))) {
+	not_null<QWidget*> widget,
+	not_null<Ui::ChatStyle*> st)
+: WidgetElementDelegate(widget, st) {
 }
 
 void TagPreviewDelegate::setTagText(const QString &text) {
@@ -136,15 +128,6 @@ void TagPreviewDelegate::setTagText(const QString &text) {
 
 const QString &TagPreviewDelegate::tagText() const {
 	return _tagText;
-}
-
-bool TagPreviewDelegate::elementAnimationsPaused() {
-	return _parent->window()->isActiveWindow();
-}
-
-auto TagPreviewDelegate::elementPathShiftGradient()
--> not_null<Ui::PathShiftGradient*> {
-	return _pathGradient.get();
 }
 
 Context TagPreviewDelegate::elementContext() {
@@ -226,8 +209,7 @@ EditTagControl::PreviewWidget::PreviewWidget(
 	session->colorIndicesValue()))
 , _delegate(std::make_unique<TagPreviewDelegate>(
 	this,
-	_style.get(),
-	[=] { update(); }))
+	_style.get()))
 , _topSkip(st::msgMargin.bottom() * 2)
 , _bottomSkip(st::msgMargin.bottom() + st::msgMargin.top()) {
 	_style->apply(_theme.get());

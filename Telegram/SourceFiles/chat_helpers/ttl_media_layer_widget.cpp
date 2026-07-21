@@ -23,7 +23,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/player/media_player_instance.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
-#include "ui/effects/path_shift_gradient.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/text/text_utilities.h"
@@ -42,42 +41,27 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace ChatHelpers {
 namespace {
 
-class PreviewDelegate final : public HistoryView::DefaultElementDelegate {
+class PreviewDelegate final : public HistoryView::WidgetElementDelegate {
 public:
 	PreviewDelegate(
-		not_null<QWidget*> parent,
+		not_null<QWidget*> widget,
 		not_null<Ui::ChatStyle*> st,
-		rpl::producer<bool> chatWideValue,
-		Fn<void()> update);
+		rpl::producer<bool> chatWideValue);
 
-	bool elementAnimationsPaused() override;
-	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
 	HistoryView::Context elementContext() override;
 	HistoryView::ElementChatMode elementChatMode() override;
 
 private:
-	const not_null<QWidget*> _parent;
-	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 	rpl::variable<bool> _chatWide;
 
 };
 
 PreviewDelegate::PreviewDelegate(
-	not_null<QWidget*> parent,
+	not_null<QWidget*> widget,
 	not_null<Ui::ChatStyle*> st,
-	rpl::producer<bool> chatWideValue,
-	Fn<void()> update)
-: _parent(parent)
-, _pathGradient(HistoryView::MakePathShiftGradient(st, update))
+	rpl::producer<bool> chatWideValue)
+: WidgetElementDelegate(widget, st)
 , _chatWide(std::move(chatWideValue)) {
-}
-
-bool PreviewDelegate::elementAnimationsPaused() {
-	return _parent->window()->isActiveWindow();
-}
-
-not_null<Ui::PathShiftGradient*> PreviewDelegate::elementPathShiftGradient() {
-	return _pathGradient.get();
 }
 
 HistoryView::Context PreviewDelegate::elementContext() {
@@ -137,10 +121,9 @@ PreviewWrap::PreviewWrap(
 , _style(std::make_unique<Ui::ChatStyle>(
 	item->history()->session().colorIndicesValue()))
 , _delegate(std::make_unique<PreviewDelegate>(
-	parent,
+	this,
 	_style.get(),
-	std::move(chatWideValue),
-	[=] { update(_elementGeometry); }))
+	std::move(chatWideValue)))
 , _globalViewport(std::move(viewportValue)) {
 	const auto closeCallback = [=] { _closeRequests.fire({}); };
 	HistoryView::TTLVoiceStops(

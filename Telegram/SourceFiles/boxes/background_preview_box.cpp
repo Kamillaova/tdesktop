@@ -184,10 +184,16 @@ struct BackgroundPreviewBox::OverridenStyle {
 
 BackgroundPreviewBox::BackgroundPreviewBox(
 	QWidget*,
-	not_null<Window::SessionController*> controller,
-	const Data::WallPaper &paper,
-	BackgroundPreviewArgs args)
-: SimpleElementDelegate(controller, [=] { update(); })
+		not_null<Window::SessionController*> controller,
+		const Data::WallPaper &paper,
+		BackgroundPreviewArgs args)
+: WidgetElementDelegate(
+	this,
+	controller->chatStyle(),
+	[=] {
+		return controller->isGifPausedAtLeastFor(
+			Window::GifPauseReason::Any);
+	})
 , _controller(controller)
 , _forPeer(args.forPeer)
 , _fromMessageId(args.fromMessageId)

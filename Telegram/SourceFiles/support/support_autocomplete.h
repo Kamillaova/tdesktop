@@ -66,7 +66,7 @@ private:
 
 class ConfirmContactBox
 	: public Ui::BoxContent
-	, public HistoryView::SimpleElementDelegate {
+	, public HistoryView::WidgetElementDelegate {
 public:
 	ConfirmContactBox(
 		QWidget*,
@@ -84,6 +84,7 @@ protected:
 	void keyPressEvent(QKeyEvent *e) override;
 
 private:
+	const not_null<Window::SessionController*> _controller;
 	std::unique_ptr<Ui::ChatStyle> _chatStyle;
 	AdminLog::OwnedItem _comment;
 	AdminLog::OwnedItem _contact;

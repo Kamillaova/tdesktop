@@ -482,10 +482,17 @@ void Autocomplete::submitValue(const QString &value) {
 ConfirmContactBox::ConfirmContactBox(
 	QWidget*,
 	not_null<Window::SessionController*> controller,
-	not_null<History*> history,
-	const Contact &data,
-	Fn<void(Qt::KeyboardModifiers)> submit)
-: SimpleElementDelegate(controller, [=] { update(); })
+		not_null<History*> history,
+		const Contact &data,
+		Fn<void(Qt::KeyboardModifiers)> submit)
+: WidgetElementDelegate(
+	this,
+	controller->chatStyle(),
+	[=] {
+		return controller->isGifPausedAtLeastFor(
+			Window::GifPauseReason::Any);
+	})
+, _controller(controller)
 , _chatStyle(std::make_unique<Ui::ChatStyle>(
 	history->session().colorIndicesValue()))
 , _comment(GenerateCommentItem(this, history, data))
@@ -552,13 +559,13 @@ void ConfirmContactBox::paintEvent(QPaintEvent *e) {
 
 	p.fillRect(e->rect(), st::boxBg);
 
-	const auto theme = controller()->defaultChatTheme().get();
+	const auto theme = _controller->defaultChatTheme().get();
 	auto context = theme->preparePaintContext(
 		_chatStyle.get(),
 		rect(),
 		rect(),
 		rect(),
-		controller()->isGifPausedAtLeastFor(Window::GifPauseReason::Layer));
+		_controller->isGifPausedAtLeastFor(Window::GifPauseReason::Layer));
 	p.translate(st::boxPadding.left(), 0);
 	if (_comment) {
 		context.outbg = _comment->hasOutLayout();

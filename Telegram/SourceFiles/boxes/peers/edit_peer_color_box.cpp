@@ -54,7 +54,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_theme.h"
 #include "ui/controls/button_labels.h"
 #include "ui/controls/sub_tabs.h"
-#include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/premium_graphics.h"
 #include "ui/layers/generic_box.h"
 #include "ui/peer/color_sample.h"
@@ -167,20 +166,13 @@ base::unique_qptr<Ui::RpWidget> CreateEmptyPlaceholder(
 	return result;
 }
 
-class PreviewDelegate final : public HistoryView::DefaultElementDelegate {
+class PreviewDelegate final : public HistoryView::WidgetElementDelegate {
 public:
 	PreviewDelegate(
-		not_null<QWidget*> parent,
-		not_null<Ui::ChatStyle*> st,
-		Fn<void()> update);
+		not_null<QWidget*> widget,
+		not_null<Ui::ChatStyle*> st);
 
-	bool elementAnimationsPaused() override;
-	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
 	HistoryView::Context elementContext() override;
-
-private:
-	const not_null<QWidget*> _parent;
-	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 
 };
 
@@ -277,9 +269,7 @@ PreviewWrap::PreviewWrap(
 	0)) // pendingTill
 , _theme(theme)
 , _style(style)
-, _delegate(std::make_unique<PreviewDelegate>(box, _style.get(), [=] {
-	update();
-}))
+, _delegate(std::make_unique<PreviewDelegate>(this, _style.get()))
 , _replyToItem(_history->addNewLocalMessage({
 	.id = _history->nextNonHistoryEntryId(),
 	.flags = (MessageFlag::FakeHistoryItem
@@ -410,20 +400,9 @@ void PreviewWrap::initElements() {
 }
 
 PreviewDelegate::PreviewDelegate(
-	not_null<QWidget*> parent,
-	not_null<Ui::ChatStyle*> st,
-	Fn<void()> update)
-: _parent(parent)
-, _pathGradient(HistoryView::MakePathShiftGradient(st, update)) {
-}
-
-bool PreviewDelegate::elementAnimationsPaused() {
-	return _parent->window()->isActiveWindow();
-}
-
-auto PreviewDelegate::elementPathShiftGradient()
--> not_null<Ui::PathShiftGradient*> {
-	return _pathGradient.get();
+	not_null<QWidget*> widget,
+	not_null<Ui::ChatStyle*> st)
+: WidgetElementDelegate(widget, st) {
 }
 
 HistoryView::Context PreviewDelegate::elementContext() {

@@ -307,9 +307,9 @@ void CountNicePercent(
 }
 
 class OpenLinkPreviewDelegate final
-	: public HistoryView::SimpleElementDelegate {
+	: public HistoryView::WidgetElementDelegate {
 public:
-	using HistoryView::SimpleElementDelegate::SimpleElementDelegate;
+	using HistoryView::WidgetElementDelegate::WidgetElementDelegate;
 
 	HistoryView::Context elementContext() override {
 		return HistoryView::Context::History;
@@ -356,8 +356,12 @@ OpenLinkPreviewWidget::OpenLinkPreviewWidget(
 , _style(std::make_unique<Ui::ChatStyle>(
 	controller->session().colorIndicesValue()))
 , _delegate(std::make_unique<OpenLinkPreviewDelegate>(
-	controller,
-	[=] { update(); }))
+	this,
+	_style.get(),
+	[=] {
+		return controller->isGifPausedAtLeastFor(
+			Window::GifPauseReason::Any);
+	}))
 , _history(controller->session().data().history(
 	controller->session().userPeerId())) {
 	_style->apply(_theme.get());

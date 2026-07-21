@@ -40,7 +40,7 @@ struct BackgroundPreviewArgs {
 
 class BackgroundPreviewBox
 	: public Ui::BoxContent
-	, private HistoryView::SimpleElementDelegate {
+	, private HistoryView::WidgetElementDelegate {
 public:
 	BackgroundPreviewBox(
 		QWidget*,

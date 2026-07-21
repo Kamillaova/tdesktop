@@ -20,7 +20,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
-#include "ui/effects/path_shift_gradient.h"
 #include "ui/layers/generic_box.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/painter.h"
@@ -35,20 +34,13 @@ namespace {
 
 using namespace HistoryView;
 
-class PreviewDelegate final : public DefaultElementDelegate {
+class PreviewDelegate final : public WidgetElementDelegate {
 public:
 	PreviewDelegate(
-		not_null<QWidget*> parent,
-		not_null<Ui::ChatStyle*> st,
-		Fn<void()> update);
+		not_null<QWidget*> widget,
+		not_null<Ui::ChatStyle*> st);
 
-	bool elementAnimationsPaused() override;
-	not_null<Ui::PathShiftGradient*> elementPathShiftGradient() override;
 	Context elementContext() override;
-
-private:
-	const not_null<QWidget*> _parent;
-	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 
 };
 
@@ -74,20 +66,9 @@ private:
 };
 
 PreviewDelegate::PreviewDelegate(
-	not_null<QWidget*> parent,
-	not_null<Ui::ChatStyle*> st,
-	Fn<void()> update)
-: _parent(parent)
-, _pathGradient(MakePathShiftGradient(st, update)) {
-}
-
-bool PreviewDelegate::elementAnimationsPaused() {
-	return _parent->window()->isActiveWindow();
-}
-
-auto PreviewDelegate::elementPathShiftGradient()
--> not_null<Ui::PathShiftGradient*> {
-	return _pathGradient.get();
+	not_null<QWidget*> widget,
+	not_null<Ui::ChatStyle*> st)
+: WidgetElementDelegate(widget, st) {
 }
 
 Context PreviewDelegate::elementContext() {
@@ -103,9 +84,8 @@ PreviewWrap::PreviewWrap(
 , _style(std::make_unique<Ui::ChatStyle>(
 	_history->session().colorIndicesValue()))
 , _delegate(std::make_unique<PreviewDelegate>(
-	parent,
-	_style.get(),
-	[=] { update(); }))
+	this,
+	_style.get()))
 , _position(0, st::msgMargin.bottom()) {
 	_style->apply(_theme.get());
 

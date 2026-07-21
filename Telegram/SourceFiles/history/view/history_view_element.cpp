@@ -50,6 +50,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/glare.h"
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
+#include "ui/paint/damage.h"
 #include "ui/toast/toast.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
@@ -70,6 +71,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_chat.h"
 #include "styles/style_dialogs.h"
 #include "styles/style_iv.h"
+
+#include <QtWidgets/QWidget>
 
 namespace HistoryView {
 namespace {
@@ -530,15 +533,34 @@ void PathShiftGradientRepaintTracker::record(
 	} else if (mapped->isEmpty()) {
 		return;
 	}
-	const auto ownerRect = mapped->translated(ownerOffset);
+	add(mapped->translated(ownerOffset));
+}
+
+void PathShiftGradientRepaintTracker::record(
+		const QPainter &p,
+		QRectF rect,
+		const QPaintDevice *device) {
+	if (rect.isEmpty()) {
+		return;
+	} else if (p.device() != device) {
+		_unknown = true;
+		return;
+	}
+	add(Ui::DamageRect(rect, p.transform()));
+}
+
+void PathShiftGradientRepaintTracker::add(QRect rect) {
+	if (rect.isEmpty()) {
+		return;
+	}
 	_pendingBounds = _pendingBounds.isEmpty()
-		? ownerRect
-		: _pendingBounds.united(ownerRect);
+		? rect
+		: _pendingBounds.united(rect);
 	if (_bounding) {
 		_pending = QRegion(_pendingBounds);
 		return;
 	}
-	_pending += ownerRect;
+	_pending += rect;
 	if (_pending.rectCount() > kMaxPathShiftGradientRepaintRects) {
 		_pending = QRegion(_pendingBounds);
 		_bounding = true;
@@ -568,6 +590,48 @@ void ElementDelegate::elementPathShiftGradientPainted(
 		const QPainter &,
 		const PaintContext &,
 		QRectF) {
+}
+
+WidgetElementDelegate::WidgetElementDelegate(
+		not_null<QWidget*> widget,
+		not_null<const Ui::ChatStyle*> st)
+: WidgetElementDelegate(
+	widget,
+	st,
+	[=] { return widget->window()->isActiveWindow(); }) {
+}
+
+WidgetElementDelegate::WidgetElementDelegate(
+		not_null<QWidget*> widget,
+		not_null<const Ui::ChatStyle*> st,
+		Fn<bool()> animationsPaused)
+: _widget(widget)
+, _animationsPaused(std::move(animationsPaused))
+, _pathGradientRepaint(
+	[=] { return widget->rect(); },
+	[=](const QRegion &region) { widget->update(region); })
+, _pathGradient(MakePathShiftGradient(
+	st,
+	[=] { _pathGradientRepaint.repaint(); })) {
+}
+
+WidgetElementDelegate::~WidgetElementDelegate() = default;
+
+bool WidgetElementDelegate::elementAnimationsPaused() {
+	return _animationsPaused();
+}
+
+auto WidgetElementDelegate::elementPathShiftGradient()
+-> not_null<Ui::PathShiftGradient*> {
+	return _pathGradient.get();
+}
+
+void WidgetElementDelegate::elementPathShiftGradientPainted(
+		not_null<const Element*>,
+		const QPainter &p,
+		const PaintContext &,
+		QRectF rect) {
+	_pathGradientRepaint.record(p, rect, _widget);
 }
 
 bool DefaultElementDelegate::elementUnderCursor(
