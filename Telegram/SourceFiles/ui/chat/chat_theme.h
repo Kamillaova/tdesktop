@@ -11,6 +11,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/weak_ptr.h"
 
+#include <QtCore/QPointer>
+
+class QWidget;
+
 namespace style {
 class palette;
 struct colorizer;
@@ -111,8 +115,24 @@ struct CacheBackgroundResult {
 	const CacheBackgroundRequest &request);
 
 struct CachedBackground {
+	struct Gift {
+		struct Repaint {
+			QPointer<QWidget> widget;
+			QRect bounds;
+			bool boundsKnown = false;
+			bool pending = false;
+		};
+
+		std::unique_ptr<Text::CustomEmoji> emoji;
+		std::vector<Repaint> repaints;
+	};
+
 	CachedBackground() = default;
 	CachedBackground(CacheBackgroundResult &&result);
+	CachedBackground(const CachedBackground &) = delete;
+	CachedBackground &operator=(const CachedBackground &) = delete;
+	CachedBackground(CachedBackground &&) = default;
+	CachedBackground &operator=(CachedBackground &&) = default;
 
 	QPixmap pixmap;
 	QSize area;
@@ -120,7 +140,7 @@ struct CachedBackground {
 	int y = 0;
 	QRect giftArea;
 	float64 giftRotation = 0.;
-	mutable std::unique_ptr<Text::CustomEmoji> gift;
+	mutable std::shared_ptr<Gift> gift;
 	bool waitingForNegativePattern = false;
 };
 

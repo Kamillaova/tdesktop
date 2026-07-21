@@ -11,6 +11,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwindow.h"
 #include "ui/ui_utility.h"
 #include "ui/chat/chat_theme.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "boxes/premium_preview_box.h"
 #include "data/data_peer.h"
@@ -37,12 +38,97 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "styles/style_polls.h"
 
+#include <QtGui/QPaintDevice>
+
 #include <rpl/range.h>
 
 namespace Window {
 namespace {
 
 constexpr auto kReactionRestrictionToastDuration = 5 * crl::time(1000);
+
+[[nodiscard]] QWidget *PaintDeviceWidget(QPainter &p) {
+	const auto device = p.device();
+	return (device && (device->devType() == QInternal::Widget))
+		? static_cast<QWidget*>(device)
+		: nullptr;
+}
+
+[[nodiscard]] auto FindCachedGiftRepaint(
+		Ui::CachedBackground::Gift &gift,
+		QWidget *widget)
+-> Ui::CachedBackground::Gift::Repaint* {
+	for (auto i = gift.repaints.begin(); i != end(gift.repaints);) {
+		if (!i->widget.data()) {
+			i = gift.repaints.erase(i);
+		} else if (i->widget.data() == widget) {
+			return &*i;
+		} else {
+			++i;
+		}
+	}
+	return nullptr;
+}
+
+void EnsureCachedGiftRepaint(
+		Ui::CachedBackground::Gift &gift,
+		QWidget *widget) {
+	if (const auto repaint = FindCachedGiftRepaint(gift, widget)) {
+		return;
+	}
+	gift.repaints.push_back({ .widget = widget });
+}
+
+void RequestCachedGiftRepaint(
+		const std::weak_ptr<Ui::CachedBackground::Gift> &weak) {
+	const auto gift = weak.lock();
+	if (!gift) {
+		return;
+	}
+	for (auto i = gift->repaints.begin(); i != end(gift->repaints);) {
+		const auto widget = i->widget.data();
+		if (!widget) {
+			i = gift->repaints.erase(i);
+			continue;
+		}
+		if (!i->pending) {
+			i->pending = true;
+			if (i->boundsKnown) {
+				widget->update(i->bounds);
+			} else {
+				widget->update();
+			}
+		}
+		++i;
+	}
+}
+
+void RecordCachedGiftPaint(
+		Ui::CachedBackground::Gift::Repaint &repaint,
+		const QTransform &transform,
+		QRectF repaintBounds) {
+	const auto widget = repaint.widget.data();
+	if (!widget) {
+		return;
+	}
+	repaint.pending = false;
+	const auto bounds = Ui::DamageRect(repaintBounds, transform).intersected(
+		widget->rect());
+	if (bounds.isEmpty()) {
+		if (repaint.boundsKnown) {
+			repaint.boundsKnown = false;
+			widget->update(repaint.bounds);
+		}
+		return;
+	}
+	const auto previous = repaint.bounds;
+	const auto known = repaint.boundsKnown;
+	repaint.bounds = bounds;
+	repaint.boundsKnown = true;
+	if (known && previous != bounds) {
+		widget->update(previous.united(bounds));
+	}
+}
 
 [[nodiscard]] rpl::producer<QString> PeerThemeTokenValue(
 		not_null<PeerData*> peer) {
@@ -346,12 +432,15 @@ void SectionWidget::PaintBackground(
 		const auto fill = QSize(widget->width(), fillHeight);
 		const auto &state = theme->backgroundState(fill);
 		const auto make = [&] {
-			return MakeWrappedEmoji<Ui::Text::LimitedLoopsEmoji>(
+			auto gift = std::make_shared<Ui::CachedBackground::Gift>();
+			const auto weak = std::weak_ptr<Ui::CachedBackground::Gift>(gift);
+			gift->emoji = MakeWrappedEmoji<Ui::Text::LimitedLoopsEmoji>(
 				controller->session().data().customEmojiManager().create(
 					id,
-					crl::guard(widget, [=] { widget->update(); }),
+					[weak] { RequestCachedGiftRepaint(weak); },
 					Data::CustomEmojiSizeTag::Isolated),
 				1);
+			return gift;
 		};
 		if (!state.was.gift) {
 			state.was.gift = make();
@@ -397,6 +486,7 @@ void SectionWidget::PaintBackground(
 		p.fillRect(clip, *background.colorForFill);
 		return;
 	}
+	const auto widget = PaintDeviceWidget(p);
 	const auto &gradient = background.gradientForFill;
 	const auto &state = theme->backgroundState(fill);
 	const auto paintCache = [&](const Ui::CachedBackground &cache) {
@@ -404,8 +494,12 @@ void SectionWidget::PaintBackground(
 			QPoint(cache.x, cache.y),
 			cache.pixmap.size() / style::DevicePixelRatio());
 		const auto paintGift = [&](QRect area) {
-			if (!cache.gift) {
+			const auto gift = cache.gift;
+			if (!gift || !gift->emoji) {
 				return;
+			}
+			if (widget) {
+				EnsureCachedGiftRepaint(*gift, widget);
 			}
 			auto hq = PainterHighQualityEnabler(p);
 			const auto center = area.center();
@@ -417,7 +511,8 @@ void SectionWidget::PaintBackground(
 			p.rotate(cache.giftRotation);
 			p.translate(-center);
 			p.setOpacity(0.5);
-			cache.gift->paint(p, {
+			const auto transform = p.transform();
+			const auto repaintBounds = gift->emoji->paint(p, {
 				.textColor = st::windowFg->c,
 				.size = QSize(size, size),
 				.now = crl::now(),
@@ -425,8 +520,13 @@ void SectionWidget::PaintBackground(
 				.position = area.topLeft(),
 				.paused = paused,
 				.scaled = true,
-			});
+			}).repaintBounds();
 			p.restore();
+			if (widget) {
+				if (const auto repaint = FindCachedGiftRepaint(*gift, widget)) {
+					RecordCachedGiftPaint(*repaint, transform, repaintBounds);
+				}
+			}
 		};
 		if (cache.waitingForNegativePattern) {
 			// While we wait for pattern being loaded we paint just gradient.
