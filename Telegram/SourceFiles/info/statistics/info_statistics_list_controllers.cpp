@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/credits_graphics.h"
 #include "ui/effects/outline_segments.h" // Ui::UnreadStoryOutlineGradient.
 #include "ui/effects/toggle_arrow.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/text/format_values.h"
@@ -54,6 +55,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_statistics.h"
 #include "styles/style_window.h"
 #include "styles/style_chat.h"
+
+#include <QtGui/QRegion>
 
 namespace Info::Statistics {
 namespace {
@@ -796,6 +799,7 @@ public:
 		Ui::Text::MarkedContext context;
 		int rowHeight = 0;
 		Fn<void(not_null<PeerListRow*>)> updateCallback;
+		Fn<void(not_null<PeerListRow*>, const QRegion &)> repaintCallback;
 	};
 
 	CreditsRow(not_null<PeerData*> peer, const Descriptor &descriptor);
@@ -809,6 +813,7 @@ public:
 
 	[[nodiscard]] PaintRoundImageCallback generatePaintUserpicCallback(
 		bool forceRound) override;
+	[[nodiscard]] bool elementsAnimating() const override;
 
 	QSize rightActionSize() const override;
 	QMargins rightActionMargins() const override;
@@ -834,12 +839,29 @@ public:
 		const style::PeerListItem &st) const override;
 
 private:
+	struct AnimationDamage final {
+		QRegion current;
+		QRegion repaint;
+	};
+
+	void updateRow();
+	void repaintAnimation(const AnimationDamage &damage);
+	void trackAnimationPaint(
+		AnimationDamage &damage,
+		const QPainter &p,
+		QRectF painted);
+
 	const not_null<Main::Session*> _session;
 	const Data::CreditsHistoryEntry _entry;
 	const Data::SubscriptionEntry _subscription;
 	const Ui::Text::MarkedContext _context;
 
 	const int _rowHeight;
+	const Fn<void(not_null<PeerListRow*>)> _updateCallback;
+	const Fn<void(not_null<PeerListRow*>, const QRegion &)> _repaintCallback;
+	AnimationDamage _descriptionAnimationDamage;
+	AnimationDamage _userpicAnimationDamage;
+	bool _uniqueGiftUserpic = false;
 
 	PaintRoundImageCallback _paintUserpicCallback;
 	std::optional<Settings::SubscriptionRightLabel> _rightLabel;
@@ -863,14 +885,16 @@ CreditsRow::CreditsRow(
 , _entry(descriptor.entry)
 , _subscription(descriptor.subscription)
 , _context(descriptor.context)
-, _rowHeight(descriptor.rowHeight) {
+, _rowHeight(descriptor.rowHeight)
+, _updateCallback(descriptor.updateCallback)
+, _repaintCallback(descriptor.repaintCallback) {
 	const auto callback = Ui::PaintPreviewCallback(
 		&peer->session(),
 		_entry);
 	if (callback) {
 		_paintUserpicCallback = callback(crl::guard(
 			&_guard,
-			[this, update = descriptor.updateCallback] { update(this); }));
+			[this] { updateRow(); }));
 	}
 	if (!_subscription.cancelled
 		&& !_subscription.expired
@@ -888,7 +912,44 @@ CreditsRow::CreditsRow(const Descriptor &descriptor)
 , _entry(descriptor.entry)
 , _subscription(descriptor.subscription)
 , _context(descriptor.context)
-, _rowHeight(descriptor.rowHeight) {
+, _rowHeight(descriptor.rowHeight)
+, _updateCallback(descriptor.updateCallback)
+, _repaintCallback(descriptor.repaintCallback) {
+}
+
+void CreditsRow::updateRow() {
+	if (_updateCallback) {
+		_updateCallback(this);
+	}
+}
+
+void CreditsRow::repaintAnimation(const AnimationDamage &damage) {
+	if (_repaintCallback && !damage.repaint.isEmpty()) {
+		_repaintCallback(this, damage.repaint);
+	}
+}
+
+void CreditsRow::trackAnimationPaint(
+		AnimationDamage &damage,
+		const QPainter &p,
+		QRectF painted) {
+	const auto current = [&] {
+		if (painted.isEmpty()) {
+			return QRegion();
+		}
+		const auto transform = p.transform();
+		const auto origin = transform.map(QPointF());
+		const auto mapped = transform.mapRect(painted).translated(
+			-origin.x(),
+			-origin.y());
+		return QRegion(Ui::DamageRect(mapped));
+	}();
+	const auto previous = damage.current;
+	damage.current = current;
+	damage.repaint = previous.united(current);
+	if (!previous.isEmpty() && previous != current) {
+		repaintAnimation(damage);
+	}
 }
 
 void CreditsRow::init() {
@@ -957,6 +1018,10 @@ void CreditsRow::init() {
 		_description.setText(st::defaultTextStyle, _subscription.title);
 	}
 	if (_entry.bareGiftStickerId && !_entry.giftUpgraded) {
+		auto context = _context;
+		context.repaint = crl::guard(
+			&_guard,
+			[this] { repaintAnimation(_descriptionAnimationDamage); });
 		_description.setMarkedText(
 			st::defaultTextStyle,
 			Ui::Text::SingleCustomEmoji(
@@ -967,7 +1032,7 @@ void CreditsRow::init() {
 			.append(' ')
 			.append(description),
 			kMarkupTextOptions,
-			_context);
+			context);
 	}
 	const auto descriptionPhotoId = (!_entry.subscriptionUntil.isNull())
 		? _entry.photoId
@@ -976,15 +1041,13 @@ void CreditsRow::init() {
 		_descriptionThumbnail = Ui::MakePhotoThumbnail(
 			_session->data().photo(descriptionPhotoId),
 			{});
-		_descriptionThumbnail->subscribeToUpdates([this] {
+		_descriptionThumbnail->subscribeToUpdates(crl::guard(&_guard, [this] {
 			const auto thumbnailSide = st::defaultTextStyle.font->height;
 			_descriptionThumbnailCache = Images::Round(
 				_descriptionThumbnail->image(thumbnailSide),
 				ImageRoundRadius::Large);
-			if (_context.repaint) {
-				_context.repaint();
-			}
-		});
+			updateRow();
+		}));
 	}
 	if (_entry) {
 		constexpr auto kMinus = QChar(0x2212);
@@ -1019,14 +1082,33 @@ void CreditsRow::init() {
 		}
 	}
 	if (!_paintUserpicCallback) {
-		_paintUserpicCallback = _entry.giftUpgraded
-			? GenerateGiftUniqueUserpicCallback(
+		if (_entry.giftUpgraded) {
+			_uniqueGiftUserpic = true;
+			auto paint = GenerateGiftUniqueUserpicCallback(
 				_session,
 				_entry.uniqueGift,
-				_context.repaint)
-			: (isSpecial || _entry.postsSearch)
-			? Ui::GenerateCreditsPaintUserpicCallback(_entry)
-			: PeerListRow::generatePaintUserpicCallback(false);
+				crl::guard(&_guard, [this] {
+					repaintAnimation(_userpicAnimationDamage);
+				}));
+			_paintUserpicCallback = [
+					this,
+					paint = std::move(paint)](
+						Painter &p,
+						int x,
+						int y,
+						int outerWidth,
+						int size) mutable {
+				paint(p, x, y, outerWidth, size);
+				trackAnimationPaint(
+					_userpicAnimationDamage,
+					p,
+					QRectF(x, y, size, size));
+			};
+		} else {
+			_paintUserpicCallback = (isSpecial || _entry.postsSearch)
+				? Ui::GenerateCreditsPaintUserpicCallback(_entry)
+				: PeerListRow::generatePaintUserpicCallback(false);
+		}
 	}
 }
 
@@ -1044,6 +1126,10 @@ QString CreditsRow::generateName() {
 
 PaintRoundImageCallback CreditsRow::generatePaintUserpicCallback(bool force) {
 	return _paintUserpicCallback;
+}
+
+bool CreditsRow::elementsAnimating() const {
+	return _description.hasCustomEmoji() || _uniqueGiftUserpic;
 }
 
 [[nodiscard]] QString RightActionText(const Data::SubscriptionEntry &s) {
@@ -1168,12 +1254,31 @@ void CreditsRow::paintStatusText(
 		outer -= thumbnailSpace;
 		available -= thumbnailSpace;
 	}
+	auto descriptionRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 	_description.draw(p, {
 		.position = QPoint(x, y - st::creditsHistoryRowDescriptionSkip),
 		.outerWidth = outer,
 		.availableWidth = available,
 		.elisionLines = 1,
+		.customEmojiRepaintBounds = _description.hasCustomEmoji()
+			? &descriptionRepaintBounds
+			: nullptr,
 	});
+	if (_description.hasCustomEmoji()) {
+		auto descriptionRepaintRect = descriptionRepaintBounds.rect;
+		if (!descriptionRepaintBounds.repaintBoundsKnown) {
+			const auto fallback = QRectF(
+				QPoint(x, y - st::creditsHistoryRowDescriptionSkip),
+				QSizeF(std::max(available, 0), _description.lineHeight()));
+			descriptionRepaintRect = descriptionRepaintRect.isEmpty()
+				? fallback
+				: descriptionRepaintRect.united(fallback);
+		}
+		trackAnimationPaint(
+			_descriptionAnimationDamage,
+			p,
+			descriptionRepaintRect);
+	}
 }
 
 const style::PeerListItem &CreditsRow::computeSt(
@@ -1273,10 +1378,9 @@ CreditsController::CreditsController(CreditsDescriptor d)
 		}
 		const auto it = _rowsById.find(desc.rowId);
 		if (it != _rowsById.end()) {
-			const auto row = it->second;
 			return _session->data().customEmojiManager().create(
 				desc.bareGiftStickerId,
-				[=]{ delegate()->peerListUpdateRow(row); });
+				context.repaint);
 		}
 		return nullptr;
 	};
@@ -1339,6 +1443,11 @@ void CreditsController::applySlice(const Data::CreditsStatusSlice &slice) {
 				: st::boostsListBox.item).height,
 			.updateCallback = [=](not_null<PeerListRow*> row) {
 				delegate()->peerListUpdateRow(row);
+			},
+			.repaintCallback = [=](
+					not_null<PeerListRow*> row,
+					const QRegion &damage) {
+				delegate()->peerListRepaintRow(row, damage);
 			},
 		};
 		auto owned = std::unique_ptr<CreditsRow>(nullptr);
