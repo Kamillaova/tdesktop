@@ -34,6 +34,9 @@ public:
 	~Poll();
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	bool toggleSelectionByHandlerClick(const ClickHandlerPtr &p) const override {

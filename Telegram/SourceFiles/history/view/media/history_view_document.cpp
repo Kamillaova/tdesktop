@@ -534,7 +534,7 @@ void Document::fillNamedFromData(not_null<HistoryDocumentNamed*> named) {
 QSize Document::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	auto hasTranscribe = false;
@@ -693,7 +693,7 @@ QSize Document::countOptimalSize() {
 QSize Document::countCurrentSize(int newWidth) {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -774,10 +774,20 @@ void Document::draw(Painter &p, const PaintContext &context) const {
 		p,
 		context,
 		geometry);
-	recordVoiceProgressAnimationRepaintRect(
+	recordPlaybackRepaintRect(
 		p,
 		context,
 		geometry.united(playbackBlobs));
+}
+
+bool Document::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	if (_realParent != item || _data != document || !tracksPlayback()) {
+		return false;
+	}
+	repaintPlayback();
+	return true;
 }
 
 QRect Document::draw(
@@ -1308,7 +1318,7 @@ void Document::unloadHeavyPart() {
 	if (_unloadTtl) {
 		_unloadTtl();
 	}
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	_dataMedia = nullptr;
 	if (const auto captioned = Get<HistoryDocumentCaptioned>()) {
 		captioned->caption.unloadPersistentAnimation();
@@ -1897,7 +1907,7 @@ void Document::refreshCaption(bool last) {
 int Document::widenGroupingMaxWidth(int current, bool last) {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	refreshCaption(last);
 	const auto captioned = Get<HistoryDocumentCaptioned>();
@@ -1918,7 +1928,7 @@ int Document::widenGroupingMaxWidth(int current, bool last) {
 QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
@@ -1936,7 +1946,7 @@ QSize Document::sizeForGroupingOptimal(int maxWidth, bool last) const {
 QSize Document::sizeForGrouping(int width) const {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	const auto thumbed = Get<HistoryDocumentThumbed>();
@@ -1984,7 +1994,7 @@ void Document::drawGrouped(
 	}
 	p.translate(-geometry.topLeft());
 	recordRadialAnimationRepaintRect(p, context, geometry);
-	recordVoiceProgressAnimationRepaintRect(
+	recordPlaybackRepaintRect(
 		p,
 		context,
 		geometry.united(playbackBlobs.translated(geometry.topLeft())));
@@ -2147,57 +2157,60 @@ QRect Document::paintPlaybackBlobs(
 	).toAlignedRect();
 }
 
-void Document::repaintVoiceProgressAnimation() const {
-	const auto voice = Get<HistoryDocumentVoice>();
-	if (!voice || !voice->playback) {
+bool Document::tracksPlayback() const {
+	return _data->isVoiceMessage()
+		|| _data->isAudioFile()
+		|| _transcribedRound;
+}
+
+void Document::repaintPlayback() const {
+	if (!tracksPlayback()) {
 		return;
 	}
-	auto &playback = *voice->playback;
-	if (playback.progressRepaintRect
-		&& playback.progressRepaintRect->isEmpty()) {
+	if (_playbackRepaintRect && _playbackRepaintRect->isEmpty()) {
 		return;
 	} else if (_parent->delegate()->elementContext() == Context::TTLViewer) {
 		repaint();
 		return;
-	} else if (playback.progressRepaintPending) {
+	} else if (_playbackRepaintPending) {
 		return;
 	}
-	playback.progressRepaintPending = true;
-	if (playback.progressRepaintRect) {
-		_parent->repaint(*playback.progressRepaintRect);
+	_playbackRepaintPending = true;
+	if (_playbackRepaintRect) {
+		_parent->repaint(*_playbackRepaintRect);
 	} else {
 		repaint();
 	}
 }
 
-void Document::recordVoiceProgressAnimationRepaintRect(
+void Document::recordPlaybackRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
 		QRect rect) const {
-	const auto voice = Get<HistoryDocumentVoice>();
-	if (!voice || !voice->playback) {
+	if (!tracksPlayback()) {
 		return;
 	}
-	auto &playback = *voice->playback;
 	if (context.hasElementPainter(p)) {
-		playback.progressRepaintRect = std::nullopt;
-		playback.progressRepaintPending = false;
+		_playbackRepaintRect = std::nullopt;
+		_playbackRepaintPending = false;
 	} else {
-		if (!playback.progressRepaintRect
-			|| playback.progressRepaintRect->isEmpty()) {
-			playback.progressRepaintPending = false;
+		if (!_playbackRepaintRect || _playbackRepaintRect->isEmpty()) {
+			_playbackRepaintPending = false;
 		}
 		return;
 	}
-	playback.progressRepaintRect = context.mapToElement(p, QRectF(rect));
+	if (!_data->isAudioFile()) {
+		const auto voice = Get<HistoryDocumentVoice>();
+		if (!voice || !voice->playback) {
+			return;
+		}
+	}
+	_playbackRepaintRect = context.mapToElement(p, QRectF(rect));
 }
 
-void Document::clearVoiceProgressAnimationRepaintRect() const {
-	const auto voice = Get<HistoryDocumentVoice>();
-	if (voice && voice->playback) {
-		voice->playback->progressRepaintRect = std::nullopt;
-		voice->playback->progressRepaintPending = false;
-	}
+void Document::invalidatePlaybackRepaintRect() const {
+	_playbackRepaintRect = std::nullopt;
+	_playbackRepaintPending = false;
 }
 
 void Document::repaintVoiceInteraction() const {
@@ -2342,7 +2355,7 @@ bool Document::voiceProgressAnimationCallback(crl::time now) {
 			} else {
 				voice->playback->progress.update(qMin(dt, 1.), anim::linear);
 			}
-			repaintVoiceProgressAnimation();
+			repaintPlayback();
 			return (dt < 1.);
 		}
 	}
@@ -2385,6 +2398,7 @@ void Document::clickHandlerPressedChanged(const ClickHandlerPtr &p, bool pressed
 
 void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 	File::refreshParentId(realParent);
+	invalidatePlaybackRepaintRect();
 
 	const auto fullId = realParent->fullId();
 	if (auto thumbed = Get<HistoryDocumentThumbed>()) {
@@ -2408,7 +2422,7 @@ void Document::refreshParentId(not_null<HistoryItem*> realParent) {
 void Document::parentTextUpdated() {
 	clearRadialAnimationRepaintRect();
 	invalidateTtlAnimationRepaint();
-	clearVoiceProgressAnimationRepaintRect();
+	invalidatePlaybackRepaintRect();
 	invalidateVoiceInteractionRepaint();
 	invalidateCaptionRepaintRect();
 	++_captionGeneration;

@@ -939,10 +939,8 @@ struct HistoryDocumentVoicePlayback {
 	~HistoryDocumentVoicePlayback();
 
 	int32 position = 0;
-	bool progressRepaintPending : 1 = false;
 	anim::value progress;
 	Ui::Animations::Basic progressAnimation;
-	std::optional<QRect> progressRepaintRect;
 
 	std::unique_ptr<Ui::Paint::Blobs> blobs;
 	crl::time blobsLastUpdate = 0;

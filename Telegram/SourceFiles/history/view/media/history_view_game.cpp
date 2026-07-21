@@ -144,6 +144,12 @@ void Game::refreshParentId(not_null<HistoryItem*> realParent) {
 	}
 }
 
+bool Game::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	return _attach && _attach->playbackUpdated(item, document);
+}
+
 QSize Game::countCurrentSize(int newWidth) {
 	invalidateDescriptionRepaint();
 	invalidateRippleRepaint();

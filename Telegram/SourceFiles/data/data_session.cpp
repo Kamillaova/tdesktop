@@ -2132,6 +2132,29 @@ void Session::requestItemVisualRepaint(
 	}
 }
 
+void Session::requestItemPlaybackRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) {
+	_itemRepaintRequest.fire_copy(item);
+	auto repaintGroupLeader = false;
+	auto repaintView = [&](not_null<ViewElement*> view) {
+		if (view->isHiddenByGroup()) {
+			repaintGroupLeader = true;
+		} else {
+			view->playbackUpdated(item, document);
+		}
+	};
+	enumerateItemViews(item, repaintView);
+	if (repaintGroupLeader) {
+		if (const auto group = groups().find(item)) {
+			const auto leader = group->items.front();
+			if (leader != item) {
+				enumerateItemViews(leader, repaintView);
+			}
+		}
+	}
+}
+
 rpl::producer<not_null<const HistoryItem*>> Session::itemRepaintRequest() const {
 	return _itemRepaintRequest.events();
 }

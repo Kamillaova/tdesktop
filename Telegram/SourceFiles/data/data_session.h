@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtGui/QRegion>
 
 class Image;
+class DocumentData;
 class HistoryItem;
 struct WebPageCollage;
 struct WebPageStickerSet;
@@ -407,6 +408,9 @@ public:
 	void requestItemVisualRepaint(
 		not_null<const HistoryItem*> item,
 		QRect r = QRect());
+	void requestItemPlaybackRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document);
 	[[nodiscard]] rpl::producer<not_null<const HistoryItem*>> itemRepaintRequest() const;
 	void requestDrawToReply(DrawToReplyRequest request);
 	[[nodiscard]] rpl::producer<DrawToReplyRequest> drawToReplyRequests() const;

@@ -42,6 +42,9 @@ public:
 	}
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 	void updatePressed(QPoint point) override;
 
@@ -164,12 +167,13 @@ private:
 		Painter &p,
 		const PaintContext &context,
 		QRect inner) const;
-	void repaintVoiceProgressAnimation() const;
-	void recordVoiceProgressAnimationRepaintRect(
+	[[nodiscard]] bool tracksPlayback() const;
+	void repaintPlayback() const;
+	void recordPlaybackRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
 		QRect rect) const;
-	void clearVoiceProgressAnimationRepaintRect() const;
+	void invalidatePlaybackRepaintRect() const;
 	void repaintVoiceInteraction() const;
 	void recordVoiceInteractionRepaintRegion(
 		const Painter &p,
@@ -240,7 +244,9 @@ private:
 	mutable bool _captionRepaintPending = false;
 	mutable bool _captionRepaintKnown = false;
 
-	bool _transcribedRound = false;
+	mutable std::optional<QRect> _playbackRepaintRect;
+	mutable bool _playbackRepaintPending : 1 = false;
+	bool _transcribedRound : 1 = false;
 
 };
 

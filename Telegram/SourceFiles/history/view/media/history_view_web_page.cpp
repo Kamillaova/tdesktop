@@ -958,6 +958,12 @@ void WebPage::refreshParentId(not_null<HistoryItem*> realParent) {
 	}
 }
 
+bool WebPage::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	return _attach && _attach->playbackUpdated(item, document);
+}
+
 void WebPage::ensurePhotoMediaCreated() const {
 	Expects(_data->photo != nullptr);
 

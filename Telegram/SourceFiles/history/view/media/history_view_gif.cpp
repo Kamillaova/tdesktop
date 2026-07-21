@@ -339,6 +339,7 @@ QSize Gif::countThumbSize(int &inOutWidthMax) const {
 
 QSize Gif::countOptimalSize() {
 	clearRadialAnimationRepaintRect();
+	clearStreamedContentRect();
 	invalidateSeekAnimationRepaint();
 	if (_data->isVideoMessage() && _transcribe) {
 		const auto &entry = _data->session().api().transcribes().entry(
@@ -1733,6 +1734,7 @@ bool Gif::fullFeaturedGrouped(RectParts sides) const {
 
 QSize Gif::sizeForGroupingOptimal(int maxWidth, bool last) const {
 	clearRadialAnimationRepaintRect();
+	clearStreamedContentRect();
 	invalidateSeekAnimationRepaint();
 	return sizeForAspectRatio();
 }
@@ -2056,6 +2058,11 @@ void Gif::togglePollingStory(bool enabled) const {
 
 bool Gif::uploading() const {
 	return _data->uploading();
+}
+
+void Gif::refreshParentId(not_null<HistoryItem*> realParent) {
+	File::refreshParentId(realParent);
+	clearStreamedContentRect();
 }
 
 void Gif::hideSpoilers() {
@@ -2648,11 +2655,25 @@ void Gif::handleStreamingUpdate(::Media::Streaming::Update &&update) {
 void Gif::handleStreamingError(::Media::Streaming::Error &&error) {
 }
 
-void Gif::repaintStreamedContent() {
+bool Gif::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	if (_realParent != item || _data != document || !_data->isVideoMessage()) {
+		return false;
+	} else if (_parent->delegate()->elementContext() == Context::TTLViewer) {
+		repaint();
+		return true;
+	}
+	repaintStreamedContent(true);
+	return true;
+}
+
+void Gif::repaintStreamedContent(bool force) const {
 	const auto own = activeOwnStreamed();
-	if (own && !own->frozenFrame.isNull()) {
+	if (!force && own && !own->frozenFrame.isNull()) {
 		return;
-	} else if (_parent->delegate()->elementAnimationsPaused()
+	} else if (!force
+		&& _parent->delegate()->elementAnimationsPaused()
 		&& !activeRoundStreamed()) {
 		return;
 	} else if (_streamedContentRepaintPending
@@ -2678,9 +2699,6 @@ void Gif::recordStreamedContentRect(
 		if (!_streamedContentRect || _streamedContentRect->isEmpty()) {
 			_streamedContentRepaintPending = false;
 		}
-		return;
-	}
-	if (_data->isVideoMessage() && _parent->media() != this) {
 		return;
 	}
 	_streamedContentRect = context.mapToElement(p, QRectF(rect));

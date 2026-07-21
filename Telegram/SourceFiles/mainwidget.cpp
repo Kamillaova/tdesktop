@@ -869,7 +869,9 @@ void MainWidget::handleAudioUpdate(const Media::Player::TrackState &state) {
 		Media::Player::instance()->stopAndClose();
 	}
 
-	if (item) {
+	if (item && document) {
+		session().data().requestItemPlaybackRepaint(item, document);
+	} else if (item) {
 		session().data().requestItemVisualRepaint(item);
 	}
 	if (document) {

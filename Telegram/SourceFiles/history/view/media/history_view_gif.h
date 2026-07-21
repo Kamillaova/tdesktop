@@ -63,6 +63,9 @@ public:
 	bool hideMessageText() const override;
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	void clickHandlerPressedChanged(
@@ -71,6 +74,7 @@ public:
 	void updatePressed(QPoint point) override;
 
 	bool uploading() const override;
+	void refreshParentId(not_null<HistoryItem*> realParent) override;
 
 	DocumentData *getDocument() const override {
 		return _data;
@@ -185,7 +189,7 @@ private:
 	void handleStreamingUpdate(::Media::Streaming::Update &&update);
 	void handleStreamingError(::Media::Streaming::Error &&error);
 	void streamingReady(::Media::Streaming::Information &&info);
-	void repaintStreamedContent();
+	void repaintStreamedContent(bool force = false) const;
 	void recordStreamedContentRect(
 		const Painter &p,
 		const PaintContext &context,

@@ -1570,6 +1570,18 @@ Media *Element::media() const {
 	return _media.get();
 }
 
+void Element::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	if (_media) {
+		static_cast<void>(_media->playbackUpdated(item, document));
+	}
+	const auto service = Get<ServicePreMessage>();
+	if (service && service->media) {
+		static_cast<void>(service->media->playbackUpdated(item, document));
+	}
+}
+
 Context Element::context() const {
 	return _context;
 }

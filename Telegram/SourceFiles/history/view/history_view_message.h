@@ -289,6 +289,9 @@ public:
 	[[nodiscard]] bool isSignedAuthorElided() const override;
 
 	void itemDataChanged() override;
+	void playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 
 	VerticalRepaintRange verticalRepaintRange() const override;
 

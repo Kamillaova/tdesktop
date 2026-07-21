@@ -204,6 +204,12 @@ void Invoice::refreshParentId(not_null<HistoryItem*> realParent) {
 	}
 }
 
+bool Invoice::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	return _attach && _attach->playbackUpdated(item, document);
+}
+
 void Invoice::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
 	auto paintw = width();

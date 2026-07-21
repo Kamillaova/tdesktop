@@ -22,6 +22,9 @@ public:
 		not_null<Data::Invoice*> invoice);
 
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 
 	MsgId getReceiptMsgId() const {
 		return _receiptMsgId;

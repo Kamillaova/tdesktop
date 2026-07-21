@@ -1594,6 +1594,9 @@ struct Poll::Header : public Poll::Part {
 	void clickHandlerPressedChanged(
 		const ClickHandlerPtr &handler,
 		bool pressed) override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const;
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
 	uint16 selectionLength() const override;
@@ -1698,6 +1701,19 @@ int Poll::Header::countHeight(int innerWidth) const {
 		+ st::historyPollSubtitleSkip
 		+ st::msgDateFont->height
 		+ st::historyPollAnswersSkip;
+}
+
+bool Poll::Header::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	auto handled = _attachedMediaAttach
+		&& _attachedMediaAttach->playbackUpdated(item, document);
+	if (_solutionShown
+		&& _solutionAttach
+		&& _solutionAttach->playbackUpdated(item, document)) {
+		handled = true;
+	}
+	return handled;
 }
 
 void Poll::Header::draw(
@@ -2643,6 +2659,12 @@ Poll::Poll(
 		_headerPart->updateDescription();
 	}
 	history()->owner().registerPollView(_poll, _parent);
+}
+
+bool Poll::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	return _headerPart->playbackUpdated(item, document);
 }
 
 void Poll::recordRepaintGeometry(

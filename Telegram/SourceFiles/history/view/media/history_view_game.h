@@ -27,6 +27,9 @@ public:
 		const TextWithEntities &consumed);
 
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 
 	void draw(Painter &p, const PaintContext &context) const override;
 	TextState textState(QPoint point, StateRequest request) const override;

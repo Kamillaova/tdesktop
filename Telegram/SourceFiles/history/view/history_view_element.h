@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class History;
 class HistoryBlock;
 class HistoryItem;
+class DocumentData;
 class QPaintDevice;
 class QPainter;
 class QWidget;
@@ -776,6 +777,9 @@ public:
 	virtual void itemDataChanged();
 	void itemTextUpdated();
 	void blockquoteExpandChanged();
+	virtual void playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const;
 
 	virtual void unloadHeavyPart();
 	void checkHeavyPart();

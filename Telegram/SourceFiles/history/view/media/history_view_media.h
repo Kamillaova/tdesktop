@@ -387,6 +387,11 @@ public:
 	virtual bool updateItemData() {
 		return false;
 	}
+	[[nodiscard]] virtual bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+		return false;
+	}
 	virtual void paintBubbleFireworks(
 		Painter &p,
 		const QRect &bubble,

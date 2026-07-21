@@ -30,6 +30,9 @@ public:
 	~GroupedMedia();
 
 	void refreshParentId(not_null<HistoryItem*> realParent) override;
+	[[nodiscard]] bool playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const override;
 
 	HistoryItem *itemForText() const override;
 	bool hideMessageText() const override;

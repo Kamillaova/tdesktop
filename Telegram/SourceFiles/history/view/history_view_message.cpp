@@ -6178,6 +6178,21 @@ WebPage *Message::factcheckBlock() const {
 	return nullptr;
 }
 
+void Message::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	Element::playbackUpdated(item, document);
+	if (const auto page = logEntryOriginal()) {
+		static_cast<void>(page->playbackUpdated(item, document));
+	}
+	if (const auto page = factcheckBlock()) {
+		static_cast<void>(page->playbackUpdated(item, document));
+	}
+	if (Has<InstantViewMediaRuntime>() || Has<HistoryMessageRichPage>()) {
+		repaint();
+	}
+}
+
 bool Message::toggleSelectionByHandlerClick(
 		const ClickHandlerPtr &handler) const {
 	if (_comments && _comments->link == handler) {

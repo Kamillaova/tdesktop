@@ -281,6 +281,19 @@ void GroupedMedia::refreshParentId(
 	}
 }
 
+bool GroupedMedia::playbackUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document) const {
+	auto handled = false;
+	for (const auto &part : _parts) {
+		if (part.item == item
+			&& part.content->playbackUpdated(item, document)) {
+			handled = true;
+		}
+	}
+	return handled;
+}
+
 Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 		Ui::BubbleRounding already,
 		RectParts sides) const {
