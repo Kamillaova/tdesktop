@@ -122,6 +122,11 @@ struct AnimationRegionTracking {
 	QRegion repaint;
 };
 
+struct OptionalAnimationRegionTracking {
+	std::optional<QRegion> stored;
+	QRegion repaint;
+};
+
 [[nodiscard]] QRegion MapAnimationRegion(
 		const QRegion &region,
 		const QTransform &transform,
@@ -145,6 +150,29 @@ struct AnimationRegionTracking {
 	return {
 		.stored = uncovered.isEmpty() ? std::move(current) : combined,
 		.repaint = uncovered.isEmpty() ? QRegion() : mapped,
+	};
+}
+
+[[nodiscard]] OptionalAnimationRegionTracking TrackOptionalAnimationRegion(
+		std::optional<QRegion> previous,
+		std::optional<QRegion> current,
+		const QTransform &transform,
+		const QRegion &repaintRegion,
+		QRect bounds) {
+	if (!previous && !current) {
+		return {};
+	}
+	auto tracked = TrackAnimationRegion(
+		previous.value_or(QRegion()),
+		current.value_or(QRegion()),
+		transform,
+		repaintRegion,
+		bounds);
+	return {
+		.stored = tracked.repaint.isEmpty()
+			? std::move(current)
+			: std::optional<QRegion>(std::move(tracked.stored)),
+		.repaint = std::move(tracked.repaint),
 	};
 }
 
@@ -1259,6 +1287,8 @@ void InnerWidget::paintEvent(QPaintEvent *e) {
 					auto stored = PaintedRow();
 					stored.entry = row->entry().get();
 					stored.animation = painted.animated;
+					stored.quickActionAnimation
+						= painted.quickActionAnimation;
 					stored.animationGeneration
 						= painted.animationGeneration;
 					stored.messagePreviewPainted
@@ -2618,7 +2648,7 @@ void InnerWidget::mousePressEvent(QMouseEvent *e) {
 		const auto origin = e->pos()
 			- QPoint(0, dialogsOffset() + _pressed->top());
 		if ((_pressButton == Qt::MiddleButton)
-			&& addQuickActionRipple(row, updateCallback)) {
+			&& addQuickActionRipple(row)) {
 		} else if (addRightButtonRipple(origin, updateCallback)) {
 		} else if (_pressedTopicJump) {
 			row->addTopicJumpRipple(
@@ -2719,9 +2749,7 @@ bool InnerWidget::addRightButtonRipple(QPoint origin, Fn<void()> updateCallback)
 	return true;
 }
 
-bool InnerWidget::addQuickActionRipple(
-		not_null<Row*> row,
-		Fn<void()> updateCallback) {
+bool InnerWidget::addQuickActionRipple(not_null<Row*> row) {
 	if (_activeQuickAction) {
 		return false;
 	}
@@ -2744,21 +2772,22 @@ bool InnerWidget::addQuickActionRipple(
 	}
 
 	auto name = ResolveQuickDialogLottieIconName(type);
-	const auto rowHeight = row->height();
 	context->icon = Lottie::MakeIcon({
 		.name = std::move(name),
 		.sizeOverride = Size(st::dialogsQuickActionSize),
 	});
 	context->action = action;
+	context->rippleSize = QSize(
+		st::dialogsQuickActionRippleSize,
+		row->height());
+	const auto repaint = [=] { repaintQuickActionAnimation(key); };
 	context->icon->jumpTo(context->icon->framesCount() - 1, [=] {
-		const auto size = QSize(
-			st::dialogsQuickActionRippleSize,
-			rowHeight);
+		const auto size = context->rippleSize;
 		if (!context->ripple) {
 			context->ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				Ui::RippleAnimation::RectMask(size),
-				updateCallback);
+				repaint);
 		}
 		if (!context->rippleFg) {
 			context->rippleFg = std::make_unique<Ui::RippleAnimation>(
@@ -2779,11 +2808,13 @@ bool InnerWidget::addQuickActionRipple(
 								action,
 								_filterId));
 					}),
-				std::move(updateCallback));
+				repaint);
 		}
 		context->ripple->add(QPoint(size.width() / 2, size.height() / 2));
 		context->rippleFg->add(QPoint(size.width() / 2, size.height() / 2));
+		repaint();
 	});
+	repaintQuickAction(key);
 
 	return true;
 }
@@ -3517,10 +3548,10 @@ void InnerWidget::repaintCollapsedFolderRow(not_null<Data::Folder*> folder) {
 }
 
 int InnerWidget::defaultRowTop(not_null<Row*> row) const {
-	const auto index = row->index();
+	const auto pinned = row->index() - fixedOnTopCount();
 	auto top = dialogsOffset();
-	if (base::in_range(index, 0, _pinnedRows.size())) {
-		top += qRound(_pinnedRows[index].yadd.current());
+	if (base::in_range(pinned, 0, _pinnedRows.size())) {
+		top += qRound(_pinnedRows[pinned].yadd.current());
 	}
 	return top + row->top();
 }
@@ -3816,6 +3847,17 @@ std::optional<QRegion> InnerWidget::paintedAnimationDamage(
 	return i->second.animation;
 }
 
+std::optional<QRegion> InnerWidget::paintedQuickActionAnimationDamage(
+		not_null<Row*> row) const {
+	const auto i = _paintedRows.find(RowsCacheKey(row));
+	if (i == end(_paintedRows)
+		|| i->second.entry != row->entry().get()
+		|| !i->second.quickActionAnimation) {
+		return std::nullopt;
+	}
+	return *i->second.quickActionAnimation;
+}
+
 bool InnerWidget::cachedVideoUserpicDamage(
 		not_null<Row*> row,
 		QRect damage) {
@@ -3921,6 +3963,17 @@ void InnerWidget::trackPaintedRow(
 	};
 	const auto key = RowsCacheKey(row);
 	const auto i = _paintedRows.find(key);
+	auto quickAction = TrackOptionalAnimationRegion(
+		(i == end(_paintedRows))
+			? std::optional<QRegion>()
+			: i->second.quickActionAnimation,
+		painted.quickActionAnimation,
+		transform,
+		repaintRegion,
+		this->rect());
+	if (!quickAction.repaint.isEmpty()) {
+		update(quickAction.repaint);
+	}
 	if (i == end(_paintedRows)
 		|| i->second.entry != row->entry().get()) {
 		const auto previous = (i == end(_paintedRows))
@@ -3931,7 +3984,7 @@ void InnerWidget::trackPaintedRow(
 		const auto next = uncovered.isEmpty()
 			? painted.animated
 			: combined;
-		if (next.isEmpty()) {
+		if (next.isEmpty() && !quickAction.stored) {
 			if (i != end(_paintedRows)) {
 				_rowsScrollCache.invalidate(key);
 				_paintedRows.erase(i);
@@ -3942,6 +3995,7 @@ void InnerWidget::trackPaintedRow(
 		auto stored = PaintedRow();
 		stored.entry = row->entry().get();
 		stored.animation = next;
+		stored.quickActionAnimation = std::move(quickAction.stored);
 		stored.animationGeneration = painted.animationGeneration;
 		stored.messagePreviewPainted = painted.messagePreviewPainted;
 		_paintedRows[key] = std::move(stored);
@@ -3956,6 +4010,7 @@ void InnerWidget::trackPaintedRow(
 	const auto uncovered = mapRegion(combined).subtracted(repaintRegion);
 	if (!uncovered.isEmpty()) {
 		stored.animation = combined;
+		stored.quickActionAnimation = std::move(quickAction.stored);
 		stored.animationGeneration = painted.animationGeneration;
 		stored.messagePreviewPainted = painted.messagePreviewPainted;
 		if (stored.cache) {
@@ -3970,9 +4025,12 @@ void InnerWidget::trackPaintedRow(
 	} else {
 		stored.animation = painted.animated;
 	}
+	stored.quickActionAnimation = std::move(quickAction.stored);
 	stored.animationGeneration = painted.animationGeneration;
 	stored.messagePreviewPainted = painted.messagePreviewPainted;
-	if (!stored.cache && stored.animation.isEmpty()) {
+	if (!stored.cache
+		&& stored.animation.isEmpty()
+		&& !stored.quickActionAnimation) {
 		_paintedRows.erase(i);
 		return;
 	}
@@ -6804,7 +6862,7 @@ void InnerWidget::setSwipeContextData(
 				&& !context->icon->frameIndex()
 				&& !context->icon->animating()) {
 				context->icon->animate(
-					[=] { repaintQuickAction(key); },
+					[=] { repaintQuickActionAnimation(key); },
 					0,
 					context->icon->framesCount());
 			}
@@ -6812,7 +6870,7 @@ void InnerWidget::setSwipeContextData(
 			if (context->icon
 				&& context->icon->frameIndex()) {
 				context->icon->jumpTo(0, [=] {
-					repaintQuickAction(key);
+					repaintQuickActionAnimation(key);
 				});
 			}
 		}
@@ -6845,6 +6903,60 @@ void InnerWidget::repaintQuickAction(int64 key) {
 			}
 		}
 	}
+}
+
+void InnerWidget::repaintQuickActionAnimation(int64 key) {
+	if (!key) {
+		return;
+	}
+	const auto matches = [&](const QuickActionPtr &context) {
+		return context && (context->data.msgBareId == key);
+	};
+	if (!matches(_activeQuickAction)
+		&& !ranges::contains(_inactiveQuickActions, true, matches)) {
+		return;
+	}
+	const auto history = session().data().historyLoaded(PeerId(key));
+	if (!history) {
+		return;
+	}
+	if (_state == WidgetState::Default) {
+		if (const auto row = _shownList->getRow(Key(history))) {
+			repaintQuickActionAnimationAt(row, defaultRowTop(row));
+		}
+		if (communityModeShown()) {
+			for (auto index = 0;
+					index != _communityViewable.size();
+					++index) {
+				const auto row = _communityViewable.rowAt(index);
+				if (row->history() == history) {
+					repaintQuickActionAnimationAt(
+						row,
+						communityRowAbsoluteTop(index));
+				}
+			}
+		}
+	} else if (_state == WidgetState::Filtered) {
+		for (const auto &result : _filterResults) {
+			if (result.row->history() == history) {
+				repaintQuickActionAnimationAt(
+					result.row,
+					filteredOffset() + result.top);
+			}
+		}
+	}
+}
+
+void InnerWidget::repaintQuickActionAnimationAt(
+		not_null<Row*> row,
+		int top) {
+	const auto damage = paintedQuickActionAnimationDamage(row);
+	if (!damage) {
+		invalidatePaintedRow(RowsCacheKey(row));
+		update(0, top, width(), row->height());
+		return;
+	}
+	update(damage->translated(0, top));
 }
 
 void InnerWidget::clearExpiredQuickActions(crl::time now) {

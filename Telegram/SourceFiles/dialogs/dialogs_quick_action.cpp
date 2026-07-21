@@ -247,7 +247,7 @@ const style::color &ResolveQuickActionBgActive(
 	return st::windowSubTextFgOver;
 }
 
-void DrawQuickAction(
+QRect DrawQuickAction(
 		QPainter &p,
 		const QRect &rect,
 		not_null<Lottie::Icon*> icon,
@@ -257,7 +257,10 @@ void DrawQuickAction(
 	const auto iconSize = st::dialogsQuickActionSize * iconRatio;
 	const auto innerHeight = iconSize * 2;
 	const auto top = (rect.height() - innerHeight) / 2;
-	icon->paint(p, rect.x() + (rect.width() - iconSize) / 2, top);
+	const auto iconRect = QRect(
+		QPoint(rect.x() + (rect.width() - iconSize) / 2, top),
+		icon->size());
+	icon->paint(p, iconRect.x(), iconRect.y());
 	p.setPen(st::premiumButtonFg);
 	p.setBrush(Qt::NoBrush);
 	const auto availableWidth = rect.width();
@@ -278,6 +281,7 @@ void DrawQuickAction(
 			ResolveQuickDialogLabel(label),
 			style::al_bottom);
 	}
+	return iconRect;
 }
 
 } // namespace Dialogs

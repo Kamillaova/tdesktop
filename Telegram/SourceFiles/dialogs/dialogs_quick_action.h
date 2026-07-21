@@ -46,7 +46,7 @@ void PerformQuickDialogAction(
 [[nodiscard]] const style::color &ResolveQuickActionBgActive(
 	Ui::QuickDialogActionLabel);
 
-void DrawQuickAction(
+QRect DrawQuickAction(
 	QPainter &p,
 	const QRect &rect,
 	not_null<Lottie::Icon*> icon,

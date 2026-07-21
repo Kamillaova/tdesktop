@@ -482,6 +482,15 @@ void PaintRow(
 	const auto history = entry->asHistory();
 	const auto thread = entry->asThread();
 	const auto sublist = entry->asSublist();
+	const auto quick = (history
+		&& context.quickActionContext
+		&& (history->peer->id.value
+			== context.quickActionContext->data.msgBareId))
+		? context.quickActionContext
+		: nullptr;
+	if (quick) {
+		result.quickActionAnimation.emplace();
+	}
 
 	auto bg = context.active
 		? st::dialogsBgActive
@@ -489,13 +498,9 @@ void PaintRow(
 		? st::dialogsBgOver
 		: context.currentBg;
 	auto swipeTranslation = 0;
-	if (history
-		&& context.quickActionContext
-		&& !context.quickActionContext->ripple
-		&& (history->peer->id.value
-			== context.quickActionContext->data.msgBareId)) {
-		if (context.quickActionContext->data.translation != 0) {
-			swipeTranslation = context.quickActionContext->data.translation
+	if (quick && !quick->ripple) {
+		if (quick->data.translation != 0) {
+			swipeTranslation = quick->data.translation
 				* -2;
 		}
 	}
@@ -1098,43 +1103,55 @@ void PaintRow(
 		p.setClipRegion(swipeActionRect);
 		const auto labelType = ResolveQuickDialogLabel(
 			history,
-			context.quickActionContext->action,
+			quick->action,
 			context.filter);
 		p.fillRect(swipeActionRect, ResolveQuickActionBg(labelType));
-		if (context.quickActionContext->data.reachRatio) {
+		if (quick->data.reachRatio) {
 			p.setPen(Qt::NoPen);
 			p.setBrush(ResolveQuickActionBgActive(labelType));
 			const auto r = swipeTranslation
-				* context.quickActionContext->data.reachRatio;
+				* quick->data.reachRatio;
 			const auto offset = st::dialogsQuickActionSize
 				+ st::dialogsQuickActionSize / 2.;
 			p.drawEllipse(QPointF(geometry.width() - offset, offset), r, r);
 		}
 		const auto quickWidth = st::dialogsQuickActionSize * 3;
-		if (context.quickActionContext->icon) {
-			DrawQuickAction(
+		if (quick->icon) {
+			*result.quickActionAnimation += DrawQuickAction(
 				p,
 				QRect(
 					rect::right(geometry) - quickWidth,
 					geometry.y(),
 					quickWidth,
 					geometry.height()),
-				context.quickActionContext->icon.get(),
-				labelType);
+				quick->icon.get(),
+				labelType).intersected(swipeActionRect);
 		}
 		p.setClipping(false);
 	}
-	if (const auto quick = context.quickActionContext;
-			quick && quick->ripple && quick->rippleFg) {
+	if (quick && !quick->rippleSize.isEmpty()) {
+		const auto rect = QRect(
+			QPoint(geometry.width() - quick->rippleSize.width(), 0),
+			quick->rippleSize);
+		*result.quickActionAnimation += rect;
+	}
+	if (quick && quick->ripple && quick->rippleFg) {
 		const auto labelType = ResolveQuickDialogLabel(
 			history,
-			context.quickActionContext->action,
+			quick->action,
 			context.filter);
 		const auto ripple = ResolveQuickActionBg(labelType);
-		const auto size = st::dialogsQuickActionRippleSize;
-		const auto x = geometry.width() - size;
-		quick->ripple->paint(p, x, 0, size, &ripple->c);
-		quick->rippleFg->paint(p, x, 0, size, &st::premiumButtonFg->c);
+		const auto size = quick->rippleSize;
+		const auto x = geometry.width() - size.width();
+		p.translate(x, 0);
+		quick->ripple->paint(p, 0, 0, size.width(), &ripple->c);
+		quick->rippleFg->paint(
+			p,
+			0,
+			0,
+			size.width(),
+			&st::premiumButtonFg->c);
+		p.translate(-x, 0);
 		if (quick->ripple->empty()) {
 			quick->ripple.reset();
 		}

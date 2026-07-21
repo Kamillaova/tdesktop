@@ -10,6 +10,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/ui/dialogs_quick_action.h"
 #include "ui/controls/swipe_handler_data.h"
 
+#include <QtCore/QSize>
+
 namespace Lottie {
 class Icon;
 } // namespace Lottie
@@ -40,6 +42,7 @@ struct QuickActionContext {
 	std::unique_ptr<Lottie::Icon> icon;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	std::unique_ptr<Ui::RippleAnimation> rippleFg;
+	QSize rippleSize;
 	QuickDialogAction action;
 	crl::time finishedAt = 0;
 };

@@ -323,6 +323,7 @@ private:
 	struct PaintedRow {
 		Entry *entry = nullptr;
 		QRegion animation;
+		std::optional<QRegion> quickActionAnimation;
 		std::optional<CachedRow> cache;
 		uint64 animationGeneration = 0;
 		bool messagePreviewPainted = false;
@@ -432,6 +433,8 @@ private:
 
 	[[nodiscard]] std::optional<QRegion> paintedAnimationDamage(
 		not_null<Row*> row);
+	[[nodiscard]] std::optional<QRegion> paintedQuickActionAnimationDamage(
+		not_null<Row*> row) const;
 	[[nodiscard]] bool cachedVideoUserpicDamage(
 		not_null<Row*> row,
 		QRect damage);
@@ -458,7 +461,7 @@ private:
 		const Ui::PaintContext &context);
 
 	bool addBotAppRipple(QPoint origin, Fn<void()> updateCallback);
-	bool addQuickActionRipple(not_null<Row*> row, Fn<void()> updateCallback);
+	bool addQuickActionRipple(not_null<Row*> row);
 
 	bool addRightButtonRipple(QPoint origin, Fn<void()> updateCallback);
 
@@ -655,6 +658,8 @@ private:
 	void restoreChatsFilterScrollState(FilterId filterId);
 
 	void repaintQuickAction(int64 key);
+	void repaintQuickActionAnimation(int64 key);
+	void repaintQuickActionAnimationAt(not_null<Row*> row, int top);
 	void clearExpiredQuickActions(crl::time now);
 	[[nodiscard]] not_null<Ui::QuickActionContext*> ensureQuickAction(
 		int64 key);

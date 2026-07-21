@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QRegion>
 
+#include <optional>
+
 namespace style {
 struct DialogRow;
 struct VerifiedBadge;
@@ -88,6 +90,7 @@ struct PaintContext {
 
 struct RowPaintResult {
 	QRegion animated;
+	std::optional<QRegion> quickActionAnimation;
 	uint64 animationGeneration = 0;
 	bool messagePreviewPainted = false;
 };
