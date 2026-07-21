@@ -1526,7 +1526,7 @@ void TopBar::startUploadOverlay() {
 	_waitingUserpicCloudLoad = true;
 	_uploadOverlay = std::make_unique<Ui::UploadProgressOverlay>(
 		this,
-		[=] { update(); });
+		[=] { update(userpicGeometry()); });
 	_uploadOverlay->start();
 
 	_userpicButton->events(
