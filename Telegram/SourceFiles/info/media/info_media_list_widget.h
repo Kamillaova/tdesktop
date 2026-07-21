@@ -195,6 +195,7 @@ private:
 
 	void start();
 	int recountHeight();
+	void resizeToContentHeight();
 	void refreshHeight();
 	void subscribeToSession(
 		not_null<Main::Session*> session,
@@ -335,6 +336,13 @@ private:
 	void updateShiftAnimations();
 	[[nodiscard]] int itemIndexFromPoint(QPoint point) const;
 	[[nodiscard]] QRect itemGeometryByIndex(int index);
+	[[nodiscard]] QRect reorderItemGeometry(not_null<BaseLayout*> item);
+	[[nodiscard]] QRect draggedItemGeometry(QPoint position) const;
+	void repaintReorderItem(
+		not_null<BaseLayout*> item,
+		QPoint was,
+		QPoint now);
+	void repaintDraggedItem(QPoint was, QPoint now);
 	[[nodiscard]] BaseLayout *itemByIndex(int index);
 	[[nodiscard]] bool canReorder() const;
 	void reorderItemsInSections(int oldIndex, int newIndex);

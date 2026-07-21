@@ -2356,8 +2356,12 @@ void ListWidget::applyDragSelection(SelectedMap &applyTo) const {
 	}
 }
 
-void ListWidget::refreshHeight() {
+void ListWidget::resizeToContentHeight() {
 	resize(width(), recountHeight());
+}
+
+void ListWidget::refreshHeight() {
+	resizeToContentHeight();
 	update();
 }
 
@@ -2467,6 +2471,7 @@ void ListWidget::updateReorder(const QPoint &globalPos) {
 	}
 	const auto distance
 		= (globalPos - _reorderState.startPos).manhattanLength();
+	const auto wasReordering = (_mouseAction == MouseAction::Reordering);
 	if (_mouseAction == MouseAction::PrepareReorder
 		&& distance > QApplication::startDragDistance()) {
 		_mouseAction = MouseAction::Reordering;
@@ -2490,13 +2495,20 @@ void ListWidget::updateReorder(const QPoint &globalPos) {
 			currentIndex += sectionSize;
 		}
 
+		const auto previousPos = _reorderState.currentPos;
 		_reorderState.currentPos = localPos;
+		if (wasReordering) {
+			repaintDraggedItem(previousPos, localPos);
+		} else if (_reorderState.item) {
+			repaintItem(
+				reorderItemGeometry(_reorderState.item).united(
+					draggedItemGeometry(localPos)));
+		}
 		const auto newIndex = itemIndexFromPoint(mapped);
 		if (newIndex >= 0 && newIndex != _reorderState.targetIndex) {
 			_reorderState.targetIndex = newIndex;
 			updateShiftAnimations();
 		}
-		update();
 	}
 }
 
@@ -2523,20 +2535,20 @@ void ListWidget::finishReorder() {
 		}
 	}
 
-	const auto targetIndex = _reorderState.targetIndex;
 	const auto draggedItem = _reorderState.item;
 	if (draggedItem) {
-		const auto targetGeometry = itemGeometryByIndex(targetIndex);
+		const auto targetGeometry = findItemDetails(draggedItem).geometry;
 		if (!targetGeometry.isEmpty()) {
 			const auto startPos = _reorderState.currentPos;
-			const auto endPos = targetGeometry.topLeft()
-				+ rect::m::pos::tl(padding());
+			const auto endPos = targetGeometry.topLeft();
+			repaintDraggedItem(startPos, endPos);
 			const auto callback = [=](float64 progress) {
+				const auto previousPos = _reorderState.currentPos;
 				const auto currentPos = QPoint(
 					startPos.x() + (endPos.x() - startPos.x()) * progress,
 					startPos.y() + (endPos.y() - startPos.y()) * progress);
 				_reorderState.currentPos = currentPos;
-				update();
+				repaintDraggedItem(previousPos, currentPos);
 				if (progress == 1.) {
 					cancelReorder();
 				}
@@ -2553,10 +2565,18 @@ void ListWidget::finishReorder() {
 }
 
 void ListWidget::cancelReorder() {
+	const auto dragged = (_mouseAction == MouseAction::Reordering)
+		? draggedItemGeometry(_reorderState.currentPos)
+		: QRect();
+	const auto item = _reorderState.item;
 	_reorderState = {};
 	finishShiftAnimations();
 	_mouseAction = MouseAction::None;
-	update();
+	if (item) {
+		repaintItem(dragged.united(reorderItemGeometry(item)));
+	} else if (!dragged.isEmpty()) {
+		repaintItem(dragged);
+	}
 }
 
 void ListWidget::updateShiftAnimations() {
@@ -2593,16 +2613,18 @@ void ListWidget::updateShiftAnimations() {
 					const auto deltaY = toGeometry.y() - fromGeometry.y();
 					animation.xAnimation.start(
 						[=](float64 progress) {
+							const auto was = item->shift();
 							item->setShiftX(progress);
-							update();
+							repaintReorderItem(item, was, item->shift());
 						},
 						0,
 						deltaX,
 						st::slideWrapDuration);
 					animation.yAnimation.start(
 						[=](float64 progress) {
+							const auto was = item->shift();
 							item->setShiftY(progress);
-							update();
+							repaintReorderItem(item, was, item->shift());
 						},
 						0,
 						deltaY,
@@ -2649,6 +2671,65 @@ QRect ListWidget::itemGeometryByIndex(int index) {
 		}
 	}
 	return QRect();
+}
+
+QRect ListWidget::reorderItemGeometry(not_null<BaseLayout*> item) {
+	auto result = findItemDetails(item).geometry;
+	const auto section = findSectionByItem(item->getItem());
+	const auto rightPadding = (section != _sections.end())
+		? section->oneColumnRightPadding()
+		: 0;
+	if (rightPadding) {
+		const auto icon = QRect(
+			rect::right(result) - rightPadding,
+			result.y()
+				+ (result.height() - st::stickersReorderIcon.height()) / 2,
+			st::stickersReorderIcon.width(),
+			st::stickersReorderIcon.height());
+		result = result.united(icon);
+	}
+	return result;
+}
+
+QRect ListWidget::draggedItemGeometry(QPoint position) const {
+	if (!_reorderState.item) {
+		return QRect();
+	}
+	auto result = QRect(
+		position,
+		QSize(
+			_reorderState.item->maxWidth(),
+			_reorderState.item->minHeight()));
+	if (_reorderState.section && _reorderState.section->isOneColumn()) {
+		const auto icon = QRect(
+			position.x()
+				+ width() - _reorderState.section->oneColumnRightPadding() * 2,
+			position.y()
+				+ (result.height() - st::stickersReorderIcon.height()) / 2,
+			st::stickersReorderIcon.width(),
+			st::stickersReorderIcon.height());
+		result = result.united(icon);
+	}
+	return result;
+}
+
+void ListWidget::repaintReorderItem(
+		not_null<BaseLayout*> item,
+		QPoint was,
+		QPoint now) {
+	const auto geometry = reorderItemGeometry(item);
+	if (!geometry.isEmpty()) {
+		repaintItem(
+			geometry.translated(was).united(geometry.translated(now)));
+	}
+}
+
+void ListWidget::repaintDraggedItem(QPoint was, QPoint now) {
+	const auto geometry = draggedItemGeometry(was).united(
+		draggedItemGeometry(now));
+	if (!geometry.isEmpty()) {
+		repaintItem(geometry);
+	}
 }
 
 BaseLayout* ListWidget::itemByIndex(int index) {
@@ -2702,8 +2783,23 @@ void ListWidget::reorderItemsInSections(int oldIndex, int newIndex) {
 	}
 
 	if (oldSection == newSection) {
+		const auto first = std::min(oldSectionIndex, newSectionIndex);
+		const auto last = std::max(oldSectionIndex, newSectionIndex);
+		const auto items = std::vector<not_null<BaseLayout*>>(
+			oldSection->items().begin() + first,
+			oldSection->items().begin() + last + 1);
+		auto repaint = QRect();
+		for (const auto item : items) {
+			repaint = repaint.united(reorderItemGeometry(item));
+		}
 		oldSection->reorderItems(oldSectionIndex, newSectionIndex);
-		refreshHeight();
+		resizeToContentHeight();
+		for (const auto item : items) {
+			repaint = repaint.united(reorderItemGeometry(item));
+		}
+		if (!repaint.isEmpty()) {
+			repaintItem(repaint);
+		}
 	}
 }
 
@@ -2717,11 +2813,17 @@ void ListWidget::resetAllItemShifts() {
 }
 
 void ListWidget::finishShiftAnimations() {
+	auto repaint = QRect();
+	auto items = std::vector<not_null<BaseLayout*>>();
+	items.reserve(_shiftAnimations.size());
 	for (auto &[index, animation] : _shiftAnimations) {
 		const auto item = itemByIndex(index);
 		if (!item) {
 			continue;
 		}
+		items.push_back(item);
+		repaint = repaint.united(
+			reorderItemGeometry(item).translated(item->shift()));
 		const auto animating = animation.xAnimation.animating()
 			|| animation.yAnimation.animating();
 		const auto geometry = itemGeometryByIndex(index);
@@ -2731,8 +2833,9 @@ void ListWidget::finishShiftAnimations() {
 			++_activeShiftAnimations;
 			animation.xAnimation.start(
 				[=](float64 progress) {
-					if (item) item->setShiftX(progress);
-					update();
+					const auto was = item->shift();
+					item->setShiftX(progress);
+					repaintReorderItem(item, was, item->shift());
 					if (progress == 1.) {
 						--_activeShiftAnimations;
 						if (_activeShiftAnimations == 0) {
@@ -2746,8 +2849,9 @@ void ListWidget::finishShiftAnimations() {
 			++_activeShiftAnimations;
 			animation.yAnimation.start(
 				[=](float64 progress) {
-					if (item) item->setShiftY(progress);
-					update();
+					const auto was = item->shift();
+					item->setShiftY(progress);
+					repaintReorderItem(item, was, item->shift());
 					if (progress == 1.) {
 						--_activeShiftAnimations;
 						if (_activeShiftAnimations == 0) {
@@ -2766,6 +2870,12 @@ void ListWidget::finishShiftAnimations() {
 		_shiftAnimations.clear();
 	}
 	resetAllItemShifts();
+	for (const auto item : items) {
+		repaint = repaint.united(reorderItemGeometry(item));
+	}
+	if (!repaint.isEmpty()) {
+		repaintItem(repaint);
+	}
 }
 
 ListWidget::~ListWidget() {
