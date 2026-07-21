@@ -1622,7 +1622,7 @@ void EmojiListWidget::flushCustomRepaints() {
 	});
 	for (const auto &rect : updates) {
 		if (!rect.isEmpty() && rect.intersects(visible)) {
-			update(rect);
+			rtlupdate(rect);
 		}
 	}
 }
