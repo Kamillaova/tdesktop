@@ -63,12 +63,12 @@ int RepostView::height() const {
 		+ st::historyReplyPadding.bottom();
 }
 
-void RepostView::draw(Painter &p, int x, int y, int availableWidth) {
+QRect RepostView::draw(Painter &p, int x, int y, int availableWidth) {
 	if (!_maxWidth) {
 		recountDimensions();
 	}
 	if (_loading) {
-		return;
+		return {};
 	}
 	const auto simple = _text.isEmpty();
 	if (simple) {
@@ -102,7 +102,7 @@ void RepostView::draw(Painter &p, int x, int y, int availableWidth) {
 			backgroundEmoji->emoji = CreateBackgroundEmojiInstance(
 				&_story->owner(),
 				backgroundEmojiId,
-				crl::guard(this, [=] { _controller->repaint(); }));
+				crl::guard(this, [=] { _controller->repaintRepost(); }));
 		}
 		ValidateBackgroundEmoji(
 			backgroundEmoji,
@@ -120,10 +120,18 @@ void RepostView::draw(Painter &p, int x, int y, int availableWidth) {
 	}
 	cache->bg = rippleColor;
 
+	auto painted = rect;
 	if (_ripple) {
-		_ripple->paint(p, x, y, w, &rippleColor);
+		const auto outerWidth = w + 2 * x;
+		const auto rippleRect = style::rtlrect(
+			QRect(QPoint(x, y), _rippleSize),
+			outerWidth);
+		_ripple->paint(p, x, y, outerWidth, &rippleColor);
 		if (_ripple->empty()) {
 			_ripple.reset();
+			_rippleSize = {};
+		} else {
+			painted = painted.united(rippleRect);
 		}
 	}
 
@@ -157,6 +165,7 @@ void RepostView::draw(Painter &p, int x, int y, int availableWidth) {
 			}
 		}
 	}
+	return painted;
 }
 
 RepostClickHandler RepostView::lookupHandler(QPoint position) {
@@ -246,14 +255,14 @@ void RepostView::recountDimensions() {
 		.session = &_story->session(),
 		.customEmojiLoopLimit = 1,
 	});
+	context.repaint = crl::guard(this, [=] {
+		_controller->repaintRepost();
+	});
 	_name.setMarkedText(
 		st::semiboldTextStyle,
 		nameFull,
 		Ui::NameTextOptions(),
 		context);
-	context.repaint = crl::guard(this, [=] {
-		_controller->repaint();
-	});
 	_text.setMarkedText(
 		st::defaultTextStyle,
 		text,
@@ -279,14 +288,17 @@ void RepostView::clickHandlerPressedChanged(
 			const auto skip = simple ? st::normalFont->height : 0;
 			if (!_ripple) {
 				const auto h = height() - skip;
+				_rippleSize = QSize(_lastWidth, h);
 				_ripple = std::make_unique<Ui::RippleAnimation>(
 					st::defaultRippleAnimation,
 					Ui::RippleAnimation::RoundRectMask(
-						QSize(_lastWidth, h),
+						_rippleSize,
 						(simple
 							? st::storiesRepostSimpleStyle
 							: st::messageQuoteStyle).radius),
-					[=] { _controller->repaint(); });
+					crl::guard(this, [=] {
+						_controller->repaintRepost();
+					}));
 			}
 			_ripple->add(_lastPosition - QPoint(0, skip));
 		} else if (_ripple) {

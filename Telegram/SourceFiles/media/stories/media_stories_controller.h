@@ -148,7 +148,13 @@ public:
 	void captionClosed();
 
 	[[nodiscard]] QMargins repostCaptionPadding() const;
-	void drawRepostInfo(Painter &p, int x, int y, int availableWidth) const;
+	[[nodiscard]] QRect drawRepostInfo(
+		Painter &p,
+		int x,
+		int y,
+		int availableWidth) const;
+	void recordRepostInfoPaint(QRect rect);
+	void recordFullRepostInfoPaint(QRect rect);
 	[[nodiscard]] RepostClickHandler lookupRepostHandler(
 		QPoint position) const;
 
@@ -178,6 +184,7 @@ public:
 	void volumeChangeFinished();
 
 	void repaint();
+	void repaintRepost();
 	void repaintSibling(not_null<Sibling*> sibling);
 	[[nodiscard]] SiblingView sibling(SiblingType type) const;
 
@@ -244,6 +251,14 @@ private:
 		ClickHandlerPtr handler;
 		std::unique_ptr<StoryAreaView> view;
 	};
+	struct RepostRepaint {
+		std::optional<QRect> rect;
+		bool pending = false;
+	};
+	enum class RepostTarget {
+		Overlay,
+		Full,
+	};
 	enum class CommentsHas {
 		None,
 		AllRead,
@@ -260,6 +275,12 @@ private:
 	void markAsRead();
 
 	void updateContentFaded();
+	void recordRepostInfoPaint(
+		RepostRepaint &repaint,
+		QRect rect,
+		RepostTarget target);
+	void repaintRepost(RepostRepaint &repaint, RepostTarget target);
+	void repaintRepost(std::optional<QRect> rect, RepostTarget target);
 	void updatePlayingAllowed();
 	void setPlayingAllowed(bool allowed);
 	void rebuildActiveAreas(const Layout &layout) const;
@@ -314,6 +335,8 @@ private:
 	std::unique_ptr<PhotoPlayback> _photoPlayback;
 	std::unique_ptr<CaptionFullView> _captionFullView;
 	std::unique_ptr<RepostView> _repostView;
+	RepostRepaint _repostRepaint;
+	RepostRepaint _fullRepostRepaint;
 
 	std::shared_ptr<Data::GroupCall> _videoStream;
 	base::weak_ptr<Calls::GroupCall> _videoStreamCall;

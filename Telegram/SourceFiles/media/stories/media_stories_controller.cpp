@@ -645,14 +645,28 @@ QMargins Controller::repostCaptionPadding() const {
 	return { 0, repostSkipTop(), 0, 0 };
 }
 
-void Controller::drawRepostInfo(
+QRect Controller::drawRepostInfo(
 		Painter &p,
 		int x,
 		int y,
 		int availableWidth) const {
 	Expects(_repostView != nullptr);
 
-	_repostView->draw(p, x, y, availableWidth);
+	return _repostView->draw(p, x, y, availableWidth);
+}
+
+void Controller::recordRepostInfoPaint(QRect rect) {
+	recordRepostInfoPaint(
+		_repostRepaint,
+		rect,
+		RepostTarget::Overlay);
+}
+
+void Controller::recordFullRepostInfoPaint(QRect rect) {
+	recordRepostInfoPaint(
+		_fullRepostRepaint,
+		rect,
+		RepostTarget::Full);
 }
 
 RepostClickHandler Controller::lookupRepostHandler(QPoint position) const {
@@ -692,6 +706,7 @@ void Controller::showFullCaption() {
 	if (_captionText.empty()) {
 		return;
 	}
+	_fullRepostRepaint = {};
 	_captionFullView = std::make_unique<CaptionFullView>(this);
 	updateContentFaded();
 }
@@ -702,11 +717,14 @@ void Controller::captionClosing() {
 
 void Controller::captionClosed() {
 	if (!_captionFullView) {
+		_fullRepostRepaint = {};
 		return;
 	} else if (_captionFullView->focused()) {
 		_wrap->setFocus();
 	}
 	_captionFullView = nullptr;
+	_repostRepaint = {};
+	_fullRepostRepaint = {};
 }
 
 std::shared_ptr<ChatHelpers::Show> Controller::uiShow() const {
@@ -909,6 +927,7 @@ void Controller::show(
 
 	captionClosed();
 	_repostView = validateRepostView(story);
+	_repostRepaint = {};
 	_captionText = story->caption();
 	_contentFaded = false;
 	_contentFadeAnimation.stop();
@@ -1503,6 +1522,60 @@ void Controller::repaint() {
 		_captionFullView->repaint();
 	}
 	_delegate->storiesRepaint();
+}
+
+void Controller::repaintRepost() {
+	if (_captionFullView) {
+		repaintRepost(_fullRepostRepaint, RepostTarget::Full);
+	} else {
+		repaintRepost(_repostRepaint, RepostTarget::Overlay);
+	}
+}
+
+void Controller::recordRepostInfoPaint(
+		RepostRepaint &repaint,
+		QRect rect,
+		RepostTarget target) {
+	const auto previous = repaint.rect.value_or(QRect());
+	repaint.pending = false;
+	repaint.rect = rect;
+	if (previous.isEmpty() || previous == rect) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRepost(previous.united(rect), target);
+}
+
+void Controller::repaintRepost(
+		RepostRepaint &repaint,
+		RepostTarget target) {
+	if (repaint.pending) {
+		return;
+	}
+	repaint.pending = true;
+	repaintRepost(
+		(repaint.rect && !repaint.rect->isEmpty())
+			? repaint.rect
+			: std::nullopt,
+		target);
+}
+
+void Controller::repaintRepost(
+		std::optional<QRect> rect,
+		RepostTarget target) {
+	if (target == RepostTarget::Full) {
+		if (_captionFullView) {
+			if (rect) {
+				_captionFullView->repaint(*rect);
+			} else {
+				_captionFullView->repaint();
+			}
+		}
+	} else if (rect) {
+		_delegate->storiesRepaint(*rect);
+	} else {
+		_delegate->storiesRepaint();
+	}
 }
 
 SiblingView Controller::sibling(SiblingType type) const {

@@ -101,7 +101,12 @@ public:
 	void showFullCaption();
 
 	[[nodiscard]] QMargins repostCaptionPadding() const;
-	void drawRepostInfo(Painter &p, int x, int y, int availableWidth) const;
+	[[nodiscard]] QRect drawRepostInfo(
+		Painter &p,
+		int x,
+		int y,
+		int availableWidth) const;
+	void recordRepostInfoPaint(QRect rect) const;
 	[[nodiscard]] RepostClickHandler lookupRepostHandler(
 		QPoint position) const;
 

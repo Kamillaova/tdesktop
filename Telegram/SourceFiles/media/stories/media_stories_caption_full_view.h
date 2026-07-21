@@ -31,6 +31,7 @@ public:
 
 	void close();
 	void repaint();
+	void repaint(QRect rect);
 	[[nodiscard]] bool closing() const;
 	[[nodiscard]] bool focused() const;
 

@@ -35,7 +35,11 @@ public:
 	~RepostView();
 
 	[[nodiscard]] int height() const;
-	void draw(Painter &p, int x, int y, int availableWidth);
+	[[nodiscard]] QRect draw(
+		Painter &p,
+		int x,
+		int y,
+		int availableWidth);
 	[[nodiscard]] RepostClickHandler lookupHandler(QPoint position);
 
 	[[nodiscard]] PeerData *fromPeer() const;
@@ -53,6 +57,7 @@ private:
 	PeerData *_sourcePeer = nullptr;
 	ClickHandlerPtr _link;
 	std::unique_ptr<Ui::RippleAnimation> _ripple;
+	QSize _rippleSize;
 
 	Ui::Text::String _name;
 	Ui::Text::String _text;

@@ -155,12 +155,16 @@ QMargins View::repostCaptionPadding() const {
 	return _controller->repostCaptionPadding();
 }
 
-void View::drawRepostInfo(
+QRect View::drawRepostInfo(
 		Painter &p,
 		int x,
 		int y,
 		int availableWidth) const {
-	_controller->drawRepostInfo(p, x, y, availableWidth);
+	return _controller->drawRepostInfo(p, x, y, availableWidth);
+}
+
+void View::recordRepostInfoPaint(QRect rect) const {
+	_controller->recordRepostInfoPaint(rect);
 }
 
 RepostClickHandler View::lookupRepostHandler(QPoint position) const {

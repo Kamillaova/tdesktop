@@ -40,6 +40,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/format_values.h"
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
+#include "ui/paint/damage.h"
 #include "ui/rect.h"
 #include "ui/power_saving.h"
 #include "ui/cached_round_corners.h"
@@ -5766,6 +5767,10 @@ void OverlayWidget::storiesRepaint() {
 	update();
 }
 
+void OverlayWidget::storiesRepaint(QRect rect) {
+	update(rect);
+}
+
 void OverlayWidget::storiesVolumeToggle() {
 	playbackControlsVolumeToggled();
 }
@@ -6997,7 +7002,23 @@ void OverlayWidget::paintCaptionContent(
 	if (_stories) {
 		p.setOpacity(1.);
 		if (_stories->repost()) {
-			_stories->drawRepostInfo(p, full.x(), full.y(), full.width());
+			const auto transform = p.transform();
+			auto repaint = Ui::DamageRect(
+				QRectF(_stories->drawRepostInfo(
+					p,
+					full.x(),
+					full.y(),
+					full.width())),
+				transform);
+			if (!repaint.isEmpty()) {
+				const auto paintedOuter = Ui::DamageRect(
+					QRectF(outer),
+					transform);
+				repaint.translate(
+					captionGeometry().topLeft()
+						- paintedOuter.topLeft());
+			}
+			_stories->recordRepostInfoPaint(repaint);
 		}
 	} else {
 		p.setOpacity(opacity);

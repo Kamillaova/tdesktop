@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/click_handler.h"
 #include "ui/painter.h"
+#include "ui/paint/damage.h"
 #include "ui/ui_utility.h"
 #include "styles/style_media_view.h"
 
@@ -138,12 +139,15 @@ CaptionFullView::CaptionFullView(not_null<Controller*> controller)
 	_wrap->paintRequest() | rpl::on_next([=] {
 		if (_controller->repost()) {
 			auto p = Painter(_wrap.get());
-			_controller->drawRepostInfo(
-				p,
-				st::mediaviewCaptionPadding.left(),
-				(_wrap->padding().top()
-					- _controller->repostCaptionPadding().top()),
-				_wrap->width());
+			const auto transform = p.transform();
+			_controller->recordFullRepostInfoPaint(Ui::DamageRect(
+				QRectF(_controller->drawRepostInfo(
+					p,
+					st::mediaviewCaptionPadding.left(),
+					(_wrap->padding().top()
+						- _controller->repostCaptionPadding().top()),
+					_wrap->width())),
+				transform));
 		}
 	}, _wrap->lifetime());
 
@@ -175,6 +179,10 @@ void CaptionFullView::close() {
 
 void CaptionFullView::repaint() {
 	_wrap->update();
+}
+
+void CaptionFullView::repaint(QRect rect) {
+	_wrap->update(rect);
 }
 
 void CaptionFullView::updateGeometry() {

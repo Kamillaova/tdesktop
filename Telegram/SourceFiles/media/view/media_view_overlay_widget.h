@@ -292,6 +292,7 @@ private:
 	void storiesTogglePaused(bool paused) override;
 	float64 storiesSiblingOver(Stories::SiblingType type) override;
 	void storiesRepaint() override;
+	void storiesRepaint(QRect rect) override;
 	void storiesVolumeToggle() override;
 	void storiesVolumeChanged(float64 volume) override;
 	void storiesVolumeChangeFinished() override;
