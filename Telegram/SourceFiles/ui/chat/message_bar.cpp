@@ -23,6 +23,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 namespace Ui {
 namespace {
 
+struct PaintedImageSpoilerDamage final {
+	QRegion current;
+	QRegion fallback;
+};
+
 [[nodiscard]] int SameFirstPartLength(const QString &a, const QString &b) {
 	const auto &[i, j] = ranges::mismatch(a, b);
 	return (i - a.begin());
@@ -66,7 +71,16 @@ MessageBar::MessageBar(
 
 void MessageBar::customEmojiRepaint() {
 	if (_repaintingImageSpoiler) {
-		_widget.update();
+		const auto &state = _imageSpoilerDamage;
+		if (state.scheduled) {
+			return;
+		}
+		const auto damage = state.known
+			? state.stale.united(state.current)
+			: state.stale.united(state.fallback);
+		if (!damage.isEmpty()) {
+			scheduleImageSpoilerRepaint(damage);
+		}
 		return;
 	}
 	if (_textAnimationDamage.scheduled
@@ -222,6 +236,7 @@ void MessageBar::tweenTo(MessageBarContent &&content) {
 
 void MessageBar::updateFromContent(MessageBarContent &&content) {
 	invalidateTextAnimationDamage();
+	invalidateImageSpoilerDamage();
 	_content = std::move(content);
 	_title.setText(_st.title, _content.title);
 	_text.setMarkedText(
@@ -331,6 +346,72 @@ void MessageBar::scheduleTextAnimationRepaint(QRect damage) {
 	_widget.update(damage);
 }
 
+void MessageBar::invalidateImageSpoilerDamage() {
+	_imageSpoilerDamage.stale += (_imageSpoilerDamage.known
+		? _imageSpoilerDamage.current
+		: _imageSpoilerDamage.fallback);
+	_imageSpoilerDamage.current = QRegion();
+	_imageSpoilerDamage.fallback = QRegion();
+	_imageSpoilerDamage.known = false;
+}
+
+void MessageBar::recordImageSpoilerDamage(
+		QRegion current,
+		QRegion fallback,
+		const QRegion &repaintRegion) {
+	auto &state = _imageSpoilerDamage;
+	const auto widgetRegion = QRegion(_widget.rect());
+	state.current &= widgetRegion;
+	state.stale &= widgetRegion;
+	state.fallback &= widgetRegion;
+	current &= widgetRegion;
+	fallback &= widgetRegion;
+	fallback += current;
+	const auto repainted = repaintRegion.intersected(widgetRegion);
+	const auto relevant = state.current
+		.united(state.stale)
+		.united(state.fallback)
+		.united(current)
+		.united(fallback);
+	if (!repainted.intersects(relevant)) {
+		return;
+	}
+	state.fallback = fallback;
+	state.scheduled = false;
+	if (!state.known) {
+		const auto required = state.stale.united(state.fallback);
+		if (!required.subtracted(repainted).isEmpty()) {
+			scheduleImageSpoilerRepaint(required);
+			return;
+		}
+		state.current = current;
+		state.stale = QRegion();
+		state.known = true;
+		return;
+	}
+	const auto combined = state.stale
+		.united(state.current)
+		.united(current);
+	if (!combined.subtracted(repainted).isEmpty()) {
+		state.current += current;
+		scheduleImageSpoilerRepaint(combined);
+		return;
+	}
+	state.current = current;
+	state.stale = QRegion();
+}
+
+void MessageBar::scheduleImageSpoilerRepaint(QRegion damage) {
+	if (_imageSpoilerDamage.scheduled) {
+		return;
+	}
+	damage &= QRegion(_widget.rect());
+	if (!damage.isEmpty()) {
+		_imageSpoilerDamage.scheduled = true;
+		_widget.update(damage);
+	}
+}
+
 auto MessageBar::makeGrabGuard() {
 	auto imageShown = _animation
 		? std::move(_animation->imageShown)
@@ -414,6 +495,15 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 	if (canonical) {
 		_textAnimationDamage.scheduled = false;
 	}
+	auto imageSpoilerDamage = PaintedImageSpoilerDamage();
+	const auto recordImageDamage = gsl::finally([&] {
+		if (canonical) {
+			recordImageSpoilerDamage(
+				std::move(imageSpoilerDamage.current),
+				std::move(imageSpoilerDamage.fallback),
+				repaintRegion);
+		}
+	});
 	const auto progress = _animation ? _animation->bodyMoved.value(1.) : 1.;
 	const auto imageFinal = _image.isNull() ? 0. : 1.;
 	const auto imageShown = _animation
@@ -453,18 +543,30 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 	const auto now = crl::now();
 	const auto paused = p.inactive();
 	const auto pausedSpoiler = paused || On(PowerSaving::kChatSpoiler);
+	const auto paintImage = [&](
+			QRect rect,
+			const QPixmap &image,
+			SpoilerAnimation *spoiler) {
+		if (canonical) {
+			const auto damage = QRegion(Ui::DamageRect(
+				QRectF(rect),
+				p.transform()));
+			imageSpoilerDamage.fallback += damage;
+			if (spoiler) {
+				imageSpoilerDamage.current += damage;
+			}
+		}
+		paintImageWithSpoiler(p, rect, image, spoiler, now, pausedSpoiler);
+	};
 
 	paintLeftBar(p);
 
 	if (!_animation) {
 		if (!_image.isNull()) {
-			paintImageWithSpoiler(
-				p,
+			paintImage(
 				image,
 				_image,
-				_spoiler.get(),
-				now,
-				pausedSpoiler);
+				_spoiler.get());
 		}
 	} else if (!_animation->imageTo.isNull()
 		|| (!_animation->imageFrom.isNull()
@@ -482,30 +584,21 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 		}();
 		if (_animation->bodyMoved.animating()) {
 			p.setOpacity(1. - progress);
-			paintImageWithSpoiler(
-				p,
+			paintImage(
 				rect.translated(0, shiftFrom),
 				_animation->imageFrom,
-				_animation->spoilerFrom.get(),
-				now,
-				pausedSpoiler);
+				_animation->spoilerFrom.get());
 			p.setOpacity(progress);
-			paintImageWithSpoiler(
-				p,
+			paintImage(
 				rect.translated(0, shiftTo),
 				_animation->imageTo,
-				_spoiler.get(),
-				now,
-				pausedSpoiler);
+				_spoiler.get());
 			p.setOpacity(1.);
 		} else {
-			paintImageWithSpoiler(
-				p,
+			paintImage(
 				rect,
 				_image,
-				_spoiler.get(),
-				now,
-				pausedSpoiler);
+				_spoiler.get());
 		}
 	}
 	auto customEmojiRepaintBounds = Text::CustomEmojiRepaintBounds();

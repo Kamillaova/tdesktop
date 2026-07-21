@@ -11,8 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rect_part.h"
 #include "ui/rp_widget.h"
 
+#include <QtGui/QRegion>
+
 class Painter;
-class QRegion;
 
 namespace style {
 struct MessageBar;
@@ -85,6 +86,13 @@ private:
 		bool known = false;
 		bool scheduled = false;
 	};
+	struct ImageSpoilerDamage {
+		QRegion current;
+		QRegion stale;
+		QRegion fallback;
+		bool known = false;
+		bool scheduled = false;
+	};
 	void setup();
 	void paint(Painter &p, const QRegion &repaintRegion);
 	void paintLeftBar(Painter &p);
@@ -96,6 +104,12 @@ private:
 		QRect fallback,
 		const QRegion &repaintRegion);
 	void scheduleTextAnimationRepaint(QRect damage);
+	void invalidateImageSpoilerDamage();
+	void recordImageSpoilerDamage(
+		QRegion current,
+		QRegion fallback,
+		const QRegion &repaintRegion);
+	void scheduleImageSpoilerRepaint(QRegion damage);
 	[[nodiscard]] QPixmap prepareImage(const QImage &preview);
 
 	[[nodiscard]] QRect imageRect() const;
@@ -132,6 +146,7 @@ private:
 
 	const style::MessageBar &_st;
 	TextAnimationDamage _textAnimationDamage;
+	ImageSpoilerDamage _imageSpoilerDamage;
 	bool _repaintingImageSpoiler = false;
 	RpWidget _widget;
 	Fn<bool()> _customEmojiPaused;
