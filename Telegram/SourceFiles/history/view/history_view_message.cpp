@@ -566,7 +566,13 @@ struct Message::LinkRipple {
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	ClickHandlerPtr link;
 	QPoint maskOffset;
+	QRect current;
+	QRect stale;
+	QSize maskSize;
+	uint64 generation = 0;
 	int cachedWidth = 0;
+	bool pending = false;
+	bool known = false;
 };
 
 LogEntryOriginal::LogEntryOriginal() = default;
@@ -2971,6 +2977,7 @@ void Message::paintFromName(
 	}
 	paintLinkRipple(
 		p,
+		context,
 		nameLinkHandler,
 		QRect(availableLeft, trect.top(), nameWidth, st::msgNameFont->height),
 		trect.topLeft());
@@ -2993,6 +3000,7 @@ void Message::paintFromName(
 		p.setPen(stm->msgServiceFg);
 		paintLinkRipple(
 			p,
+			context,
 			via->link,
 			QRect(availableLeft, trect.top(), via->width, st::msgServiceFont->height),
 			trect.topLeft());
@@ -3006,6 +3014,7 @@ void Message::paintFromName(
 			p.setPen(stm->msgServiceFg);
 			paintLinkRipple(
 				p,
+				context,
 				guestChat->link,
 				QRect(availableLeft, trect.top(), guestChat->width, st::msgServiceFont->height),
 				trect.topLeft());
@@ -3248,10 +3257,14 @@ void Message::paintForwardedInfo(
 		if (_linkRipple && _linkRipple->ripple && rippleBelongsHere) {
 			auto color = p.pen().color();
 			color.setAlphaF(0.1);
+			const auto position = QPoint(
+				trect.x() + _linkRipple->maskOffset.x(),
+				trect.y() + _linkRipple->maskOffset.y());
+			recordLinkRippleRepaint(p, context, position);
 			_linkRipple->ripple->paint(
 				p,
-				trect.x() + _linkRipple->maskOffset.x(),
-				trect.y() + _linkRipple->maskOffset.y(),
+				position.x(),
+				position.y(),
 				width(),
 				&color);
 			if (_linkRipple->ripple->empty()) {
@@ -3379,6 +3392,7 @@ void Message::paintViaBotIdInfo(
 			p.setPen(stm->msgServiceFg);
 			paintLinkRipple(
 				p,
+				context,
 				via->link,
 				QRect(trect.x(), trect.y(), via->width, st::msgServiceNameFont->height),
 				trect.topLeft());
@@ -3436,10 +3450,14 @@ void Message::paintText(
 	if (_linkRipple && _linkRipple->ripple && rippleBelongsHere) {
 		auto color = stm->textPalette.linkFg->c;
 		color.setAlphaF(0.1);
+		const auto position = QPoint(
+			trect.x() + _linkRipple->maskOffset.x(),
+			trect.y() + _linkRipple->maskOffset.y());
+		recordLinkRippleRepaint(p, context, position);
 		_linkRipple->ripple->paint(
 			p,
-			trect.x() + _linkRipple->maskOffset.x(),
-			trect.y() + _linkRipple->maskOffset.y(),
+			position.x(),
+			position.y(),
 			width(),
 			&color);
 		if (_linkRipple->ripple->empty()) {
@@ -4130,6 +4148,7 @@ void Message::toggleTopicButtonRipple(bool pressed) {
 
 void Message::paintLinkRipple(
 		Painter &p,
+		const PaintContext &context,
 		const ClickHandlerPtr &handler,
 		QRect linkRect,
 		QPoint textPosition) const {
@@ -4140,10 +4159,12 @@ void Message::paintLinkRipple(
 	if (const auto ripple = raw->ripple.get()) {
 		auto color = p.pen().color();
 		color.setAlpha(25);
+		const auto position = textPosition + raw->maskOffset;
+		recordLinkRippleRepaint(p, context, position);
 		ripple->paint(
 			p,
-			textPosition.x() + raw->maskOffset.x(),
-			textPosition.y() + raw->maskOffset.y(),
+			position.x(),
+			position.y(),
 			width(),
 			&color);
 		if (ripple->empty()) {
@@ -4156,6 +4177,69 @@ void Message::paintLinkRipple(
 			st::nameRipplePadding,
 			st::nameRippleRadius);
 	}
+}
+
+void Message::recordLinkRippleRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QPoint position) const {
+	const auto ripple = _linkRipple.get();
+	if (!ripple
+		|| !ripple->ripple
+		|| ripple->maskSize.isEmpty()
+		|| !context.hasElementPainter(p)) {
+		return;
+	}
+	const auto rect = style::rtlrect(
+		QRect(position, ripple->maskSize),
+		width());
+	const auto mapped = context.mapToElement(p, QRectF(rect));
+	const auto known = mapped.has_value();
+	const auto current = known ? *mapped : QRect();
+	const auto stale = base::take(ripple->stale);
+	const auto previous = stale.united(base::take(ripple->current));
+	ripple->pending = false;
+	ripple->current = current;
+	ripple->known = known;
+	if (!known) {
+		ripple->stale = previous;
+		if (!previous.isEmpty()) {
+			ripple->pending = true;
+			repaint();
+		}
+	} else if (!previous.isEmpty()
+		&& (!stale.isEmpty() || previous != current)) {
+		ripple->pending = true;
+		repaint(previous.united(current));
+	}
+}
+
+void Message::repaintLinkRipple(uint64 generation) const {
+	const auto ripple = _linkRipple.get();
+	if (!ripple
+		|| !ripple->ripple
+		|| ripple->generation != generation
+		|| ripple->pending
+		|| (ripple->known && ripple->current.isEmpty())) {
+		return;
+	}
+	ripple->pending = true;
+	if (ripple->known) {
+		repaint(ripple->current);
+	} else {
+		repaint();
+	}
+}
+
+uint64 Message::resetLinkRippleRepaint(QSize maskSize) const {
+	Expects(_linkRipple != nullptr);
+
+	auto &ripple = *_linkRipple;
+	ripple.stale = ripple.stale.united(base::take(ripple.current));
+	ripple.maskSize = maskSize;
+	ripple.pending = false;
+	ripple.known = false;
+	return ++ripple.generation;
 }
 
 void Message::toggleLinkRipple(bool pressed) {
@@ -4211,10 +4295,16 @@ void Message::createLinkRippleMask(
 		});
 	_linkRipple->maskOffset = maskOrigin;
 	_linkRipple->cachedWidth = useWidth;
+	const auto weak = base::make_weak(this);
+	const auto generation = resetLinkRippleRepaint(boundingRect.size());
 	_linkRipple->ripple = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		std::move(mask),
-		[=] { repaint(); });
+		[weak, generation] {
+			if (const auto strong = weak.get()) {
+				strong->repaintLinkRipple(generation);
+			}
+		});
 	_linkRipple->ripple->add(_linkRippleLastPoint - maskOrigin);
 }
 
@@ -4234,10 +4324,16 @@ void Message::createLinkRippleMask(
 		});
 	_linkRipple->maskOffset = maskOrigin;
 	_linkRipple->cachedWidth = 0;
+	const auto weak = base::make_weak(this);
+	const auto generation = resetLinkRippleRepaint(size);
 	_linkRipple->ripple = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		std::move(mask),
-		[=] { repaint(); });
+		[weak, generation] {
+			if (const auto strong = weak.get()) {
+				strong->repaintLinkRipple(generation);
+			}
+		});
 	_linkRipple->ripple->add(_linkRippleLastPoint - maskOrigin);
 }
 

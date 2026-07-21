@@ -355,9 +355,16 @@ private:
 		QPoint textOrigin) const;
 	void paintLinkRipple(
 		Painter &p,
+		const PaintContext &context,
 		const ClickHandlerPtr &handler,
 		QRect linkRect,
 		QPoint textPosition) const;
+	void recordLinkRippleRepaint(
+		const Painter &p,
+		const PaintContext &context,
+		QPoint position) const;
+	void repaintLinkRipple(uint64 generation) const;
+	[[nodiscard]] uint64 resetLinkRippleRepaint(QSize maskSize) const;
 	void createLinkRippleMask(
 		const QPainterPath &path,
 		QPoint textPosition,
