@@ -24,9 +24,11 @@ namespace Calls {
 
 PanelBackground::PanelBackground(
 	not_null<PeerData*> peer,
-	Fn<void()> updateCallback)
+	Fn<void()> semanticUpdateCallback,
+	Fn<void(QRect)> patternUpdateCallback)
 : _peer(peer)
-, _updateCallback(std::move(updateCallback)) {
+, _semanticUpdateCallback(std::move(semanticUpdateCallback))
+, _patternUpdateCallback(std::move(patternUpdateCallback)) {
 	updateColors();
 	updateEmojiId();
 
@@ -37,8 +39,8 @@ PanelBackground::PanelBackground(
 	) | rpl::on_next([=] {
 		updateColors();
 		_brushSize = QSize();
-		if (_updateCallback) {
-			_updateCallback();
+		if (_semanticUpdateCallback) {
+			_semanticUpdateCallback();
 		}
 	}, _lifetime);
 
@@ -48,8 +50,8 @@ PanelBackground::PanelBackground(
 			| Data::PeerUpdate::Flag::EmojiStatus
 	) | rpl::on_next([=] {
 		updateEmojiId();
-		if (_updateCallback) {
-			_updateCallback();
+		if (_semanticUpdateCallback) {
+			_semanticUpdateCallback();
 		}
 	}, _lifetime);
 }
@@ -105,6 +107,7 @@ void PanelBackground::paint(
 		userpicY - padding / 2,
 		photoSize + padding * 2,
 		photoSize + padding);
+	_patternRect = patternRect;
 
 	if (!_emoji
 		|| _emoji->entityData()
@@ -113,10 +116,7 @@ void PanelBackground::paint(
 		_emoji = document->owner().customEmojiManager().create(
 			document,
 			[=] {
-				_cachedImage = QImage();
-				if (_updateCallback) {
-					_updateCallback();
-				}
+				invalidatePattern();
 			},
 			Data::CustomEmojiSizeTag::Large);
 		_cachedImage = QImage();
@@ -148,6 +148,7 @@ void PanelBackground::updateBrush(
 }
 
 void PanelBackground::renderPattern(const QRect &rect, DocumentId emojiId) {
+	const auto was = _cachedRect;
 	const auto ratio = style::DevicePixelRatio();
 	_cachedImage = QImage(
 		rect.size() * ratio,
@@ -170,6 +171,22 @@ void PanelBackground::renderPattern(const QRect &rect, DocumentId emojiId) {
 
 	_cachedRect = rect;
 	_cachedEmojiId = emojiId;
+	if (was != _cachedRect) {
+		requestPatternUpdate(was.isEmpty()
+			? _cachedRect
+			: was.united(_cachedRect));
+	}
+}
+
+void PanelBackground::invalidatePattern() {
+	_cachedImage = QImage();
+	requestPatternUpdate(_patternRect);
+}
+
+void PanelBackground::requestPatternUpdate(QRect rect) {
+	if (_patternUpdateCallback) {
+		_patternUpdateCallback(std::move(rect));
+	}
 }
 
 void PanelBackground::updateColors() {

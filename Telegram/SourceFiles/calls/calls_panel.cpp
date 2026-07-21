@@ -646,6 +646,14 @@ void Panel::reinitWithCall(Call *call) {
 		[=] {
 			updateTextColors();
 			widget()->update();
+		},
+		[=](QRect rect) {
+			if (rect.isEmpty()) {
+				widget()->update();
+			} else if (const auto repaint = rect.intersected(widget()->rect());
+					!repaint.isEmpty()) {
+				widget()->update(repaint);
+			}
 		});
 
 	_call->confereceSupportedValue(

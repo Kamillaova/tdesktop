@@ -27,7 +27,8 @@ class PanelBackground final {
 public:
 	explicit PanelBackground(
 		not_null<PeerData*> peer,
-		Fn<void()> updateCallback);
+		Fn<void()> semanticUpdateCallback,
+		Fn<void(QRect)> patternUpdateCallback);
 
 	void paint(
 		QPainter &p,
@@ -49,12 +50,15 @@ private:
 		float64 radius,
 		const std::vector<QColor> &colors);
 	void renderPattern(const QRect &rect, DocumentId emojiId);
+	void invalidatePattern();
+	void requestPatternUpdate(QRect rect);
 	void updateColors();
 	void updateEmojiId();
 	[[nodiscard]] std::optional<QColor> edgeColor() const;
 
 	const not_null<PeerData*> _peer;
-	const Fn<void()> _updateCallback;
+	const Fn<void()> _semanticUpdateCallback;
+	const Fn<void(QRect)> _patternUpdateCallback;
 
 	QBrush _brush;
 	QSize _brushSize;
@@ -65,6 +69,7 @@ private:
 	base::flat_map<float64, QImage> _cache;
 	QImage _cachedImage;
 	QRect _cachedRect;
+	QRect _patternRect;
 	DocumentId _cachedEmojiId = 0;
 	DocumentId _currentEmojiId = 0;
 
