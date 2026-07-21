@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_common_session.h"
 #include "ui/boxes/confirm_box.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/text/custom_emoji_instance.h"
@@ -48,6 +49,12 @@ namespace Settings {
 namespace {
 
 using namespace Builder;
+
+struct SoftwareEmojiRepaintState {
+	QRect last;
+	QRect stale;
+	bool hasBounds = false;
+};
 
 class Passkeys : public Section<Passkeys> {
 public:
@@ -234,10 +241,19 @@ void Passkeys::setupContent() {
 				const auto iconSize = st::settingsIconPasskeys.width();
 				const auto emoji = iconSize;
 				const auto iconLeft = st::settingsButton.iconLeft;
+				const auto emojiRepaint = button->lifetime().make_state<
+					SoftwareEmojiRepaintState>();
 				auto emojiInstance = passkey.softwareEmojiId
 					? session->data().customEmojiManager().create(
 						passkey.softwareEmojiId,
-						[=] { button->update(); },
+						[=] {
+							if (!emojiRepaint->hasBounds) {
+								button->update();
+								return;
+							}
+							button->update(emojiRepaint->last.united(
+								base::take(emojiRepaint->stale)));
+						},
 						Data::CustomEmojiSizeTag::Large,
 						emoji)
 					: nullptr;
@@ -272,11 +288,32 @@ void Passkeys::setupContent() {
 				button->paintOn([=](QPainter &p) {
 					const auto iconTop = (st.height - iconSize) / 2;
 					if (emojiPtr) {
-						emojiPtr->paint(p, {
+						const auto transform = p.transform();
+						const auto repaintBounds = emojiPtr->paint(p, {
 							.textColor = st.nameFg->c,
 							.now = crl::now(),
 							.position = QPoint(iconLeft, iconTop),
-						});
+						}).repaintBounds();
+						const auto mapped = Ui::DamageRect(
+							repaintBounds,
+							transform);
+						if (mapped.isEmpty()) {
+							if (emojiRepaint->hasBounds) {
+								const auto stale = emojiRepaint->last.united(
+									base::take(emojiRepaint->stale));
+								emojiRepaint->last = {};
+								emojiRepaint->hasBounds = false;
+								button->update(stale);
+							}
+						} else {
+							if (emojiRepaint->hasBounds
+								&& emojiRepaint->last != mapped) {
+								emojiRepaint->stale = emojiRepaint->stale.united(
+									emojiRepaint->last);
+							}
+							emojiRepaint->last = mapped;
+							emojiRepaint->hasBounds = true;
+						}
 					} else {
 						const auto w = button->width();
 						st::settingsIconPasskeys.paint(p, iconLeft, iconTop, w);
