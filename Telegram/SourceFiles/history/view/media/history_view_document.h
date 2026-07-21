@@ -181,7 +181,8 @@ private:
 	void recordCaptionRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		const Ui::Text::CustomEmojiPaintedBounds &bounds) const;
+		const Ui::Text::CustomEmojiRepaintBounds &bounds,
+		QRectF fallback) const;
 	void invalidateCaptionRepaintRect() const;
 	[[nodiscard]] TextState cornerDownloadTextState(
 		QPoint point,

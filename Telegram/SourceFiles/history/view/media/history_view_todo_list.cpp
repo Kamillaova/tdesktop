@@ -29,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/radial_animation.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/effects/fireworks_animation.h"
+#include "ui/paint/damage.h"
 #include "ui/toast/toast.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
@@ -60,31 +61,32 @@ namespace {
 		const PaintContext &context,
 		const Ui::Text::String &text,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) {
 	if (!HasTodoTextAnimation(text)) {
 		return true;
 	}
-	if (!customEmojiPaintedBounds.repaintRectKnown()) {
-		return false;
-	}
-	const auto repaintRect = customEmojiPaintedBounds.repaintRect();
+	const auto repaintRect = customEmojiRepaintBounds.rect;
 	if (!repaintRect.isEmpty()) {
 		const auto mapped = context.mapToElement(
 			p,
 			repaintRect);
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			return false;
+		} else if (!mapped->isEmpty()) {
+			region += *mapped;
 		}
-		region += *mapped;
 	}
-	if (!text.hasSpoilers() || rect.isEmpty()) {
+	if (customEmojiRepaintBounds.repaintBoundsKnown
+		&& !text.hasSpoilers()) {
 		return true;
+	} else if (rect.isEmpty()) {
+		return customEmojiRepaintBounds.repaintBoundsKnown;
 	}
 	const auto layoutWidth = std::min(rect.width(), text.maxWidth());
 	const auto lines = text.countLinesGeometry(layoutWidth);
 	if (lines.empty()) {
-		return true;
+		return customEmojiRepaintBounds.repaintBoundsKnown;
 	}
 	auto mappedRegion = QRegion();
 	auto lineTop = 0;
@@ -108,10 +110,11 @@ namespace {
 				lineWidth,
 				lineBottom - lineTop);
 			const auto mapped = context.mapToElement(p, lineRect);
-			if (!mapped || mapped->isEmpty()) {
+			if (!mapped) {
 				return false;
+			} else if (!mapped->isEmpty()) {
+				mappedRegion += *mapped;
 			}
-			mappedRegion += *mapped;
 		}
 		lineTop = lineBottom;
 		if (lineTop == rect.height()) {
@@ -385,8 +388,8 @@ void TodoList::recordTextRepaint(
 		const PaintContext &context,
 		const Ui::Text::String &text,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const {
 	if (!context.hasElementPainter(p)) {
 		return;
 	}
@@ -397,7 +400,7 @@ void TodoList::recordTextRepaint(
 		context,
 		text,
 		rect,
-		customEmojiPaintedBounds);
+		customEmojiRepaintBounds);
 	recordRepaintGeometry(repaint, std::move(region), known);
 }
 
@@ -414,9 +417,11 @@ void TodoList::recordTaskRepaint(
 	auto known = true;
 	for (const auto &rect : rects) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
 			break;
+		} else if (mapped->isEmpty()) {
+			continue;
 		}
 		region += *mapped;
 	}
@@ -512,14 +517,17 @@ std::optional<QRect> TodoList::mapCurrentPaintToElement(
 	if (!_elementTransform || _elementPaintDevice != p.device()) {
 		return std::nullopt;
 	}
+	if (rect.isEmpty()) {
+		return Ui::DamageRect(rect);
+	}
 	auto invertible = false;
 	const auto inverted = _elementTransform->inverted(&invertible);
 	if (!invertible) {
 		return std::nullopt;
 	}
-	return inverted.map(
+	return Ui::DamageRect(inverted.map(
 		p.transform().map(QPolygonF(rect))
-	).boundingRect().toAlignedRect();
+	).boundingRect());
 }
 
 QSize TodoList::countCurrentSize(int newWidth) {
@@ -854,8 +862,8 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 		context,
 		_title,
 		CustomEmojiRepaintReset::No);
-	auto titleCustomEmojiPaintedBounds
-		= Ui::Text::CustomEmojiPaintedBounds();
+	auto titleCustomEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_title.draw(p, {
 		.position = { padding.left(), tshift },
 		.availableWidth = paintw,
@@ -865,7 +873,7 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.selection = context.selection,
-		.customEmojiPaintedBounds = &titleCustomEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &titleCustomEmojiRepaintBounds,
 	});
 	recordTextRepaint(
 		_titleRepaint,
@@ -877,7 +885,7 @@ void TodoList::draw(Painter &p, const PaintContext &context) const {
 			tshift,
 			paintw,
 			_title.countHeight(paintw)),
-		titleCustomEmojiPaintedBounds);
+		titleCustomEmojiRepaintBounds);
 	tshift += _title.countHeight(paintw) + st::historyPollSubtitleSkip;
 
 	p.setPen(stm->msgDateFg);
@@ -1032,8 +1040,8 @@ int TodoList::paintTask(
 		context,
 		task.text,
 		CustomEmojiRepaintReset::No);
-	auto customEmojiPaintedBounds
-		= Ui::Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	task.text.draw(p, {
 		.position = { aleft, top },
 		.availableWidth = awidth,
@@ -1042,7 +1050,7 @@ int TodoList::paintTask(
 		.now = context.now,
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	recordTextRepaint(
 		ensureTaskRepaints(task.id).text,
@@ -1054,7 +1062,7 @@ int TodoList::paintTask(
 			textTop,
 			awidth,
 			task.text.countHeight(awidth)),
-		customEmojiPaintedBounds);
+		customEmojiRepaintBounds);
 	if (task.completionDate) {
 		const auto nameTop = top
 			+ height
@@ -1307,9 +1315,9 @@ void TodoList::paintBubbleFireworks(
 			const auto mapped = mapCurrentPaintToElement(
 				p,
 				QRectF(bubble));
-			if (!mapped || mapped->isEmpty()) {
+			if (!mapped) {
 				known = false;
-			} else {
+			} else if (!mapped->isEmpty()) {
 				region += *mapped;
 			}
 		}

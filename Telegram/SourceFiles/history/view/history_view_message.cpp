@@ -152,15 +152,6 @@ void InvalidateRichPageRepaintGeometry(
 	geometry.known = false;
 }
 
-[[nodiscard]] QMargins TopicButtonNameRepaintMargins() {
-	const auto inner = st::emojiSize;
-	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
-	const auto skip = (inner - outer) / 2;
-	const auto before = std::max(-skip, 0);
-	const auto after = std::max(skip + outer - inner, 0);
-	return { before, before, after, after };
-}
-
 [[nodiscard]] QSize TopicButtonSize(
 		int availableWidth,
 		const Ui::Text::String &name) {
@@ -560,7 +551,7 @@ struct Message::FromNameStatus {
 	EmojiStatusId id;
 	std::unique_ptr<Ui::Text::CustomEmoji> custom;
 	ClickHandlerPtr link;
-	QRect lastPaintedRect;
+	std::optional<QRect> lastRepaintRect;
 	int skip = 0;
 };
 
@@ -1862,9 +1853,9 @@ void Message::recordTopicButtonRippleRepaint(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}
@@ -1937,24 +1928,43 @@ void Message::repaintTopicButtonName(uint64 generation) const {
 	}
 }
 
-void Message::prepareTopicButtonNamePaint(
+void Message::paintTopicButtonName(
 		Painter &p,
 		const PaintContext &context,
 		QRect textRect) const {
-	recordTopicButtonNameRepaint(p, context, textRect);
-	if (const auto button = displayedTopicButton()) {
-		prepareCustomEmojiPaint(
-			p,
-			context,
-			button->name,
-			CustomEmojiRepaintReset::No);
+	const auto button = displayedTopicButton();
+	if (!button) {
+		recordTopicButtonNameRepaint(p, context, {}, {});
+		return;
 	}
+	prepareCustomEmojiPaint(
+		p,
+		context,
+		button->name,
+		CustomEmojiRepaintReset::No);
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
+	button->name.draw(p, {
+		.position = textRect.topLeft(),
+		.availableWidth = textRect.width(),
+		.palette = &p.textPalette(),
+		.paused = p.inactive(),
+		.elisionLines = 1,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
+	});
+	recordTopicButtonNameRepaint(
+		p,
+		context,
+		textRect,
+		customEmojiRepaintBounds);
 }
 
 void Message::recordTopicButtonNameRepaint(
 		const Painter &p,
 		const PaintContext &context,
-		QRect textRect) const {
+		QRect textRect,
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const {
 	const auto button = _topicButton.get();
 	if (!button) {
 		return;
@@ -1964,11 +1974,24 @@ void Message::recordTopicButtonNameRepaint(
 	button->nameRepaint.pending = false;
 	auto region = QRegion();
 	auto geometryKnown = true;
-	const auto customEmoji = button->name.hasCustomEmoji();
-	const auto animated = customEmoji || button->name.hasSpoilers();
-	if (animated && !textRect.isEmpty()) {
-		const auto lines = button->name.countLinesGeometry(textRect.width());
-		if (lines.empty()) {
+	if (!customEmojiRepaintBounds.rect.isEmpty()) {
+		const auto mapped = context.mapToElement(
+			p,
+			customEmojiRepaintBounds.rect);
+		if (!mapped) {
+			geometryKnown = false;
+		} else if (!mapped->isEmpty()) {
+			region += *mapped;
+		}
+	}
+	const auto needsTextFallback
+		= !customEmojiRepaintBounds.repaintBoundsKnown
+		|| button->name.hasSpoilers();
+	if (geometryKnown && needsTextFallback) {
+		if (textRect.isEmpty()) {
+			geometryKnown = customEmojiRepaintBounds.repaintBoundsKnown;
+		} else if (const auto lines = button->name.countLinesGeometry(
+				textRect.width()); lines.empty()) {
 			geometryKnown = false;
 		} else {
 			const auto &line = lines.front();
@@ -1993,19 +2016,15 @@ void Message::recordTopicButtonNameRepaint(
 			if (lineWidth <= 0 || lineBottom <= 0) {
 				geometryKnown = false;
 			} else {
-				auto lineRect = QRectF(
+				const auto lineRect = QRectF(
 					textRect.x() + lineLeft,
 					textRect.y(),
 					lineWidth,
 					lineBottom);
-				if (customEmoji) {
-					lineRect = lineRect.marginsAdded(
-						QMarginsF(TopicButtonNameRepaintMargins()));
-				}
 				const auto mapped = context.mapToElement(p, lineRect);
-				if (!mapped || mapped->isEmpty()) {
+				if (!mapped) {
 					geometryKnown = false;
-				} else {
+				} else if (!mapped->isEmpty()) {
 					region += *mapped;
 				}
 			}
@@ -2088,18 +2107,20 @@ int Message::marginBottom() const {
 }
 
 void Message::draw(Painter &p, const PaintContext &context) const {
-	if (_fromNameStatus && context.hasElementPainter(p)) {
-		_fromNameStatus->lastPaintedRect = QRect();
-	}
+	const auto trackFromNameStatus = context.hasElementPainter(p);
+	auto fromNameStatusRepaintRect = std::optional<QRect>(QRect());
+	const auto fromNameStatusPaintGuard = gsl::finally([&] {
+		if (trackFromNameStatus) {
+			finishFromNameStatusPaint(fromNameStatusRepaintRect);
+		}
+	});
 	auto g = countGeometry();
 	if (g.width() < 1) {
-		recordTextRepaintRect(p, context, QRectF());
-		recordTopicButtonNameRepaint(p, context, QRect());
+		recordTextRepaintRect(p, context, {});
+		recordTopicButtonNameRepaint(p, context, {}, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
 		return;
 	}
-	const auto initialTransform = p.transform();
-
 	const auto item = data();
 	const auto media = this->media();
 
@@ -2145,8 +2166,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (isHidden()) {
-		recordTextRepaintRect(p, context, QRectF());
-		recordTopicButtonNameRepaint(p, context, QRect());
+		recordTextRepaintRect(p, context, {});
+		recordTopicButtonNameRepaint(p, context, {}, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
 		return;
 	}
@@ -2347,11 +2368,17 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			trect.setHeight(trect.height() + st::msgPadding.bottom());
 		}
 		if (mediaOnTop) {
-			recordTopicButtonNameRepaint(p, context, QRect());
+			recordTopicButtonNameRepaint(p, context, {}, {});
 			recordTopicButtonRippleRepaint(p, context, QRect());
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
-			paintFromName(p, trect, context, initialTransform);
+			paintFromName(
+				p,
+				trect,
+				context,
+				trackFromNameStatus
+					? &fromNameStatusRepaintRect
+					: nullptr);
 			paintEphemeralBadge(p, trect, context);
 			paintTopicButton(p, trect, context);
 			paintForwardedInfo(p, trect, context);
@@ -2542,7 +2569,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			media->paintBubbleFireworks(p, g, context.now);
 		}
 	} else if (media && media->isDisplayed()) {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
 		p.translate(g.topLeft());
 		media->draw(p, context.translated(
@@ -2557,7 +2584,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		}
 		p.translate(-g.topLeft());
 	} else {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
 	}
 
@@ -2851,7 +2878,7 @@ void Message::paintFromName(
 		Painter &p,
 		QRect &trect,
 		const PaintContext &context,
-		const QTransform &initialTransform) const {
+		std::optional<QRect> *paintedStatusRect) const {
 	const auto item = data();
 	if (!displayFromName()) {
 		return;
@@ -2895,24 +2922,10 @@ void Message::paintFromName(
 			x - 2 * _fromNameStatus->skip,
 			y + _fromNameStatus->skip);
 		const auto recordStatusRect = [&](QRectF rect) {
-			if (!context.hasElementPainter(p)) {
-				return;
+			if (paintedStatusRect) {
+				*paintedStatusRect = context.mapToElement(p, rect);
 			}
-			auto invertible = false;
-			const auto inverted = initialTransform.inverted(&invertible);
-			_fromNameStatus->lastPaintedRect = invertible
-				? inverted
-					.map(p.transform().map(QPolygonF(rect)))
-					.boundingRect()
-					.toAlignedRect()
-				: QRect();
 		};
-		const auto fallback = QRectF(
-			position,
-			Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize)));
-		if (id) {
-			recordStatusRect(fallback);
-		}
 		if (_fromNameStatus->id != id) {
 			const auto that = const_cast<Message*>(this);
 			_fromNameStatus->custom = id
@@ -2930,19 +2943,14 @@ void Message::paintFromName(
 			_fromNameStatus->id = id;
 		}
 		if (_fromNameStatus->custom) {
-			const auto painted = _fromNameStatus->custom->paint(p, {
+			const auto repaintBounds = _fromNameStatus->custom->paint(p, {
 				.textColor = color,
 				.now = context.now,
 				.position = position,
 				.paused = context.paused || On(PowerSaving::kEmojiStatus),
-			});
-			if (!painted.isEmpty()) {
-				recordStatusRect(painted);
-			}
+			}).repaintBounds();
+			recordStatusRect(repaintBounds);
 		} else {
-			if (context.hasElementPainter(p)) {
-				_fromNameStatus->lastPaintedRect = QRect();
-			}
 			st::dialogsPremiumIcon.icon.paint(p, x, y, width(), color);
 		}
 	}
@@ -3183,14 +3191,9 @@ void Message::paintTopicButton(
 		trect.y() + padding.top(),
 		width - padding.left() - skip,
 		st::msgNameFont->height);
-	prepareTopicButtonNamePaint(p, context, textRect);
 	p.setPen(stm->msgServiceFg);
 	p.setTextPalette(stm->fwdTextPalette);
-	button->name.drawElided(
-		p,
-		textRect.x(),
-		textRect.y(),
-		textRect.width());
+	paintTopicButtonName(p, context, textRect);
 
 	const auto &icon = st::topicButtonArrow;
 	icon.paint(
@@ -3390,7 +3393,7 @@ void Message::paintText(
 		QRect &trect,
 		const PaintContext &context) const {
 	if (!hasVisibleText()) {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 		return;
 	}
 	const auto stm = context.messageStyle();
@@ -3406,28 +3409,12 @@ void Message::paintText(
 		trect.setY(trect.y() + botTop->height);
 	}
 	if (const auto rich = const_cast<Message*>(this)->richpage()) {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 	    paintRichText(p, rich, richPageRect(trect), context);
 		return;
 	}
 	const auto appearing = Get<TextAppearing>();
 	const auto appearingClip = appearing && appearing->use;
-	const auto textHeight = textHeightFor(trect.width());
-	const auto textWidth = std::max(textRealWidth(), trect.width());
-	auto repaintRect = QRectF(
-		trect.x(),
-		trect.y(),
-		textWidth,
-		textHeight);
-	if (appearingClip) {
-		const auto shown = appearing->shownLine;
-		const auto bottom = (shown >= 0
-			&& shown < int(appearing->lines.size()))
-			? appearing->lines[shown].bottom
-			: 0;
-		repaintRect.setHeight(std::min(repaintRect.height(), qreal(bottom)));
-	}
-	recordTextRepaintRect(p, context, repaintRect);
 
 	if (!context.clip.intersects(trect)
 		&& context.skipDrawingParts == PaintContext::SkipDrawingParts::None
@@ -3498,6 +3485,8 @@ void Message::paintText(
 	}
 
 	auto highlightRequest = context.computeHighlightCache();
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	text().draw(p, {
 		.position = trect.topLeft(),
 		.availableWidth = std::max(textRealWidth(), trect.width()),
@@ -3517,6 +3506,7 @@ void Message::paintText(
 			: (highlightRequest ? &*highlightRequest : nullptr),
 		.useFullWidth = true,
 		.linePostprocess = linePostprocess ? &*linePostprocess : nullptr,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	if (needRippleMask && !ripplePath.isEmpty()) {
 		createLinkRippleMask(
@@ -3528,9 +3518,38 @@ void Message::paintText(
 	} else if (needRippleMask) {
 		_linkRipple = nullptr;
 	}
+	const auto needsTextFallback
+		= text().hasSpoilers()
+		|| !customEmojiRepaintBounds.repaintBoundsKnown;
+	auto textAnimationBounds = QRectF();
+	if (needsTextFallback || appearingClip) {
+		textAnimationBounds = QRectF(
+			trect.x(),
+			trect.y(),
+			std::max(textRealWidth(), trect.width()),
+			textHeightFor(trect.width()));
+		if (appearingClip) {
+			const auto shown = appearing->shownLine;
+			const auto bottom = (shown >= 0
+				&& shown < int(appearing->lines.size()))
+				? appearing->lines[shown].bottom
+				: 0;
+			textAnimationBounds.setHeight(std::min(
+				textAnimationBounds.height(),
+				qreal(bottom)));
+		}
+	}
 	if (appearingClip) {
 		p.restore();
+		customEmojiRepaintBounds.rect
+			= customEmojiRepaintBounds.rect.intersected(
+				textAnimationBounds);
 	}
+	recordTextRepaintRect(
+		p,
+		context,
+		customEmojiRepaintBounds,
+		needsTextFallback ? textAnimationBounds : QRectF());
 }
 
 uint64 Message::recordRichPageRepaintGeometry(
@@ -4257,7 +4276,7 @@ void Message::unloadHeavyPart() {
 	if (_fromNameStatus) {
 		_fromNameStatus->custom = nullptr;
 		_fromNameStatus->id = EmojiStatusId();
-		_fromNameStatus->lastPaintedRect = QRect();
+		_fromNameStatus->lastRepaintRect = std::nullopt;
 	}
 	if (const auto summaryHeader = Get<SummaryHeader>()) {
 		summaryHeader->unloadHeavyPart();
@@ -4826,9 +4845,35 @@ void Message::ensureFromNameStatusLink(not_null<PeerData*> peer) const {
 	});
 }
 
+void Message::finishFromNameStatusPaint(
+		std::optional<QRect> paintedRect) const {
+	if (!_fromNameStatus) {
+		return;
+	}
+	const auto previous = _fromNameStatus->lastRepaintRect;
+	_fromNameStatus->lastRepaintRect = paintedRect;
+	if (!previous
+		|| previous->isEmpty()
+		|| (paintedRect && *previous == *paintedRect)) {
+		return;
+	}
+	const auto changed = paintedRect
+		? previous->united(*paintedRect)
+		: *previous;
+	if (!changed.isEmpty()) {
+		repaint(changed);
+	}
+}
+
 void Message::repaintFromNameStatus() const {
-	if (_fromNameStatus && !_fromNameStatus->lastPaintedRect.isEmpty()) {
-		repaint(_fromNameStatus->lastPaintedRect);
+	if (!_fromNameStatus) {
+		return;
+	}
+	const auto painted = _fromNameStatus->lastRepaintRect;
+	if (!painted) {
+		repaint();
+	} else if (!painted->isEmpty()) {
+		repaint(*painted);
 	}
 }
 

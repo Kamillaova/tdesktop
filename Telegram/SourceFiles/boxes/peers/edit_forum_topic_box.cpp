@@ -54,7 +54,7 @@ public:
 	int width() override;
 	QString entityData() override;
 
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -90,7 +90,9 @@ QString DefaultIconEmoji::entityData() {
 	return u"topic_icon:%1"_q.arg(_icon.colorId);
 }
 
-QRectF DefaultIconEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult DefaultIconEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	const auto &st = (_tag == Data::CustomEmojiSizeTag::Normal)
 		? st::normalForumTopicIcon
 		: st::defaultForumTopicIcon;
@@ -116,7 +118,7 @@ QRectF DefaultIconEmoji::paint(QPainter &p, const Context &context) {
 		image.setDevicePixelRatio(_image.devicePixelRatio());
 	}
 	p.drawImage(position, image);
-	return QRectF(position, image.deviceIndependentSize());
+	return PaintResult(QRectF(position, image.deviceIndependentSize()));
 }
 
 void DefaultIconEmoji::unload() {

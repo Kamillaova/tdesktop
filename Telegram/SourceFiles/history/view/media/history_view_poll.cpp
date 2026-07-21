@@ -77,6 +77,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/paint/damage.h"
 #include "window/themes/window_theme.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
@@ -140,24 +141,23 @@ constexpr auto kVoteRestrictionToastDuration = 5 * crl::time(1000);
 		const PaintContext &context,
 		const Ui::Text::String &text,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds,
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds,
 		bool useFullWidth = false) {
 	if (!HasPollAnswerTextAnimation(text)) {
 		return true;
 	}
-	if (!customEmojiPaintedBounds.repaintRectKnown()) {
-		return false;
-	}
-	const auto repaintRect = customEmojiPaintedBounds.repaintRect();
+	const auto repaintRect = customEmojiRepaintBounds.rect;
 	if (!repaintRect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, repaintRect);
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			return false;
+		} else if (!mapped->isEmpty()) {
+			region += *mapped;
 		}
-		region += *mapped;
 	}
-	if (!text.hasSpoilers()) {
+	if (customEmojiRepaintBounds.repaintBoundsKnown
+		&& !text.hasSpoilers()) {
 		return true;
 	}
 	const auto layoutWidth = useFullWidth
@@ -189,15 +189,13 @@ constexpr auto kVoteRestrictionToastDuration = 5 * crl::time(1000);
 				lineWidth,
 				lineBottom - lineTop);
 			const auto mapped = context.mapToElement(p, lineRect);
-			if (!mapped || mapped->isEmpty()) {
+			if (!mapped) {
 				return false;
+			} else if (!mapped->isEmpty()) {
+				mappedRegion += *mapped;
 			}
-			mappedRegion += *mapped;
 		}
 		lineTop = lineBottom;
-	}
-	if (mappedRegion.isEmpty()) {
-		return false;
 	}
 	region += mappedRegion;
 	return true;
@@ -1778,8 +1776,8 @@ void Poll::Header::draw(
 		p.setPen(stm->historyTextFg);
 		_owner->_parent->prepareCustomEmojiPaint(
 			p, context, _description);
-		auto customEmojiPaintedBounds
-			= Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		_description.draw(p, {
 			.position = { left, tshift },
 			.outerWidth = outerWidth,
@@ -1790,7 +1788,7 @@ void Poll::Header::draw(
 			.pausedSpoiler = context.paused,
 			.selection = context.selection,
 			.useFullWidth = true,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		descriptionRepaintKnown = descriptionRepaintKnown
 			&& AddPollTextRepaintRect(
@@ -1799,7 +1797,7 @@ void Poll::Header::draw(
 				context,
 				_description,
 				QRect(left, tshift, innerWidth, descriptionHeight),
-				customEmojiPaintedBounds,
+				customEmojiRepaintBounds,
 				true);
 		tshift += descriptionHeight + st::historyPollDescriptionSkip;
 	}
@@ -1829,8 +1827,8 @@ void Poll::Header::draw(
 	const auto questionHeight = _question.countHeight(innerWidth);
 	p.setPen(stm->historyTextFg);
 	_owner->_parent->prepareCustomEmojiPaint(p, context, _question);
-	auto questionCustomEmojiPaintedBounds
-		= Ui::Text::CustomEmojiPaintedBounds();
+	auto questionCustomEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_question.draw(p, {
 		.position = { left, tshift },
 		.outerWidth = outerWidth,
@@ -1840,7 +1838,7 @@ void Poll::Header::draw(
 		.pausedEmoji = context.paused,
 		.pausedSpoiler = context.paused,
 		.selection = toQuestionSelection(context.selection),
-		.customEmojiPaintedBounds = &questionCustomEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &questionCustomEmojiRepaintBounds,
 	});
 	questionRepaintKnown = questionRepaintKnown
 		&& AddPollTextRepaintRect(
@@ -1849,7 +1847,7 @@ void Poll::Header::draw(
 			context,
 			_question,
 			QRect(left, tshift, innerWidth, questionHeight),
-			questionCustomEmojiPaintedBounds);
+			questionCustomEmojiRepaintBounds);
 	finishTextRepaint(
 		TextPart::Question,
 		p,
@@ -2179,8 +2177,8 @@ struct Poll::Options : public Poll::Part {
 		const PaintContext &context,
 		const Answer &answer,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const;
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const;
 	void finishAnswerTextPaint() const;
 	void repaintAnswerTextRegion(const QRegion &region) const;
 	void subscribeToThumbnailUpdates(
@@ -2666,9 +2664,11 @@ void Poll::recordRepaintGeometry(
 	auto known = true;
 	for (const auto &rect : rects) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
 			break;
+		} else if (mapped->isEmpty()) {
+			continue;
 		}
 		region += *mapped;
 	}
@@ -2760,14 +2760,17 @@ std::optional<QRect> Poll::mapCurrentPaintToElement(
 	if (!_elementTransform || _elementPaintDevice != p.device()) {
 		return std::nullopt;
 	}
+	if (rect.isEmpty()) {
+		return Ui::DamageRect(rect);
+	}
 	auto invertible = false;
 	const auto inverted = _elementTransform->inverted(&invertible);
 	if (!invertible) {
 		return std::nullopt;
 	}
-	return inverted.map(
+	return Ui::DamageRect(inverted.map(
 		p.transform().map(QPolygonF(rect))
-	).boundingRect().toAlignedRect();
+	).boundingRect());
 }
 
 QSize Poll::countOptimalSize() {
@@ -4435,8 +4438,8 @@ void Poll::Options::recordAnswerTextRect(
 		const PaintContext &context,
 		const Answer &answer,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const {
 	if (!HasPollAnswerTextAnimation(answer.text)) {
 		return;
 	}
@@ -4457,7 +4460,7 @@ void Poll::Options::recordAnswerTextRect(
 			context,
 			answer.text,
 			rect,
-			customEmojiPaintedBounds);
+			customEmojiRepaintBounds);
 	if (repaint->collectedRepaintKnown) {
 		repaint->collectedRepaintRegion += region;
 	}
@@ -4958,8 +4961,8 @@ void Poll::Header::paintSolutionBlock(
 	const auto solutionTextHeight = _solutionText.countHeight(textWidth);
 	p.setPen(stm->historyTextFg);
 	_owner->_parent->prepareCustomEmojiPaint(p, context, _solutionText);
-	auto customEmojiPaintedBounds
-		= Ui::Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_solutionText.draw(p, {
 		.position = { innerLeft, yshift },
 		.outerWidth = _owner->width(),
@@ -4969,7 +4972,7 @@ void Poll::Header::paintSolutionBlock(
 		.pausedEmoji = context.paused,
 		.pausedSpoiler = context.paused,
 		.selection = toSolutionSelection(context.selection),
-		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	solutionRepaintKnown = solutionRepaintKnown
 		&& AddPollTextRepaintRect(
@@ -4978,7 +4981,7 @@ void Poll::Header::paintSolutionBlock(
 			context,
 			_solutionText,
 			QRect(innerLeft, yshift, textWidth, solutionTextHeight),
-			customEmojiPaintedBounds);
+			customEmojiRepaintBounds);
 	finishTextRepaint(
 		TextPart::Solution,
 		p,
@@ -5331,8 +5334,8 @@ int Poll::Options::paintAnswer(
 	}
 	p.setPen(stm->historyTextFg);
 	_owner->_parent->prepareCustomEmojiPaint(p, context, answer.text);
-	auto customEmojiPaintedBounds
-		= Ui::Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	answer.text.draw(p, {
 		.position = { aleft, top },
 		.outerWidth = outerWidth,
@@ -5341,14 +5344,14 @@ int Poll::Options::paintAnswer(
 		.now = context.now,
 		.pausedEmoji = context.paused,
 		.pausedSpoiler = context.paused,
-		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	recordAnswerTextRect(
 		p,
 		context,
 		answer,
 		QRect(aleft, top, textWidth, textContentHeight),
-		customEmojiPaintedBounds);
+		customEmojiRepaintBounds);
 
 	return height;
 }
@@ -5823,9 +5826,9 @@ void Poll::paintBubbleFireworks(
 		auto known = true;
 		if (!bubble.isEmpty()) {
 			const auto mapped = mapCurrentPaintToElement(p, QRectF(bubble));
-			if (!mapped || mapped->isEmpty()) {
+			if (!mapped) {
 				known = false;
-			} else {
+			} else if (!mapped->isEmpty()) {
 				fireworks += *mapped;
 				wrongAnswer += mapped->marginsAdded(
 					PollBubbleRollRepaintMargins(bubble.size()));

@@ -61,7 +61,7 @@ private:
 	std::unique_ptr<Ui::RippleAnimation> _ripple;
 	Ui::Animations::Simple _openedAnimation;
 	QString _text;
-	QRect _animationRepaintRect;
+	std::optional<QRect> _animationRepaintRect;
 	QPoint _lastHitTestPoint;
 	QPoint _lastStatePoint;
 	bool _animationRepaintPending = false;

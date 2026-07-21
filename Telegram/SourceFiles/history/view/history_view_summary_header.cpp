@@ -259,9 +259,12 @@ void SummaryHeader::paint(
 void SummaryHeader::scheduleParticlesRepaint(
 		not_null<const Element*> view,
 		std::optional<QRect> rect) const {
+	if (rect && rect->isEmpty()) {
+		return;
+	}
 	const auto alreadyPending = (_particlesRepaintState
 		!= ParticlesRepaintState::None);
-	if (!rect || rect->isEmpty()) {
+	if (!rect) {
 		_particlesRepaintRect = QRect();
 		_particlesRepaintState = ParticlesRepaintState::Full;
 	} else if (_particlesRepaintState != ParticlesRepaintState::Full) {

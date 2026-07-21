@@ -101,7 +101,7 @@ void MediaGenericPart::recordAnimationRepaint(
 	auto current = QRect();
 	if (known && !rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, rect);
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
 		} else {
 			current = *mapped;
@@ -468,7 +468,7 @@ void MediaGenericTextPart::draw(
 			? ((outerWidth - use) / 2)
 			: _margins.left(),
 		_margins.top());
-	auto customEmojiBounds = Ui::Text::CustomEmojiPaintedBounds();
+	auto customEmojiBounds = Ui::Text::CustomEmojiRepaintBounds();
 	_text.draw(p, {
 		.position = position,
 		.outerWidth = outerWidth,
@@ -483,7 +483,7 @@ void MediaGenericTextPart::draw(
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.selection = context.selection,
 		.elisionLines = elisionLines(),
-		.customEmojiPaintedBounds = (_repaintParent && _customEmoji)
+		.customEmojiRepaintBounds = (_repaintParent && _customEmoji)
 			? &customEmojiBounds
 			: nullptr,
 	});
@@ -491,11 +491,13 @@ void MediaGenericTextPart::draw(
 		const auto textRect = QRectF(
 			position,
 			QSize(use, height() - _margins.top() - _margins.bottom()));
-		auto rect = customEmojiBounds.repaintRect();
-		const auto known = !_customEmoji
-			|| customEmojiBounds.repaintRectKnown();
-		if (_spoilers) {
+		auto rect = customEmojiBounds.rect;
+		auto known = !_customEmoji
+			|| customEmojiBounds.repaintBoundsKnown;
+		if ((_customEmoji && !customEmojiBounds.repaintBoundsKnown)
+			|| _spoilers) {
 			rect = rect.isEmpty() ? textRect : rect.united(textRect);
+			known = known || !textRect.isEmpty();
 		}
 		recordAnimationRepaint(
 			not_null(_repaintParent),

@@ -63,7 +63,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -89,7 +89,9 @@ QString MaybeDisabledEmoji::entityData() {
 	return _wrapped->entityData();
 }
 
-QRectF MaybeDisabledEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult MaybeDisabledEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	const auto disabled = !_enabled();
 	const auto opacity = p.opacity();
 	if (disabled) {

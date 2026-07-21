@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/effects/spoiler_mess.h"
 #include "ui/image/image.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/text/text_options.h"
 #include "ui/power_saving.h"
@@ -41,14 +42,10 @@ constexpr auto kAnimationDuration = crl::time(180);
 struct PaintedAnimationDamage final {
 	QRegion current;
 	QRegion fallback;
-	bool known = true;
 };
 
 [[nodiscard]] QRegion MapPaintRegion(const QPainter &p, QRectF rect) {
-	if (rect.isEmpty()) {
-		return QRegion();
-	}
-	return QRegion(p.transform().mapRect(rect).toAlignedRect());
+	return QRegion(Ui::DamageRect(rect, p.transform()));
 }
 
 } // namespace
@@ -252,7 +249,6 @@ void ReplyPillHeader::recordAnimationDamage(
 		AnimationDamage &state,
 		QRegion current,
 		QRegion fallback,
-		bool known,
 		const QRegion &repaintRegion) {
 	const auto widgetRegion = QRegion(rect());
 	state.current &= widgetRegion;
@@ -272,17 +268,6 @@ void ReplyPillHeader::recordAnimationDamage(
 	}
 	state.fallback = fallback;
 	state.scheduled = false;
-	if (!known) {
-		if (state.known) {
-			state.stale += state.current;
-		}
-		state.current = QRegion();
-		state.known = false;
-		if (state.stale.subtracted(repainted).isEmpty()) {
-			state.stale = QRegion();
-		}
-		return;
-	}
 	if (!state.known) {
 		const auto required = state.stale.united(state.fallback);
 		if (!required.subtracted(repainted).isEmpty()) {
@@ -342,13 +327,11 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 			_textAnimationDamage,
 			std::move(textDamage.current),
 			std::move(textDamage.fallback),
-			textDamage.known,
 			repaintRegion);
 		recordAnimationDamage(
 			_previewSpoilerDamage,
 			std::move(previewDamage.current),
 			std::move(previewDamage.fallback),
-			previewDamage.known,
 			repaintRegion);
 	});
 
@@ -514,7 +497,7 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 		pillRect.top()
 			+ st::msgReplyPadding.top()
 			+ st::msgServiceNameFont->height);
-	auto customEmojiPaintedBounds = Ui::Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 	if (canonical) {
 		textDamage.fallback = MapPaintRegion(p, QRectF(
 			textPosition,
@@ -531,21 +514,21 @@ void ReplyPillHeader::paintEvent(QPaintEvent *e) {
 		.pausedEmoji = p.inactive() || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = p.inactive() || On(PowerSaving::kChatSpoiler),
 		.elisionLines = 1,
-		.customEmojiPaintedBounds = canonical
-			? &customEmojiPaintedBounds
+		.customEmojiRepaintBounds = canonical
+			? &customEmojiRepaintBounds
 			: nullptr,
 	});
 	if (canonical) {
 		const auto hasCustomEmoji = _shownMessageText.hasCustomEmoji();
-		textDamage.known = !hasCustomEmoji
-			|| customEmojiPaintedBounds.repaintRectKnown();
-		if (_shownMessageText.hasSpoilers()) {
+		if (_shownMessageText.hasSpoilers()
+			|| (hasCustomEmoji
+				&& !customEmojiRepaintBounds.repaintBoundsKnown)) {
 			textDamage.current += textDamage.fallback;
 		}
-		if (hasCustomEmoji && textDamage.known) {
+		if (hasCustomEmoji) {
 			textDamage.current += MapPaintRegion(
 				p,
-				customEmojiPaintedBounds.repaintRect());
+				customEmojiRepaintBounds.rect);
 		}
 	}
 }

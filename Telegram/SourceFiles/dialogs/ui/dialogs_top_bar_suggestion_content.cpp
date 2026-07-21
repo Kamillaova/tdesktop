@@ -15,6 +15,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "settings/settings_common.h"
 #include "ui/effects/animation_value.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
@@ -105,15 +106,6 @@ namespace {
 			return { .width = availableWidth };
 		},
 	};
-}
-
-[[nodiscard]] QRect MapAnimationRect(
-		const QPainter &p,
-		QRectF rect) {
-	if (rect.isEmpty()) {
-		return QRect();
-	}
-	return p.transform().mapRect(rect).toAlignedRect();
 }
 
 } // namespace
@@ -485,19 +477,18 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 	const auto addTextDamage = [&](
 			const Ui::Text::String &text,
 			QRect fallback,
-			const Ui::Text::CustomEmojiPaintedBounds &paintedBounds) {
+			const Ui::Text::CustomEmojiRepaintBounds &customEmojiRepaintBounds) {
 		if (!text.hasCustomEmoji() && !text.hasSpoilers()) {
 			return;
 		}
-		const auto mappedFallback = MapAnimationRect(p, fallback);
+		const auto mappedFallback = Ui::DamageRect(fallback, p.transform());
 		result.fallback += mappedFallback;
 		if (text.hasCustomEmoji()) {
-			if (paintedBounds.repaintRectKnown()) {
-				result.painted += MapAnimationRect(
-					p,
-					paintedBounds.repaintRect());
-			} else {
-				result.complete = false;
+			result.painted += Ui::DamageRect(
+				customEmojiRepaintBounds.rect,
+				p.transform());
+			if (!customEmojiRepaintBounds.repaintBoundsKnown) {
+				result.painted += mappedFallback;
 			}
 		}
 		if (text.hasSpoilers()) {
@@ -593,7 +584,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 	{
 		const auto left = leftPadding;
 		const auto top = topPadding;
-		auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 		_contentTitle.draw(p, {
 			.position = QPoint(left, top),
 			.outerWidth = hasSecondLineTitle
@@ -602,7 +593,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 			.availableWidth = availableWidth,
 			.pausedEmoji = paused,
 			.elisionLines = hasSecondLineTitle ? 2 : 1,
-			.customEmojiPaintedBounds = &paintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		if (availableWidth > 0) {
 			const auto lines = hasSecondLineTitle ? 2 : 1;
@@ -613,7 +604,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 					top,
 					availableWidth,
 					lines * _contentTitle.lineHeight()),
-				paintedBounds);
+				customEmojiRepaintBounds);
 		}
 	}
 	{
@@ -624,7 +615,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 				+ _contentTitleSt.font->height)
 			: topPadding + _titleSt.font->height;
 		const auto lineHeight = _contentTextSt.font->height;
-		auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 		p.setPen(_descriptionColorOverride.value_or(st::windowSubTextFg->c));
 		_contentText.draw(p, {
 			.position = QPoint(left, top),
@@ -634,7 +625,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 				availableWidth,
 				lineHeight),
 			.pausedEmoji = paused,
-			.customEmojiPaintedBounds = &paintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		if (availableWidth > 0) {
 			addTextDamage(
@@ -644,7 +635,7 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 					top,
 					availableWidth,
 					std::max(0, outer.y() + outer.height() - top)),
-				paintedBounds);
+				customEmojiRepaintBounds);
 		}
 	}
 	if (!_rightBadgeText.isEmpty()) {
@@ -694,19 +685,8 @@ void TopBarSuggestionContent::trackAnimationDamage(
 	damage.fallback &= widgetRegion;
 	damage.fallback += damage.painted;
 	const auto repainted = repaintRegion.intersected(widgetRegion);
-	_animationFallback = damage.complete
-		? damage.fallback
-		: widgetRegion;
+	_animationFallback = damage.fallback;
 	_animationFallbackKnown = true;
-
-	if (!damage.complete) {
-		if (_animationDamageKnown) {
-			_staleAnimationDamage = _animationDamage;
-		}
-		_animationDamage = QRegion();
-		_animationDamageKnown = false;
-		return;
-	}
 	if (!_animationDamageKnown) {
 		const auto required = _staleAnimationDamage.united(
 			_animationFallback);

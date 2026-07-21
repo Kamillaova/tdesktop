@@ -581,7 +581,7 @@ int Service::marginBottom() const {
 void Service::draw(Painter &p, const PaintContext &context) const {
 	auto g = countGeometry();
 	if (g.width() < 1) {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 		return;
 	}
 
@@ -612,7 +612,7 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 	}
 
 	if (isHidden()) {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 		return;
 	}
 
@@ -665,11 +665,6 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 		const auto mediaSkip = mediaDisplayed ? (st::msgServiceMargin.top() + media->height()) : 0;
 		const auto trect = QRect(g.left(), g.top(), g.width(), g.height() - mediaSkip)
 			- st::msgServicePadding;
-		recordTextRepaintRect(
-			p,
-			context,
-			text().isEmpty() ? QRectF() : QRectF(trect));
-
 		p.translate(0, g.top() - st::msgServiceMargin.top());
 		ServiceMessagePainter::PaintComplexBubble(
 			p,
@@ -684,6 +679,8 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 		p.setPen(st->msgServiceFg());
 		p.setFont(st::msgServiceFont);
 		prepareCustomEmojiPaint(p, context, text());
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		text().draw(p, {
 			.position = trect.topLeft(),
 			.availableWidth = trect.width(),
@@ -695,9 +692,18 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.fullWidthSelection = false,
 			.selection = context.selection,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
+		recordTextRepaintRect(
+			p,
+			context,
+			customEmojiRepaintBounds,
+			(text().hasSpoilers()
+				|| !customEmojiRepaintBounds.repaintBoundsKnown)
+				? QRectF(trect)
+				: QRectF());
 	} else {
-		recordTextRepaintRect(p, context, QRectF());
+		recordTextRepaintRect(p, context, {});
 	}
 	if (mediaDisplayed) {
 		const auto left = g.left() + (g.width() - media->width()) / 2;

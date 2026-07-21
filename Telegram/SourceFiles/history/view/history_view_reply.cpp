@@ -1051,14 +1051,16 @@ void Reply::paint(
 }
 
 void Reply::repaintAnimation(not_null<const Element*> view) const {
-	if (_animationRepaintPending) {
+	if (_animationRepaintPending
+		|| (_animationRepaintRect
+			&& _animationRepaintRect->isEmpty())) {
 		return;
 	}
 	_animationRepaintPending = 1;
-	if (_animationRepaintRect.isEmpty()) {
-		view->repaint();
+	if (_animationRepaintRect) {
+		view->repaint(*_animationRepaintRect);
 	} else {
-		view->repaint(_animationRepaintRect);
+		view->repaint();
 	}
 }
 
@@ -1068,16 +1070,17 @@ void Reply::recordAnimationRepaintRect(
 		const Ui::ChatPaintContext &context,
 		QRect rect) const {
 	if (!context.hasElementPainter(p)) {
-		if (_animationRepaintRect.isEmpty()) {
+		if (!_animationRepaintRect
+			|| _animationRepaintRect->isEmpty()) {
 			_animationRepaintPending = 0;
 		}
 		return;
 	}
 	_animationRepaintPending = 0;
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = _animationRepaintRect;
-	_animationRepaintRect = current;
+	const auto current = mapped.value_or(QRect());
+	const auto previous = _animationRepaintRect.value_or(QRect());
+	_animationRepaintRect = mapped;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}

@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animation_value.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/image/image_prepare.h"
+#include "ui/paint/damage.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
 #include "ui/widgets/buttons.h"
@@ -186,7 +187,6 @@ void FillSponsoredMessageBar(
 	struct AnimationDamage final {
 		QRegion painted;
 		QRegion fallback;
-		bool complete = true;
 	};
 
 	struct State final {
@@ -195,7 +195,6 @@ void FillSponsoredMessageBar(
 		Ui::Text::String contentText;
 		rpl::variable<int> lastPaintedContentLineAmount = 0;
 		rpl::variable<int> lastPaintedContentTop = 0;
-		Ui::Text::CustomEmojiPaintedBounds contentTextPaintedBounds;
 		QRegion animationDamage;
 		QRegion staleAnimationDamage;
 		QRegion animationFallback;
@@ -247,18 +246,8 @@ void FillSponsoredMessageBar(
 		damage.fallback &= widgetRegion;
 		damage.fallback += damage.painted;
 		const auto repainted = repaintRegion.intersected(widgetRegion);
-		state->animationFallback = damage.complete
-			? damage.fallback
-			: widgetRegion;
+		state->animationFallback = damage.fallback;
 		state->animationFallbackKnown = true;
-		if (!damage.complete) {
-			if (state->animationDamageKnown) {
-				state->staleAnimationDamage = state->animationDamage;
-			}
-			state->animationDamage = QRegion();
-			state->animationDamageKnown = false;
-			return;
-		}
 		if (!state->animationDamageKnown) {
 			const auto required = state->staleAnimationDamage.united(
 				state->animationFallback);
@@ -434,7 +423,7 @@ void FillSponsoredMessageBar(
 					+ contentTitleSt.font->height)
 				: topPadding + titleSt.font->height;
 			auto lastContentLineAmount = 0;
-			auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
+			auto customEmojiRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 			const auto lineHeight = contentTextSt.font->height;
 			const auto lineLayout = [&](int line) -> Ui::Text::LineGeometry {
 				line++;
@@ -466,8 +455,8 @@ void FillSponsoredMessageBar(
 				},
 				.pausedEmoji = On(PowerSaving::kEmojiChat) || paused(),
 				.pausedSpoiler = On(PowerSaving::kChatSpoiler) || paused(),
-				.customEmojiPaintedBounds = canonical
-					? &paintedBounds
+				.customEmojiRepaintBounds = canonical
+					? &customEmojiRepaintBounds
 					: nullptr,
 			});
 			state->lastPaintedContentTop = top;
@@ -475,25 +464,19 @@ void FillSponsoredMessageBar(
 			if (canonical
 				&& (state->contentText.hasCustomEmoji()
 					|| state->contentText.hasSpoilers())) {
-				state->contentTextPaintedBounds = paintedBounds;
-				const auto mapRect = [&](QRectF rect) {
-					if (rect.isEmpty()) {
-						return QRect();
-					}
-					return p.transform().mapRect(rect).toAlignedRect();
-				};
-				const auto fallback = mapRect(QRectF(
+				const auto fallback = Ui::DamageRect(QRectF(
 					left,
 					top,
 					std::max(availableWidthNoPhoto, 0),
-					std::max(r.y() + r.height() - top, 0)));
+					std::max(r.y() + r.height() - top, 0)),
+					p.transform());
 				result.fallback += fallback;
 				if (state->contentText.hasCustomEmoji()) {
-					if (state->contentTextPaintedBounds.repaintRectKnown()) {
-						result.painted += mapRect(
-							state->contentTextPaintedBounds.repaintRect());
-					} else {
-						result.complete = false;
+					result.painted += Ui::DamageRect(
+						customEmojiRepaintBounds.rect,
+						p.transform());
+					if (!customEmojiRepaintBounds.repaintBoundsKnown) {
+						result.painted += fallback;
 					}
 				}
 				if (state->contentText.hasSpoilers()) {

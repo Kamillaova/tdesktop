@@ -139,8 +139,7 @@ void Strip::paint(
 	}
 }
 
-auto Strip::resolveCountTargetMethod(float64 scale) const
--> Fn<QRectF(const ReactionIcons&)> {
+QRectF Strip::resolveTarget(float64 scale, float64 selectScale) const {
 	const auto hoveredSize = int(base::SafeRound(_finalSize * kHoverScale));
 	const auto basicTargetForScale = [&](int size, float64 scale) {
 		const auto remove = size * (1. - scale) / 2.;
@@ -152,16 +151,21 @@ auto Strip::resolveCountTargetMethod(float64 scale) const
 		)).marginsRemoved({ remove, remove, remove, remove });
 	};
 	const auto basicTarget = basicTargetForScale(_finalSize, scale);
+	if (selectScale == 1.) {
+		return basicTarget;
+	}
+	const auto finalScale = scale * selectScale;
+	return (finalScale <= 1.)
+		? basicTargetForScale(_finalSize, finalScale)
+		: basicTargetForScale(hoveredSize, finalScale / kHoverScale);
+}
+
+auto Strip::resolveCountTargetMethod(float64 scale) const
+-> Fn<QRectF(const ReactionIcons&)> {
 	return [=](const ReactionIcons &icon) {
 		const auto selectScale = icon.selectedScale.value(
 			icon.selected ? kHoverScale : 1.);
-		if (selectScale == 1.) {
-			return basicTarget;
-		}
-		const auto finalScale = scale * selectScale;
-		return (finalScale <= 1.)
-			? basicTargetForScale(_finalSize, finalScale)
-			: basicTargetForScale(hoveredSize, finalScale / kHoverScale);
+		return resolveTarget(scale, selectScale);
 	};
 }
 
@@ -200,19 +204,30 @@ bool Strip::paintOne(
 	}
 }
 
-QRectF Strip::paintOne(
+Strip::PaintOneResult Strip::paintOne(
 		QPainter &p,
 		int index,
 		QPoint position,
-		float64 scale) {
+		float64 scale,
+		QRectF handoffBounds) {
 	Expects(index >= 0 && index < _icons.size());
 
 	auto &icon = _icons[index];
 	const auto countTarget = resolveCountTargetMethod(scale);
 	const auto target = countTarget(icon).translated(position);
-	return paintOne(p, icon, position, target, false)
-		? target
-		: QRectF();
+	const auto defaultTarget = resolveTarget(scale, 1.).translated(position);
+	const auto hoverTarget = resolveTarget(
+		scale,
+		kHoverScale).translated(position);
+	return {
+		.paintedBounds = paintOne(p, icon, position, target, false)
+			? target
+			: QRectF(),
+		.repaintBounds = target
+			.united(defaultTarget)
+			.united(hoverTarget)
+			.united(handoffBounds),
+	};
 }
 
 bool Strip::inDefaultState(int index) const {

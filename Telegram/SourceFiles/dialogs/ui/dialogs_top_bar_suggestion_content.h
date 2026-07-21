@@ -129,7 +129,6 @@ private:
 	struct AnimationDamage {
 		QRegion painted;
 		QRegion fallback;
-		bool complete = true;
 	};
 
 	[[nodiscard]] AnimationDamage draw(QPainter &p);

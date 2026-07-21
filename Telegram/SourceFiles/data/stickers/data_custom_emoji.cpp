@@ -148,6 +148,7 @@ public:
 	void resolved(not_null<DocumentData*> document);
 
 	QString entityData() override;
+	QSize size() const override;
 
 	void load(Fn<void(LoadResult)> loaded) override;
 	bool loading() override;
@@ -278,6 +279,11 @@ QString CustomEmojiLoader::entityData() {
 		return SerializeCustomEmojiId(load->document);
 	}
 	Unexpected("State in CustomEmojiLoader::entityData.");
+}
+
+QSize CustomEmojiLoader::size() const {
+	const auto size = FrameSizeFromTag(_tag, _sizeOverride);
+	return QSize(size, size);
 }
 
 bool CustomEmojiLoader::loading() {

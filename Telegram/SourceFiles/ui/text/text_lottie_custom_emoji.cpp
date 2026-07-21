@@ -42,7 +42,9 @@ QString LottieCustomEmoji::entityData() {
 	return _entityData;
 }
 
-QRectF LottieCustomEmoji::paint(QPainter &p, const Context &context) {
+CustomEmoji::PaintResult LottieCustomEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	if (!_icon || !_icon->valid()) {
 		return {};
 	}
@@ -60,11 +62,14 @@ QRectF LottieCustomEmoji::paint(QPainter &p, const Context &context) {
 		startAnimation();
 	}
 
-	return _icon->paint(
+	const auto painted = _icon->paint(
 		p,
 		context.position.x(),
 		context.position.y(),
 		context.textColor);
+	return PaintResult(
+		painted,
+		QRectF(context.position, _icon->size()));
 }
 
 void LottieCustomEmoji::unload() {

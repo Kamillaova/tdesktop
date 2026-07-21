@@ -60,10 +60,11 @@ constexpr auto kLogEntryPreviewLines = 2;
 		const PaintContext &context,
 		QRectF rect) {
 	const auto mapped = context.mapToElement(p, rect);
-	if (!mapped || mapped->isEmpty()) {
+	if (!mapped) {
 		return false;
+	} else if (!mapped->isEmpty()) {
+		region += *mapped;
 	}
-	region += *mapped;
 	return true;
 }
 
@@ -1003,8 +1004,8 @@ void WebPage::recordDescriptionRepaint(
 		int visibleLines,
 		int removeFromEnd,
 		bool logEntryPreview,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const {
 	if (!context.hasElementPainter(p)) {
 		return;
 	}
@@ -1014,14 +1015,13 @@ void WebPage::recordDescriptionRepaint(
 	_descriptionRepaint.pending = false;
 
 	auto region = QRegion();
-	auto geometryKnown = customEmojiPaintedBounds.repaintRectKnown();
-	const auto repaintRect = customEmojiPaintedBounds.repaintRect();
-	if (geometryKnown && !repaintRect.isEmpty()) {
+	auto geometryKnown = true;
+	if (!customEmojiRepaintBounds.rect.isEmpty()) {
 		geometryKnown = AddDescriptionRepaintRect(
 			region,
 			p,
 			context,
-			repaintRect);
+			customEmojiRepaintBounds.rect);
 	}
 	const auto addLine = [&](const Ui::Text::LineLayoutInfo &line,
 			int top,
@@ -1055,8 +1055,15 @@ void WebPage::recordDescriptionRepaint(
 				bottom - top));
 	};
 
+	const auto needsTextFallback
+		= !customEmojiRepaintBounds.repaintBoundsKnown
+		|| _description.hasSpoilers();
+	if (geometryKnown && needsTextFallback
+		&& (availableWidth <= 0 || visibleHeight <= 0)) {
+		geometryKnown = customEmojiRepaintBounds.repaintBoundsKnown;
+	}
 	if (geometryKnown
-		&& _description.hasSpoilers()
+		&& needsTextFallback
 		&& availableWidth > 0
 		&& visibleHeight > 0) {
 		if (logEntryPreview) {
@@ -1225,9 +1232,9 @@ void WebPage::recordRippleRepaint(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, rect);
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}
@@ -1302,7 +1309,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			0,
 			0,
 			false,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds());
 		recordRippleRepaint(
 			_rippleRepaint,
 			p,
@@ -1650,8 +1657,8 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			? (_descriptionLines * lineHeight)
 			: _description.countHeight(descriptionWidth);
 		_parent->prepareCustomEmojiPaint(p, context, _description);
-		auto customEmojiPaintedBounds
-			= Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		_description.draw(p, {
 			.position = { inner.left(), tshift },
 			.outerWidth = width(),
@@ -1669,7 +1676,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 				: 0),
 			.elisionRemoveFromEnd = (_descriptionLines > 0) ? endskip : 0,
 			.useFullWidth = true,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		recordDescriptionRepaint(
 			p,
@@ -1680,7 +1687,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			_descriptionLines,
 			endskip,
 			previewGeometry,
-			customEmojiPaintedBounds);
+			customEmojiRepaintBounds);
 		tshift += descriptionHeight;
 	} else {
 		recordDescriptionRepaint(
@@ -1692,7 +1699,7 @@ void WebPage::draw(Painter &p, const PaintContext &context) const {
 			0,
 			0,
 			false,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds());
 	}
 	if (factcheck && factcheck->expanded) {
 		const auto skip = st::factcheckFooterSkip;

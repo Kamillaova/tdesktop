@@ -210,7 +210,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			QRect(),
 			0,
 			0,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds());
 		recordRippleRepaintRect(p, context, QRect());
 		return;
 	}
@@ -298,8 +298,8 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			endskip = _parent->skipBlockWidth();
 		}
 		_parent->prepareCustomEmojiPaint(p, context, _description);
-		auto customEmojiPaintedBounds
-			= Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		_description.draw(p, {
 			.position = { inner.left(), tshift },
 			.outerWidth = width(),
@@ -312,7 +312,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			.elisionHeight = _descriptionLines * lineHeight,
 			.elisionRemoveFromEnd = endskip,
 			.useFullWidth = true,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		recordDescriptionRepaintRect(
 			p,
@@ -324,7 +324,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 				_descriptionLines * lineHeight),
 			_descriptionLines,
 			endskip,
-			customEmojiPaintedBounds);
+			customEmojiRepaintBounds);
 		tshift += _descriptionLines * lineHeight;
 	} else {
 		recordDescriptionRepaintRect(
@@ -333,7 +333,7 @@ void Game::draw(Painter &p, const PaintContext &context) const {
 			QRect(),
 			0,
 			0,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds());
 	}
 	if (_attach) {
 		auto attachAtTop = !_titleLines && !_descriptionLines;
@@ -611,8 +611,8 @@ void Game::recordDescriptionRepaintRect(
 		QRect rect,
 		int visibleLines,
 		int removeFromEnd,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const {
 	if (!context.hasElementPainter(p)) {
 		if (!_descriptionRepaint.known) {
 			if (_descriptionRepaint.pending) {
@@ -627,20 +627,27 @@ void Game::recordDescriptionRepaintRect(
 	}
 	_descriptionRepaint.pending = false;
 	auto region = QRegion();
-	auto geometryKnown = customEmojiPaintedBounds.repaintRectKnown();
-	const auto repaintRect = customEmojiPaintedBounds.repaintRect();
-	if (geometryKnown && !repaintRect.isEmpty()) {
+	auto geometryKnown = true;
+	if (!customEmojiRepaintBounds.rect.isEmpty()) {
 		const auto mapped = context.mapToElement(
 			p,
-			repaintRect);
-		if (!mapped || mapped->isEmpty()) {
+			customEmojiRepaintBounds.rect);
+		if (!mapped) {
 			geometryKnown = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			region += *mapped;
 		}
 	}
+	const auto needsTextFallback
+		= !customEmojiRepaintBounds.repaintBoundsKnown
+		|| _description.hasSpoilers();
+	if (geometryKnown && needsTextFallback) {
+		if (rect.isEmpty() || visibleLines <= 0) {
+			geometryKnown = customEmojiRepaintBounds.repaintBoundsKnown;
+		}
+	}
 	if (geometryKnown
-		&& _description.hasSpoilers()
+		&& needsTextFallback
 		&& !rect.isEmpty()
 		&& visibleLines > 0) {
 		const auto lines = _description.countLinesGeometry(rect.width());
@@ -681,11 +688,12 @@ void Game::recordDescriptionRepaintRect(
 					lineWidth,
 					lineBottom - lineTop);
 				const auto mapped = context.mapToElement(p, lineRect);
-				if (!mapped || mapped->isEmpty()) {
+				if (!mapped) {
 					geometryKnown = false;
 					break;
+				} else if (!mapped->isEmpty()) {
+					region += *mapped;
 				}
-				region += *mapped;
 			}
 			lineTop = lineBottom;
 		}
@@ -754,9 +762,9 @@ void Game::recordRippleRepaintRect(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}

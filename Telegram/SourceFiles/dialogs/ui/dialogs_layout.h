@@ -30,7 +30,7 @@ class CommunityInfo;
 
 namespace Ui::Text {
 class String;
-struct CustomEmojiPaintedBounds;
+struct CustomEmojiRepaintBounds;
 } // namespace Ui::Text
 
 namespace Dialogs {
@@ -95,7 +95,7 @@ struct RowPaintResult {
 [[nodiscard]] QRegion TextAnimationRegion(
 	const Text::String &text,
 	QRect spoilerGeometry,
-	const Text::CustomEmojiPaintedBounds &customEmojiPaintedBounds,
+	const Text::CustomEmojiRepaintBounds &customEmojiRepaintBounds,
 	QRect customEmojiFallback);
 
 extern const char kOptionDialogsMuteIcon[];

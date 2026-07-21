@@ -493,7 +493,7 @@ private:
 		CustomPaintedArea &area,
 		const QPainter &p,
 		const ExpandingContext &context,
-		QRectF painted,
+		QRectF repaintBounds,
 		QRectF fallback);
 	[[nodiscard]] QRect takeCustomRepaintRect(
 		CustomPaintedArea &area,

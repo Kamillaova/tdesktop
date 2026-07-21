@@ -150,8 +150,8 @@ private:
 		const PaintContext &context,
 		const Ui::Text::String &text,
 		QRect rect,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const;
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const;
 	void recordTaskRepaint(
 		int id,
 		TaskRepaintPart part,

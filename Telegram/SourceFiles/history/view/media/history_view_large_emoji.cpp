@@ -152,11 +152,11 @@ void LargeEmoji::paintCustom(
 		}
 		_selectedFrame.fill(Qt::transparent);
 		auto q = QPainter(&_selectedFrame);
-		const auto painted = emoji->paint(q, {
+		const auto repaintBounds = emoji->paint(q, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.paused = context.paused,
-		});
+		}).repaintBounds();
 		q.end();
 
 		_selectedFrame = Images::Colored(
@@ -167,35 +167,37 @@ void LargeEmoji::paintCustom(
 			p,
 			context,
 			index,
-			painted.isEmpty()
+			repaintBounds.isEmpty()
 				? QRectF(rect)
-				: painted.translated(rect.topLeft()));
+				: repaintBounds.translated(rect.topLeft()));
 	} else {
-		const auto painted = emoji->paint(p, {
+		const auto repaintBounds = emoji->paint(p, {
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.position = rect.topLeft(),
 			.paused = context.paused,
-		});
+		}).repaintBounds();
 		recordCustomFrame(
 			p,
 			context,
 			index,
-			painted.isEmpty() ? QRectF(rect) : painted);
+			repaintBounds.isEmpty() ? QRectF(rect) : repaintBounds);
 	}
 }
 
 void LargeEmoji::repaintCustom(int index) {
 	Expects(index >= 0 && index < int(_customRepaintRects.size()));
 
-	if (_customRepaintPending[index]) {
+	if (_customRepaintPending[index]
+		|| (_customRepaintRects[index]
+			&& _customRepaintRects[index]->isEmpty())) {
 		return;
 	}
 	_customRepaintPending[index] = true;
-	if (_customRepaintRects[index].isEmpty()) {
-		_parent->customEmojiRepaint();
+	if (_customRepaintRects[index]) {
+		_parent->repaint(*_customRepaintRects[index]);
 	} else {
-		_parent->repaint(_customRepaintRects[index]);
+		_parent->customEmojiRepaint();
 	}
 }
 
@@ -208,16 +210,17 @@ void LargeEmoji::recordCustomFrame(
 
 	if (context.hasElementPainter(p)) {
 		const auto mapped = context.mapToElement(p, rect);
-		const auto current = mapped ? *mapped : QRect();
-		const auto previous = _customRepaintRects[index];
-		_customRepaintRects[index] = current;
+		const auto current = mapped.value_or(QRect());
+		const auto previous = _customRepaintRects[index].value_or(QRect());
+		_customRepaintRects[index] = mapped;
 		if (!previous.isEmpty() && previous != current) {
 			_customRepaintPending[index] = true;
 			_parent->repaint(previous.united(current));
 		} else {
 			_customRepaintPending[index] = false;
 		}
-	} else if (_customRepaintRects[index].isEmpty()) {
+	} else if (!_customRepaintRects[index]
+		|| _customRepaintRects[index]->isEmpty()) {
 		_customRepaintPending[index] = false;
 	}
 }

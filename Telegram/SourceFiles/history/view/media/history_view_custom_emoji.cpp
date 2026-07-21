@@ -288,7 +288,7 @@ void CustomEmoji::paintCustom(
 	const auto paused = context.paused || On(PowerSaving::kEmojiChat);
 	const auto rect = QRect(x, y, _singleSize, _singleSize);
 	if (context.hasElementPainter(p)
-		&& _customRepaintRects[index].isEmpty()) {
+		&& !_customRepaintRects[index]) {
 		if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
 			_customRepaintRects[index] = *mapped;
 			_customRepaintPending[index] = 0;
@@ -310,7 +310,7 @@ void CustomEmoji::paintCustom(
 			.textColor = textst.historyTextFg->c,
 			.now = context.now,
 			.paused = paused,
-		});
+		}).repaintBounds();
 		q.end();
 		painted = painted.intersected(QRectF(
 			QPointF(),
@@ -327,7 +327,7 @@ void CustomEmoji::paintCustom(
 			.now = context.now,
 			.position = rect.topLeft(),
 			.paused = paused,
-		});
+		}).repaintBounds();
 	}
 	recordCustomFrame(
 		p,
@@ -339,14 +339,16 @@ void CustomEmoji::paintCustom(
 void CustomEmoji::repaintCustom(int index) {
 	Expects(index >= 0 && index < int(_customRepaintRects.size()));
 
-	if (_customRepaintPending[index]) {
+	if (_customRepaintPending[index]
+		|| (_customRepaintRects[index]
+			&& _customRepaintRects[index]->isEmpty())) {
 		return;
 	}
 	_customRepaintPending[index] = 1;
-	if (_customRepaintRects[index].isEmpty()) {
-		_parent->customEmojiRepaint();
+	if (_customRepaintRects[index]) {
+		_parent->repaint(*_customRepaintRects[index]);
 	} else {
-		_parent->repaint(_customRepaintRects[index]);
+		_parent->customEmojiRepaint();
 	}
 }
 
@@ -359,10 +361,10 @@ void CustomEmoji::recordCustomFrame(
 
 	if (context.hasElementPainter(p)) {
 		const auto mapped = context.mapToElement(p, rect);
-		const auto previous = _customRepaintRects[index];
-		const auto current = mapped ? *mapped : QRect();
+		const auto previous = _customRepaintRects[index].value_or(QRect());
+		const auto current = mapped.value_or(QRect());
 		_customRepaintPending[index] = 0;
-		_customRepaintRects[index] = current;
+		_customRepaintRects[index] = mapped;
 		if (!previous.isEmpty() && previous != current) {
 			_customRepaintPending[index] = 1;
 			_parent->repaint(previous.united(current));
@@ -371,7 +373,7 @@ void CustomEmoji::recordCustomFrame(
 }
 
 void CustomEmoji::resetCustomRepaints() {
-	ranges::fill(_customRepaintRects, QRect());
+	ranges::fill(_customRepaintRects, std::optional<QRect>());
 	ranges::fill(_customRepaintPending, uint8(0));
 }
 

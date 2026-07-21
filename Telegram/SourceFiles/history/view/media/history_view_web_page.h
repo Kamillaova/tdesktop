@@ -203,8 +203,8 @@ private:
 		int visibleLines,
 		int removeFromEnd,
 		bool logEntryPreview,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const;
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const;
 	void invalidateDescriptionRepaint() const;
 	void repaintDescriptionRegion(const QRegion &region) const;
 	void repaintOuterRipple(uint64 generation) const;

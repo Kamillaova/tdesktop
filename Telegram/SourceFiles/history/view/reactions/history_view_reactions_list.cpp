@@ -73,11 +73,11 @@ public:
 
 private:
 	void repaintCustomEmoji();
-	void trackCustomEmojiPaint(QRectF painted, QRectF fallback);
+	void trackCustomEmojiPaint(QRectF repaintBounds, QRectF fallback);
 
 	Fn<void(Row*, const QRegion &)> _repaint;
 	ReactionId _reaction;
-	QRectF _customPaintedRect;
+	QRectF _customRepaintRect;
 	QRectF _customFallbackRect;
 	QRegion _customRepaintDamage;
 	std::unique_ptr<Ui::Text::CustomEmoji> _custom;
@@ -243,14 +243,14 @@ void Row::rightActionPaint(
 	const auto mapToRow = [&](QRectF rect) {
 		return transform.mapRect(rect).translated(-origin.x(), -origin.y());
 	};
-	const auto painted = _custom->paint(p, {
+	const auto repaintBounds = _custom->paint(p, {
 		.textColor = st::windowFg->c,
 		.now = crl::now(),
 		.position = { x + skip, y + skip },
 		.paused = _paused(),
-	});
+	}).repaintBounds();
 	trackCustomEmojiPaint(
-		painted.isEmpty() ? QRectF() : mapToRow(painted),
+		repaintBounds.isEmpty() ? QRectF() : mapToRow(repaintBounds),
 		mapToRow(QRectF(QPoint(x, y), rightActionSize())));
 }
 
@@ -263,12 +263,12 @@ void Row::repaintCustomEmoji() {
 	}
 }
 
-void Row::trackCustomEmojiPaint(QRectF painted, QRectF fallback) {
-	const auto previous = _customPaintedRect;
-	_customPaintedRect = painted;
+void Row::trackCustomEmojiPaint(QRectF repaintBounds, QRectF fallback) {
+	const auto previous = _customRepaintRect;
+	_customRepaintRect = repaintBounds;
 	_customFallbackRect = fallback;
-	const auto currentDamage = QRegion(painted.toAlignedRect());
-	if (painted == previous) {
+	const auto currentDamage = QRegion(repaintBounds.toAlignedRect());
+	if (repaintBounds == previous) {
 		_customRepaintDamage = currentDamage;
 		return;
 	}

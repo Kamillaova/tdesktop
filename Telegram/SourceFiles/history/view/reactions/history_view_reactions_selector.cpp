@@ -56,11 +56,12 @@ public:
 		std::unique_ptr<Ui::Text::CustomEmoji> wrapped,
 		not_null<Strip*> strip,
 		QPoint shift,
-		int index);
+		int index,
+		QRectF wrappedRepaintBounds);
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -70,6 +71,7 @@ private:
 	const not_null<Strip*> _strip;
 	const QPoint _shift;
 	const int _index = 0;
+	const QRectF _wrappedRepaintBounds;
 	bool _switched = false;
 
 };
@@ -78,11 +80,13 @@ StripEmoji::StripEmoji(
 	std::unique_ptr<Ui::Text::CustomEmoji> wrapped,
 	not_null<Strip*> strip,
 	QPoint shift,
-	int index)
+	int index,
+	QRectF wrappedRepaintBounds)
 : _wrapped(std::move(wrapped))
 , _strip(strip)
 , _shift(shift)
-, _index(index) {
+, _index(index)
+, _wrappedRepaintBounds(wrappedRepaintBounds) {
 }
 
 int StripEmoji::width() {
@@ -93,7 +97,9 @@ QString StripEmoji::entityData() {
 	return _wrapped->entityData();
 }
 
-QRectF StripEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult StripEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	if (_switched) {
 		return _wrapped->paint(p, context);
 	} else if (_wrapped->readyInDefaultState()
@@ -101,11 +107,13 @@ QRectF StripEmoji::paint(QPainter &p, const Context &context) {
 		_switched = true;
 		return _wrapped->paint(p, context);
 	} else {
-		return _strip->paintOne(
+		const auto result = _strip->paintOne(
 			p,
 			_index,
 			context.position + _shift,
-			1.);
+			1.,
+			_wrappedRepaintBounds.translated(context.position));
+		return PaintResult(result.paintedBounds, result.repaintBounds);
 	}
 }
 
@@ -193,11 +201,20 @@ UnifiedFactoryOwner::RecentFactory UnifiedFactoryOwner::factory() {
 		const auto j = _defaultReactionInStripMap.find(id);
 		if (j != end(_defaultReactionInStripMap)) {
 			Assert(_strip != nullptr);
+			const auto wrappedShift = isDefaultReaction
+				? _defaultReactionShift
+				: QPoint();
+			const auto wrappedSize = isDefaultReaction
+				? sizeOverride
+				: Data::FrameSizeFromTag(tag) / style::DevicePixelRatio();
 			return MakeWrappedEmoji<StripEmoji>(
 				std::move(result),
 				_strip,
 				-_stripPaintOneShift,
-				j->second);
+				j->second,
+				QRectF(
+					wrappedShift,
+					QSize(wrappedSize, wrappedSize)));
 		}
 		return result;
 	};
@@ -1057,7 +1074,7 @@ void Selector::cacheExpandIcon() {
 	_expandIconCache = _cachedRound.PrepareImage({ _size, _size });
 	_expandIconCache.fill(Qt::transparent);
 	auto q = QPainter(&_expandIconCache);
-	_strip->paintOne(q, _strip->count() - 1, { 0, 0 }, 1.);
+	_strip->paintOne(q, _strip->count() - 1, { 0, 0 }, 1., {});
 }
 
 void Selector::createList() {

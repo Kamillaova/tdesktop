@@ -276,7 +276,7 @@ private:
 	} _ephemeral;
 	mutable QImage _thumbCache;
 	mutable QImage _roundingMask;
-	mutable QRect _streamedContentRect;
+	mutable std::optional<QRect> _streamedContentRect;
 	mutable SeekRepaint _seekRepaint;
 	mutable crl::time _videoPosition = 0;
 	std::shared_ptr<VoiceSeekClickHandler> _seekl;

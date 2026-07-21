@@ -154,7 +154,7 @@ bool Sticker::webpagePart() const {
 
 void Sticker::initSize(int customSize) {
 	_animationRepaintPending = false;
-	_animationRepaintRect = QRect();
+	_animationRepaintRect = std::nullopt;
 	if (customSize > 0) {
 		const auto original = Size(_data);
 		const auto proposed = QSize{ customSize, customSize };
@@ -243,8 +243,9 @@ void Sticker::draw(
 		const QRect &r) {
 	if (context.hasElementPainter(p)) {
 		_animationRepaintPending = false;
-		_animationRepaintRect = QRect();
-	} else if (_animationRepaintRect.isEmpty()) {
+		_animationRepaintRect = std::nullopt;
+	} else if (!_animationRepaintRect
+		|| _animationRepaintRect->isEmpty()) {
 		_animationRepaintPending = false;
 	}
 	if (!customEmojiPart()) {
@@ -363,7 +364,10 @@ void Sticker::paintAnimationFrame(
 			r.x() + (r.width() - size.width()) / 2,
 			r.y() + (r.height() - size.height()) / 2),
 		size);
-	recordAnimationFrame(p, context, frameRect);
+	const auto repaintRect = style::centerrect(
+		r,
+		QRect(QPoint(), _size)).united(frameRect);
+	recordAnimationFrame(p, context, repaintRect);
 	p.drawImage(frameRect, prepared);
 	if (!_lastFrameCached.isNull()) {
 		return;
@@ -673,14 +677,16 @@ void Sticker::playerCreated() {
 }
 
 void Sticker::repaintAnimation() {
-	if (_animationRepaintPending) {
+	if (_animationRepaintPending
+		|| (_animationRepaintRect
+			&& _animationRepaintRect->isEmpty())) {
 		return;
 	}
 	_animationRepaintPending = true;
-	if (_animationRepaintRect.isEmpty()) {
-		_parent->customEmojiRepaint();
+	if (_animationRepaintRect) {
+		_parent->repaint(*_animationRepaintRect);
 	} else {
-		_parent->repaint(_animationRepaintRect);
+		_parent->customEmojiRepaint();
 	}
 }
 
@@ -688,9 +694,7 @@ void Sticker::recordAnimationFrame(
 		const Painter &p,
 		const PaintContext &context,
 		QRect rect) {
-	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
-		_animationRepaintRect = *mapped;
-	}
+	_animationRepaintRect = context.mapToElement(p, QRectF(rect));
 }
 
 bool Sticker::hasHeavyPart() const {
@@ -707,7 +711,7 @@ void Sticker::unloadPlayer() {
 		return;
 	}
 	_animationRepaintPending = false;
-	_animationRepaintRect = QRect();
+	_animationRepaintRect = std::nullopt;
 	if (_stopOnLastFrame && _lastFrameCached.isNull()) {
 		_nextLastFrame = false;
 		_oncePlayed = false;

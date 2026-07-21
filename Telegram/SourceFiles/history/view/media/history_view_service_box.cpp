@@ -40,26 +40,24 @@ namespace {
 		const PaintContext &context,
 		const Ui::Text::String &text,
 		QRectF textRect,
-		const Ui::Text::CustomEmojiPaintedBounds &customEmojiBounds) {
-	if (!customEmojiBounds.repaintRectKnown()) {
-		return false;
-	}
-	const auto repaintRect = customEmojiBounds.repaintRect();
-	if (!repaintRect.isEmpty()) {
-		const auto mapped = context.mapToElement(p, repaintRect);
-		if (!mapped || mapped->isEmpty()) {
+		const Ui::Text::CustomEmojiRepaintBounds &customEmojiBounds) {
+	auto repaintRect = customEmojiBounds.rect;
+	if (!customEmojiBounds.repaintBoundsKnown) {
+		if (textRect.isEmpty()) {
 			return false;
 		}
-		region += *mapped;
+		repaintRect = repaintRect.united(textRect);
+	} else if (text.hasSpoilers() && !textRect.isEmpty()) {
+		repaintRect = repaintRect.united(textRect);
 	}
-	if (!text.hasSpoilers() || textRect.isEmpty()) {
-		return true;
+	if (!repaintRect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, repaintRect);
+		if (!mapped) {
+			return false;
+		} else if (!mapped->isEmpty()) {
+			region += *mapped;
+		}
 	}
-	const auto mapped = context.mapToElement(p, textRect);
-	if (!mapped || mapped->isEmpty()) {
-		return false;
-	}
-	region += *mapped;
 	return true;
 }
 
@@ -306,8 +304,8 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		if (!_title.isEmpty()) {
 			const auto titleHeight = _title.countHeight(_maxWidth);
 			_parent->prepareCustomEmojiPaint(p, context, _title);
-			auto customEmojiPaintedBounds
-				= Ui::Text::CustomEmojiPaintedBounds();
+			auto customEmojiRepaintBounds
+				= Ui::Text::CustomEmojiRepaintBounds();
 			_title.draw(p, {
 				.position = QPoint(st::msgPadding.left(), top),
 				.availableWidth = _maxWidth,
@@ -317,7 +315,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 				.now = context.now,
 				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-				.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+				.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 			});
 			titleRepaintKnown = titleRepaintKnown
 				&& AddTextRepaintBounds(
@@ -330,7 +328,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 						top,
 						_maxWidth,
 						titleHeight),
-					customEmojiPaintedBounds);
+					customEmojiRepaintBounds);
 			top += titleHeight + padding.bottom();
 		}
 		finishTextRepaint(
@@ -374,8 +372,8 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 		auto subtitleRepaintKnown = context.hasElementPainter(p);
 		const auto subtitleHeight = _subtitle.countHeight(_maxWidth);
 		_parent->prepareCustomEmojiPaint(p, context, _subtitle);
-		auto customEmojiPaintedBounds
-			= Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		_subtitle.draw(p, {
 			.position = QPoint(st::msgPadding.left(), top),
 			.availableWidth = _maxWidth,
@@ -385,7 +383,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 			.now = context.now,
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		subtitleRepaintKnown = subtitleRepaintKnown
 			&& AddTextRepaintBounds(
@@ -398,7 +396,7 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 					top,
 					_maxWidth,
 					subtitleHeight),
-				customEmojiPaintedBounds);
+				customEmojiRepaintBounds);
 		top += subtitleHeight + padding.bottom();
 		finishTextRepaint(
 			_subtitleRepaint,
@@ -669,9 +667,9 @@ void ServiceBox::recordButtonRepaintRect(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}

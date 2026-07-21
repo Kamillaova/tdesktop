@@ -141,7 +141,7 @@ private:
 	QSize _size;
 	QImage _lastFrameCached;
 	QString _diceEmoji;
-	QRect _animationRepaintRect;
+	std::optional<QRect> _animationRepaintRect;
 	int _diceIndex = -1;
 	mutable int _frameIndex = -1;
 	mutable int _framesCount = -1;

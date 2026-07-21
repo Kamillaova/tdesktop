@@ -9,6 +9,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/effects/spoiler_mess.h"
 #include "ui/image/image_prepare.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/text/text_options.h"
@@ -44,13 +45,6 @@ namespace {
 		const QString &b) {
 	return !MuchDifferent(same, a, b)
 		&& (same != a.size() || same != b.size());
-}
-
-[[nodiscard]] QRect MapPaintRect(const QPainter &p, QRectF rect) {
-	if (rect.isEmpty()) {
-		return QRect();
-	}
-	return p.transform().mapRect(rect).toAlignedRect();
 }
 
 } // namespace
@@ -302,7 +296,6 @@ void MessageBar::invalidateTextAnimationDamage() {
 void MessageBar::recordTextAnimationDamage(
 		QRect current,
 		QRect fallback,
-		bool known,
 		const QRegion &repaintRegion) {
 	const auto widgetRect = _widget.rect();
 	current &= widgetRect;
@@ -311,18 +304,6 @@ void MessageBar::recordTextAnimationDamage(
 	fallback = fallback.united(current);
 	_textAnimationDamage.fallback = fallback;
 	_textAnimationDamage.scheduled = false;
-	if (!known) {
-		if (_textAnimationDamage.known) {
-			_textAnimationDamage.stale = _textAnimationDamage.stale.united(
-				_textAnimationDamage.current);
-			_textAnimationDamage.current = QRect();
-		}
-		_textAnimationDamage.known = false;
-		if (repaintRegion.contains(_textAnimationDamage.stale)) {
-			_textAnimationDamage.stale = QRect();
-		}
-		return;
-	}
 	if (_textAnimationDamage.known
 		&& _textAnimationDamage.current != current) {
 		_textAnimationDamage.stale = _textAnimationDamage.stale.united(
@@ -527,7 +508,7 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 				pausedSpoiler);
 		}
 	}
-	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds = Text::CustomEmojiRepaintBounds();
 	auto textAnimationFallback = QRect();
 	if (!_animation || _animation->bodyAnimation == BodyAnimation::None) {
 		if (_title.isEmpty()) {
@@ -544,8 +525,8 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 				.outerWidth = width,
 				.availableWidth = body.width(),
 				.elisionLines = 1,
-				.customEmojiPaintedBounds = canonical
-					? &customEmojiPaintedBounds
+				.customEmojiRepaintBounds = canonical
+					? &customEmojiRepaintBounds
 					: nullptr,
 			});
 		} else {
@@ -563,30 +544,30 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 				.pausedEmoji = paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = pausedSpoiler,
 				.elisionLines = 1,
-				.customEmojiPaintedBounds = canonical
-					? &customEmojiPaintedBounds
+				.customEmojiRepaintBounds = canonical
+					? &customEmojiRepaintBounds
 					: nullptr,
 			});
 		}
 		if (canonical) {
-			const auto mappedFallback = MapPaintRect(
-				p,
-				QRectF(textAnimationFallback));
-			if (repaintRegion.intersects(mappedFallback)) {
-				const auto customEmojiKnown = !_text.hasCustomEmoji()
-					|| customEmojiPaintedBounds.repaintRectKnown();
-				auto damage = _text.hasSpoilers()
-					? mappedFallback
-					: QRect();
-				if (_text.hasCustomEmoji() && customEmojiKnown) {
-					damage = damage.united(MapPaintRect(
-						p,
-						customEmojiPaintedBounds.repaintRect()));
+			const auto mappedFallback = Ui::DamageRect(
+				QRectF(textAnimationFallback),
+				p.transform());
+			auto damage = _text.hasSpoilers()
+				? mappedFallback
+				: QRect();
+			if (_text.hasCustomEmoji()) {
+				damage = damage.united(Ui::DamageRect(
+					customEmojiRepaintBounds.rect,
+					p.transform()));
+				if (!customEmojiRepaintBounds.repaintBoundsKnown) {
+					damage = damage.united(mappedFallback);
 				}
+			}
+			if (repaintRegion.intersects(mappedFallback.united(damage))) {
 				recordTextAnimationDamage(
 					damage,
 					mappedFallback,
-					customEmojiKnown,
 					repaintRegion);
 			}
 		}

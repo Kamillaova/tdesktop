@@ -126,8 +126,8 @@ private:
 		QRect rect,
 		int visibleLines,
 		int removeFromEnd,
-		const Ui::Text::CustomEmojiPaintedBounds
-			&customEmojiPaintedBounds) const;
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const;
 	void invalidateDescriptionRepaint() const;
 	void repaintDescriptionRegion(const QRegion &region) const;
 	void repaintRipple(uint64 generation) const;

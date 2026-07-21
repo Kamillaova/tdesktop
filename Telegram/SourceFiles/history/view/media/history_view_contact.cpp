@@ -744,9 +744,9 @@ void Contact::recordRippleRepaint(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}

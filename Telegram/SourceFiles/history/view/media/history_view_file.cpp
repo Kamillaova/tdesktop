@@ -112,11 +112,16 @@ void File::radialAnimationCallback(crl::time now) const {
 }
 
 void File::repaintRadialAnimation() const {
-	if (_animation->radialRepaintRect.isEmpty()) {
+	if (_animation->radialRepaintPending
+		|| (_animation->radialRepaintRect
+			&& _animation->radialRepaintRect->isEmpty())) {
+		return;
+	}
+	_animation->radialRepaintPending = true;
+	if (_animation->radialRepaintRect) {
+		_parent->repaint(*_animation->radialRepaintRect);
+	} else {
 		repaint();
-	} else if (!_animation->radialRepaintPending) {
-		_animation->radialRepaintPending = true;
-		_parent->repaint(_animation->radialRepaintRect);
 	}
 }
 
@@ -127,22 +132,21 @@ void File::recordRadialAnimationRepaintRect(
 	if (!_animation) {
 		return;
 	} else if (context.hasElementPainter(p)) {
-		_animation->radialRepaintRect = QRect();
+		_animation->radialRepaintRect = std::nullopt;
 		_animation->radialRepaintPending = false;
 	} else {
-		if (_animation->radialRepaintRect.isEmpty()) {
+		if (!_animation->radialRepaintRect
+			|| _animation->radialRepaintRect->isEmpty()) {
 			_animation->radialRepaintPending = false;
 		}
 		return;
 	}
-	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
-		_animation->radialRepaintRect = *mapped;
-	}
+	_animation->radialRepaintRect = context.mapToElement(p, QRectF(rect));
 }
 
 void File::clearRadialAnimationRepaintRect() const {
 	if (_animation) {
-		_animation->radialRepaintRect = QRect();
+		_animation->radialRepaintRect = std::nullopt;
 		_animation->radialRepaintPending = false;
 	}
 }

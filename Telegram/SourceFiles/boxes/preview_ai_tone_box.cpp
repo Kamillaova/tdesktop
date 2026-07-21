@@ -36,6 +36,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "ui/vertical_list.h"
 
+#include <cmath>
 #include <optional>
 
 #include "styles/style_boxes.h"
@@ -56,7 +57,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -110,15 +111,22 @@ float64 RefreshSpinEmoji::angleDegrees(crl::time now) const {
 	return anim::easeOutBack(360., dt);
 }
 
-QRectF RefreshSpinEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult RefreshSpinEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	const auto &e = st::aiTonePreviewAnotherExampleIcon;
 	const auto size = e.icon.size();
 	const auto pos = context.position
 		+ QPoint(e.padding.left(), e.padding.top());
 	const auto rect = QRectF(pos, size);
+	const auto radius = std::hypot(rect.width(), rect.height()) / 2.;
+	const auto repaintBounds = QRectF(
+		rect.center() - QPointF(radius, radius),
+		QSizeF(2 * radius, 2 * radius));
 	const auto outerWidth = 2 * pos.x() + size.width();
 	const auto angle = angleDegrees(context.now);
 	auto hq = PainterHighQualityEnabler(p);
+	auto paintedBounds = rect;
 	if (angle != 0.) {
 		const auto center = QPointF(pos)
 			+ QPointF(size.width() / 2.0, size.height() / 2.0);
@@ -132,14 +140,14 @@ QRectF RefreshSpinEmoji::paint(QPainter &p, const Context &context) {
 		p.restore();
 		auto invertible = false;
 		const auto inverted = initialTransform.inverted(&invertible);
-		return invertible
+		paintedBounds = invertible
 			? inverted.map(
 				paintedTransform.map(QPolygonF(rect))).boundingRect()
 			: QRectF();
 	} else {
 		e.icon.paint(p, pos, outerWidth, context.textColor);
-		return rect;
 	}
+	return PaintResult(paintedBounds, repaintBounds);
 }
 
 void RefreshSpinEmoji::unload() {

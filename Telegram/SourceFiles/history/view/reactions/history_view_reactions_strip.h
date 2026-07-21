@@ -70,7 +70,16 @@ public:
 		QRect clip,
 		float64 scale,
 		bool hiding);
-	QRectF paintOne(QPainter &p, int index, QPoint position, float64 scale);
+	struct PaintOneResult {
+		QRectF paintedBounds;
+		QRectF repaintBounds;
+	};
+	PaintOneResult paintOne(
+		QPainter &p,
+		int index,
+		QPoint position,
+		float64 scale,
+		QRectF handoffBounds);
 	[[nodiscard]] bool inDefaultState(int index) const;
 
 	[[nodiscard]] bool empty() const;
@@ -121,6 +130,9 @@ private:
 		QPoint position,
 		QRectF target,
 		bool allowAppearStart);
+	[[nodiscard]] QRectF resolveTarget(
+		float64 scale,
+		float64 selectScale) const;
 	[[nodiscard]] Fn<QRectF(const ReactionIcons&)> resolveCountTargetMethod(
 		float64 scale) const;
 

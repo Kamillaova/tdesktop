@@ -66,7 +66,8 @@ private:
 
 	const not_null<Element*> _parent;
 	const std::array<LargeEmojiMedia, Ui::Text::kIsolatedEmojiLimit> _images;
-	std::array<QRect, Ui::Text::kIsolatedEmojiLimit> _customRepaintRects;
+	std::array<std::optional<QRect>, Ui::Text::kIsolatedEmojiLimit>
+		_customRepaintRects;
 	std::array<bool, Ui::Text::kIsolatedEmojiLimit> _customRepaintPending = {};
 	QImage _selectedFrame;
 	QSize _size;

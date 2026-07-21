@@ -229,8 +229,8 @@ QRegion TopicsView::paint(
 		if (rect.width() < title.title.style()->font->elidew) {
 			break;
 		}
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		title.title.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -240,14 +240,14 @@ QRegion TopicsView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		animated += TextAnimationRegion(
 			title.title,
 			QRect(
 				rect.topLeft(),
 				QSize(rect.width(), context.st->topicsHeight)),
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			QRect(0, 0, context.width, context.st->height));
 		const auto skip = skipBig
 			? context.st->topicsSkipBig

@@ -42,7 +42,7 @@ public:
 	int width() override;
 	QString entityData() override;
 
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;

@@ -325,7 +325,7 @@ public:
 	[[nodiscard]] bool failed() const;
 	[[nodiscard]] std::optional<Ui::Text::CustomEmojiVerticalMetrics> vertical(
 		const style::TextStyle &textStyle) const;
-	QRectF paint(
+	Ui::Text::CustomEmoji::PaintResult paint(
 		QPainter &p,
 		const Ui::Text::CustomEmoji::Context &context,
 		const QString &replacementText,
@@ -433,7 +433,7 @@ public:
 		const style::TextStyle &textStyle) override;
 	QString replacementText() override;
 	Ui::Text::CustomEmojiSemantics semantics() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -462,7 +462,7 @@ public:
 		const style::TextStyle &textStyle) override;
 	QString replacementText() override;
 	Ui::Text::CustomEmojiSemantics semantics() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -717,11 +717,39 @@ auto InlineFormulaSharedState::vertical(const style::TextStyle &textStyle) const
 	};
 }
 
-QRectF InlineFormulaSharedState::paint(
+Ui::Text::CustomEmoji::PaintResult InlineFormulaSharedState::paint(
 		QPainter &p,
 		const Ui::Text::CustomEmoji::Context &context,
 		const QString &replacementText,
 		int fallbackWidth) const {
+	using PaintResult = Ui::Text::CustomEmoji::PaintResult;
+	const auto fallbackText = replacementText.isEmpty()
+		? _displayFallbackText
+		: replacementText;
+	const auto fallbackRect = fallbackText.isEmpty()
+		? QRectF()
+		: QRectF(
+			context.position.x(),
+			context.position.y(),
+			std::max(fallbackWidth, 1),
+			p.fontMetrics().height());
+	const auto measuredGeometry = InlineFormulaGeometryFrom(measured());
+	const auto formulaRect = measured().success
+		&& measuredGeometry.width > 0
+		&& measuredGeometry.imageHeight > 0
+		? QRectF(
+			QPointF(context.position)
+				+ QPointF(0., LogicalInlineFormulaMetric(
+					measuredGeometry.paintOffsetYScaled)),
+			QSizeF(
+				measuredGeometry.width,
+				measuredGeometry.imageHeight))
+		: QRectF();
+	const auto repaintBounds = fallbackRect.isEmpty()
+		? formulaRect
+		: formulaRect.isEmpty()
+		? fallbackRect
+		: fallbackRect.united(formulaRect);
 	const auto rendered = ensureRendered(std::max(style::DevicePixelRatio(), 1));
 	if (rendered.success) {
 		const auto geometry = InlineFormulaGeometryFrom(rendered);
@@ -732,29 +760,23 @@ QRectF InlineFormulaSharedState::paint(
 				+ QPointF(0., LogicalInlineFormulaMetric(
 					geometry.paintOffsetYScaled));
 			p.drawImage(position, *image);
-			return QRectF(position, image->deviceIndependentSize());
+			return PaintResult(
+				QRectF(position, image->deviceIndependentSize()),
+				repaintBounds);
 		}
-		return {};
+		return PaintResult(QRectF(), repaintBounds);
 	}
-	const auto fallbackText = replacementText.isEmpty()
-		? _displayFallbackText
-		: replacementText;
 	if (fallbackText.isEmpty()) {
-		return {};
+		return PaintResult(QRectF(), repaintBounds);
 	}
-	const auto rect = QRect(
-		context.position.x(),
-		context.position.y(),
-		std::max(fallbackWidth, 1),
-		p.fontMetrics().height());
 	p.save();
 	p.setPen(context.textColor);
 	p.drawText(
-		rect,
+		fallbackRect,
 		Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
 		fallbackText);
 	p.restore();
-	return rect;
+	return PaintResult(fallbackRect, repaintBounds);
 }
 
 void InlineFormulaSharedState::setRenderer(std::shared_ptr<MathRenderer> renderer) {
@@ -890,10 +912,12 @@ Ui::Text::CustomEmojiSemantics InlineFormulaObject::semantics() {
 	};
 }
 
-QRectF InlineFormulaObject::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult InlineFormulaObject::paint(
+		QPainter &p,
+		const Context &context) {
 	return _state
 		? _state->paint(p, context, _replacementText, _fallbackWidth)
-		: QRectF();
+		: PaintResult();
 }
 
 void InlineFormulaObject::unload() {
@@ -994,7 +1018,9 @@ Ui::Text::CustomEmojiSemantics InlineIvImageObject::semantics() {
 	};
 }
 
-QRectF InlineIvImageObject::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult InlineIvImageObject::paint(
+		QPainter &p,
+		const Context &context) {
 	const auto rect = QRect(context.position, QSize(_width, _height));
 	*_lastPaintRect = rect;
 	if (_image) {
@@ -1012,13 +1038,13 @@ QRectF InlineIvImageObject::paint(QPainter &p, const Context &context) {
 			});
 		}
 		if (const auto image = _image->image(std::max(_width, _height));
-			!image.isNull()) {
+				!image.isNull()) {
 			p.drawImage(rect, image);
-			return rect;
+			return PaintResult(QRectF(rect));
 		}
 	}
 	if (_replacementText.isEmpty()) {
-		return {};
+		return PaintResult(QRectF(), QRectF(rect));
 	}
 	p.save();
 	p.setPen(context.textColor);
@@ -1027,7 +1053,7 @@ QRectF InlineIvImageObject::paint(QPainter &p, const Context &context) {
 		Qt::AlignCenter | Qt::TextWordWrap,
 		_replacementText);
 	p.restore();
-	return rect;
+	return PaintResult(QRectF(rect));
 }
 
 void InlineIvImageObject::unload() {

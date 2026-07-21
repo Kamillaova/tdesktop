@@ -590,9 +590,11 @@ void SuggestionsWidget::paintEvent(QPaintEvent *e) {
 		const auto position = customEmojiPosition(i);
 		if (row.custom) {
 			context.position = position;
-			const auto painted = row.custom->object->paint(p, context);
-			if (!painted.isEmpty()) {
-				row.custom->innerGeometry = painted.toAlignedRect();
+			const auto repaintBounds = row.custom->object->paint(
+				p,
+				context).repaintBounds();
+			if (!repaintBounds.isEmpty()) {
+				row.custom->innerGeometry = repaintBounds.toAlignedRect();
 			}
 			const auto mapped = p.transform().map(
 				QPolygonF(QRectF(row.custom->innerGeometry))

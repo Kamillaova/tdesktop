@@ -1678,7 +1678,7 @@ void EmojiListWidget::recordCustomPaint(
 		CustomPaintedArea &area,
 		const QPainter &p,
 		const ExpandingContext &context,
-		QRectF painted,
+		QRectF repaintBounds,
 		QRectF fallback) {
 	if (!context.trackCustomPaint) {
 		return;
@@ -1690,7 +1690,9 @@ void EmojiListWidget::recordCustomPaint(
 			.toAlignedRect();
 	};
 	const auto nominal = mapRect(fallback);
-	const auto mapped = painted.isEmpty() ? nominal : mapRect(painted);
+	const auto mapped = repaintBounds.isEmpty()
+		? nominal
+		: mapRect(repaintBounds);
 	area.nominal = nominal;
 	if (area.current == mapped) {
 		return;
@@ -2519,12 +2521,14 @@ void EmojiListWidget::paintSearchShortcutIcon(
 	p.scale(scale, scale);
 	p.translate(-native / 2, -native / 2);
 	auto &entry = set.list.front();
-	const auto painted = entry.custom->paint(p, paintContext);
+	const auto repaintBounds = entry.custom->paint(
+		p,
+		paintContext).repaintBounds();
 	recordCustomPaint(
 		entry.paintedArea,
 		p,
 		context,
-		painted,
+		repaintBounds,
 		QRectF(QPointF(), QSizeF(native, native)));
 	p.restore();
 }
@@ -2809,7 +2813,9 @@ void EmojiListWidget::drawRecent(
 
 			auto q = Painter(&_premiumMarkFrameCache);
 			_emojiPaintContext->position = QPoint();
-			const auto painted = custom->paint(q, *_emojiPaintContext);
+			const auto repaintBounds = custom->paint(
+				q,
+				*_emojiPaintContext).repaintBounds();
 			q.end();
 
 			p.drawImage(exactPosition, _premiumMarkFrameCache);
@@ -2820,16 +2826,18 @@ void EmojiListWidget::drawRecent(
 				recent.paintedArea,
 				p,
 				context,
-				painted.intersected(cacheRect).translated(exactPosition),
+				repaintBounds.intersected(cacheRect).translated(exactPosition),
 				fallback);
 		} else {
 			_emojiPaintContext->position = exactPosition;
-			const auto painted = custom->paint(p, *_emojiPaintContext);
+			const auto repaintBounds = custom->paint(
+				p,
+				*_emojiPaintContext).repaintBounds();
 			recordCustomPaint(
 				recent.paintedArea,
 				p,
 				context,
-				painted,
+				repaintBounds,
 				fallback);
 		}
 	} else if (const auto emoji = std::get_if<EmojiPtr>(&recent.id.data)) {
@@ -2884,12 +2892,14 @@ void EmojiListWidget::drawCustom(
 	_emojiPaintContext->position = position
 		+ _innerPosition
 		+ _customPosition;
-	const auto painted = entry.custom->paint(p, *_emojiPaintContext);
+	const auto repaintBounds = entry.custom->paint(
+		p,
+		*_emojiPaintContext).repaintBounds();
 	recordCustomPaint(
 		entry.paintedArea,
 		p,
 		context,
-		painted,
+		repaintBounds,
 		QRectF(position - _areaPosition, _singleSize));
 }
 
@@ -2906,12 +2916,14 @@ void EmojiListWidget::drawSearchSetCustom(
 	_emojiPaintContext->position = position
 		+ _innerPosition
 		+ _customPosition;
-	const auto painted = entry.custom->paint(p, *_emojiPaintContext);
+	const auto repaintBounds = entry.custom->paint(
+		p,
+		*_emojiPaintContext).repaintBounds();
 	recordCustomPaint(
 		entry.paintedArea,
 		p,
 		context,
-		painted,
+		repaintBounds,
 		QRectF(position - _areaPosition, _singleSize));
 }
 

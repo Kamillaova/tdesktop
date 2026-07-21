@@ -2061,7 +2061,7 @@ bool Gif::uploading() const {
 void Gif::hideSpoilers() {
 	if (_spoiler) {
 		_spoiler->revealed = false;
-		_spoiler->lastPaintedRect = QRect();
+		_spoiler->lastPaintedRect = std::nullopt;
 	}
 }
 
@@ -2312,7 +2312,7 @@ void Gif::unloadHeavyPart() {
 	if (_spoiler) {
 		_spoiler->background = _spoiler->cornerCache = QImage();
 		_spoiler->animation = nullptr;
-		_spoiler->lastPaintedRect = QRect();
+		_spoiler->lastPaintedRect = std::nullopt;
 	}
 	_thumbCache = QImage();
 	_seekLastFrame = QImage();
@@ -2448,9 +2448,9 @@ void Gif::recordSeekAnimationRepaint(
 	auto known = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}
@@ -2655,14 +2655,15 @@ void Gif::repaintStreamedContent() {
 	} else if (_parent->delegate()->elementAnimationsPaused()
 		&& !activeRoundStreamed()) {
 		return;
-	} else if (_streamedContentRepaintPending) {
+	} else if (_streamedContentRepaintPending
+		|| (_streamedContentRect && _streamedContentRect->isEmpty())) {
 		return;
 	}
 	_streamedContentRepaintPending = true;
-	if (_streamedContentRect.isEmpty()) {
-		repaint();
+	if (_streamedContentRect) {
+		_parent->repaint(*_streamedContentRect);
 	} else {
-		_parent->repaint(_streamedContentRect);
+		repaint();
 	}
 }
 
@@ -2671,10 +2672,10 @@ void Gif::recordStreamedContentRect(
 		const PaintContext &context,
 		QRect rect) const {
 	if (context.hasElementPainter(p)) {
-		_streamedContentRect = QRect();
+		_streamedContentRect = std::nullopt;
 		_streamedContentRepaintPending = false;
 	} else {
-		if (_streamedContentRect.isEmpty()) {
+		if (!_streamedContentRect || _streamedContentRect->isEmpty()) {
 			_streamedContentRepaintPending = false;
 		}
 		return;
@@ -2682,14 +2683,11 @@ void Gif::recordStreamedContentRect(
 	if (_data->isVideoMessage() && _parent->media() != this) {
 		return;
 	}
-	const auto mapped = context.mapToElement(p, QRectF(rect));
-	if (mapped) {
-		_streamedContentRect = *mapped;
-	}
+	_streamedContentRect = context.mapToElement(p, QRectF(rect));
 }
 
 void Gif::clearStreamedContentRect() const {
-	_streamedContentRect = QRect();
+	_streamedContentRect = std::nullopt;
 	_streamedContentRepaintPending = false;
 }
 

@@ -462,8 +462,8 @@ QRegion MessageView::paint(
 	const auto pausedSpoiler = context.paused
 		|| On(PowerSaving::kChatSpoiler);
 	if (!_senderCache.isEmpty()) {
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		_senderCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -473,12 +473,12 @@ QRegion MessageView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = pausedSpoiler,
 			.elisionHeight = rect.height(),
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		animated += TextAnimationRegion(
 			_senderCache,
 			rect,
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			QRect(0, 0, context.width, context.st->height));
 		rect.setLeft(rect.x() + _senderCache.maxWidth());
 		if (!_imagesCache.empty() && !_leftIcon) {
@@ -550,8 +550,8 @@ QRegion MessageView::paint(
 	static const auto ellipsisWidth = st::dialogsTextStyle.font->width(
 		kQEllipsis);
 	if (rect.width() > ellipsisWidth) {
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		_textCache.draw(p, {
 			.position = rect.topLeft(),
 			.availableWidth = rect.width(),
@@ -561,12 +561,12 @@ QRegion MessageView::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = pausedSpoiler,
 			.elisionHeight = rect.height(),
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		animated += TextAnimationRegion(
 			_textCache,
 			rect,
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			QRect(0, 0, context.width, context.st->height));
 		rect.setLeft(rect.x() + _textCache.maxWidth());
 	}

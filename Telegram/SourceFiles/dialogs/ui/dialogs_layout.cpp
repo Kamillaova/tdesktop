@@ -38,6 +38,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "storage/localstorage.h"
 #include "support/support_helper.h"
 #include "ui/empty_userpic.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/power_saving.h"
@@ -352,7 +353,7 @@ int PaintWideCounter(
 	}
 	folder->validateListEntryCache();
 	const auto &text = folder->listEntryCache();
-	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds = Text::CustomEmojiRepaintBounds();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
@@ -372,12 +373,12 @@ int PaintWideCounter(
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.elisionHeight = rect.height(),
-		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	return TextAnimationRegion(
 		text,
 		rect,
-		customEmojiPaintedBounds,
+		customEmojiRepaintBounds,
 		QRect(0, 0, context.width, context.st->height));
 }
 
@@ -399,7 +400,7 @@ int PaintWideCounter(
 	}
 	info->validateListEntryCache();
 	const auto &text = info->listEntryCache();
-	auto customEmojiPaintedBounds = Text::CustomEmojiPaintedBounds();
+	auto customEmojiRepaintBounds = Text::CustomEmojiRepaintBounds();
 	p.setFont(st::dialogsTextFont);
 	p.setPen(context.active
 		? st::dialogsTextFgActive
@@ -419,12 +420,12 @@ int PaintWideCounter(
 		.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 		.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 		.elisionHeight = rect.height(),
-		.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
 	return TextAnimationRegion(
 		text,
 		rect,
-		customEmojiPaintedBounds,
+		customEmojiRepaintBounds,
 		QRect(0, 0, context.width, context.st->height));
 }
 
@@ -669,8 +670,8 @@ void PaintRow(
 				history->topPromotionMessage(),
 				DialogTextOptions());
 		}
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		p.setPen(context.active
 			? st::dialogsTextFgActive
 			: context.selected
@@ -684,7 +685,7 @@ void PaintRow(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		result.animated += TextAnimationRegion(
 			cache,
@@ -693,7 +694,7 @@ void PaintRow(
 				texttop,
 				availableWidth,
 				st::dialogsTextFont->height),
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			geometry);
 	} else if (draft
 		|| (supportMode
@@ -778,8 +779,8 @@ void PaintRow(
 				: context.selected
 				? st::dialogsTextFgOver
 				: st::dialogsTextFg);
-			auto customEmojiPaintedBounds
-				= Text::CustomEmojiPaintedBounds();
+			auto customEmojiRepaintBounds
+				= Text::CustomEmojiRepaintBounds();
 			cache.draw(p, {
 				.position = { nameleft, texttop },
 				.availableWidth = availableWidth,
@@ -799,7 +800,7 @@ void PaintRow(
 				.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 				.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 				.elisionLines = 1,
-				.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+				.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 			});
 			result.animated += TextAnimationRegion(
 				cache,
@@ -808,7 +809,7 @@ void PaintRow(
 					texttop,
 					availableWidth,
 					st::dialogsTextFont->height),
-				customEmojiPaintedBounds,
+				customEmojiRepaintBounds,
 				geometry);
 		}
 	} else if (!item) {
@@ -1004,18 +1005,18 @@ void PaintRow(
 			: context.selected
 			? st::dialogsNameFgOver
 			: st::dialogsNameFg);
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		rowName.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		result.animated += TextAnimationRegion(
 			rowName,
 			rectForName,
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			geometry);
 		if (drawMuteIcon) {
 			const auto &muteIcon = ThreeStateIcon(
@@ -1040,18 +1041,18 @@ void PaintRow(
 			? st::dialogsNameFgOver
 			: st::dialogsNameFg);
 		const auto &name = hiddenSenderInfo->nameText();
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		name.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		result.animated += TextAnimationRegion(
 			name,
 			rectForName,
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			geometry);
 	} else {
 		p.setPen(context.active
@@ -1063,18 +1064,18 @@ void PaintRow(
 			: (context.selected
 				? st::dialogsNameFgOver
 				: st::dialogsNameFg));
-		auto customEmojiPaintedBounds
-			= Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Text::CustomEmojiRepaintBounds();
 		rowName.draw(p, {
 			.position = rectForName.topLeft(),
 			.availableWidth = rectForName.width(),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
 		result.animated += TextAnimationRegion(
 			rowName,
 			rectForName,
-			customEmojiPaintedBounds,
+			customEmojiRepaintBounds,
 			geometry);
 	}
 
@@ -1193,13 +1194,14 @@ const style::VerifiedBadge &VerifiedStyle(const PaintContext &context) {
 QRegion TextAnimationRegion(
 		const Text::String &text,
 		QRect spoilerGeometry,
-		const Text::CustomEmojiPaintedBounds &customEmojiPaintedBounds,
+		const Text::CustomEmojiRepaintBounds &customEmojiRepaintBounds,
 		QRect customEmojiFallback) {
 	auto result = QRegion();
 	if (text.hasCustomEmoji()) {
-		result += customEmojiPaintedBounds.repaintRectKnown()
-			? customEmojiPaintedBounds.repaintRect().toAlignedRect()
-			: customEmojiFallback;
+		result += Ui::DamageRect(customEmojiRepaintBounds.rect);
+		if (!customEmojiRepaintBounds.repaintBoundsKnown) {
+			result += customEmojiFallback;
+		}
 	}
 	if (text.hasSpoilers() && !spoilerGeometry.isEmpty()) {
 		spoilerGeometry.setWidth(std::min(

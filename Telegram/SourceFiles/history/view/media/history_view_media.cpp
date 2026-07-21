@@ -349,9 +349,10 @@ void Media::fillImageSpoiler(
 		const QPainter *repaintPainter) const {
 	const auto &mappedPainter = repaintPainter ? *repaintPainter : p;
 	if (context.hasElementPainter(mappedPainter)) {
-		spoiler->lastPaintedRect = context.mapToElement(
+		const auto mapped = context.mapToElement(
 			mappedPainter,
-			QRectF(rect)).value_or(QRect());
+			QRectF(rect));
+		spoiler->lastPaintedRect = mapped;
 	}
 	if (!spoiler->animation) {
 		spoiler->animation = std::make_unique<Ui::SpoilerAnimation>([=] {
@@ -539,10 +540,13 @@ void Media::createSpoilerLink(not_null<MediaSpoiler*> spoiler) {
 }
 
 void Media::repaintSpoiler(not_null<MediaSpoiler*> spoiler) const {
-	if (spoiler->lastPaintedRect.isEmpty()) {
-		_parent->repaint();
+	if (spoiler->lastPaintedRect) {
+		if (spoiler->lastPaintedRect->isEmpty()) {
+			return;
+		}
+		_parent->repaint(*spoiler->lastPaintedRect);
 	} else {
-		_parent->repaint(spoiler->lastPaintedRect);
+		_parent->repaint();
 	}
 }
 

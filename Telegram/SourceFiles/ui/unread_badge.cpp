@@ -43,7 +43,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -75,10 +75,17 @@ QString ScaledBotVerifiedEmoji::entityData() {
 	return _wrapped->entityData();
 }
 
-QRectF ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult ScaledBotVerifiedEmoji::paint(
+		QPainter &p,
+		const Context &context) {
+	const auto skip = (_outerSize - _innerSize) / 2;
+	const auto position = context.position + QPoint(skip, skip);
+	const auto repaintBounds = QRectF(
+		position,
+		QSize(_innerSize, _innerSize));
 	if (_cache->frame.isNull() || _cache->frameColor != context.textColor) {
 		if (!_wrapped->ready()) {
-			return {};
+			return PaintResult(QRectF(), repaintBounds);
 		}
 		const auto ratio = style::DevicePixelRatio();
 		const auto sourcePx = Data::FrameSizeFromTag(
@@ -94,7 +101,9 @@ QRectF ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 		painter.translate(-context.position);
 		const auto was = context.internal.forceFirstFrame;
 		context.internal.forceFirstFrame = true;
-		const auto painted = _wrapped->paint(painter, context);
+		const auto painted = _wrapped->paint(
+			painter,
+			context).paintedBounds();
 		context.internal.forceFirstFrame = was;
 		const auto sourceBounds = painted.isEmpty()
 			? QRectF()
@@ -104,7 +113,7 @@ QRectF ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 				QRectF(QPointF(), frame.deviceIndependentSize()));
 		painter.end();
 		if (sourceBounds.isEmpty()) {
-			return {};
+			return PaintResult(QRectF(), repaintBounds);
 		}
 
 		frame = frame.scaled(
@@ -112,15 +121,15 @@ QRectF ScaledBotVerifiedEmoji::paint(QPainter &p, const Context &context) {
 			Qt::IgnoreAspectRatio,
 			Qt::SmoothTransformation);
 		if (_cache->version != version) {
-			return {};
+			return PaintResult(QRectF(), repaintBounds);
 		}
 		_cache->frame = std::move(frame);
 		_cache->frameColor = context.textColor;
 	}
-	const auto skip = (_outerSize - _innerSize) / 2;
-	const auto position = context.position + QPoint(skip, skip);
 	p.drawImage(position, _cache->frame);
-	return QRectF(position, _cache->frame.deviceIndependentSize());
+	return PaintResult(
+		QRectF(position, _cache->frame.deviceIndependentSize()),
+		repaintBounds);
 }
 
 void ScaledBotVerifiedEmoji::unload() {
@@ -385,10 +394,7 @@ int PeerBadge::drawPremiumEmojiStatus(
 		iconx - 2 * _emojiStatus->skip,
 		icony + _emojiStatus->skip);
 	_emojiStatus->lastColor = (*descriptor.premiumFg)->c;
-	_emojiStatus->lastRect = QRectF(
-		_emojiStatus->lastPosition,
-		Size(Ui::Text::AdjustCustomEmojiSize(st::emojiSize))
-	).toAlignedRect();
+	_emojiStatus->lastRect = QRect();
 	if (_emojiStatus->id != id) {
 		using namespace Ui::Text;
 		auto &manager = peer->session().data().customEmojiManager();
@@ -403,14 +409,14 @@ int PeerBadge::drawPremiumEmojiStatus(
 		_emojiStatus->lastRect = QRect();
 		return 0;
 	}
-	const auto painted = _emojiStatus->emoji->paint(p, {
+	const auto repaintBounds = _emojiStatus->emoji->paint(p, {
 		.textColor = _emojiStatus->lastColor,
 		.now = descriptor.now,
 		.position = _emojiStatus->lastPosition,
 		.paused = descriptor.paused || On(PowerSaving::kEmojiStatus),
-	});
-	if (!painted.isEmpty()) {
-		_emojiStatus->lastRect = painted.toAlignedRect();
+	}).repaintBounds();
+	if (!repaintBounds.isEmpty()) {
+		_emojiStatus->lastRect = repaintBounds.toAlignedRect();
 	}
 	return width;
 }

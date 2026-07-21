@@ -93,14 +93,16 @@ bool TranscribeButton::loading() const {
 }
 
 void TranscribeButton::repaintAnimation() {
-	if (_animationRepaintPending) {
+	if (_animationRepaintPending
+		|| (_animationRepaintRect
+			&& _animationRepaintRect->isEmpty())) {
 		return;
 	}
 	_animationRepaintPending = true;
-	if (_animationRepaintRect.isEmpty()) {
-		_owner->repaint();
+	if (_animationRepaintRect) {
+		_owner->repaint(*_animationRepaintRect);
 	} else {
-		_owner->repaint(_animationRepaintRect);
+		_owner->repaint();
 	}
 }
 
@@ -109,16 +111,17 @@ void TranscribeButton::recordAnimationRepaintRect(
 		const PaintContext &context,
 		QRect rect) {
 	if (!context.hasElementPainter(p)) {
-		if (_animationRepaintRect.isEmpty()) {
+		if (!_animationRepaintRect
+			|| _animationRepaintRect->isEmpty()) {
 			_animationRepaintPending = false;
 		}
 		return;
 	}
 	_animationRepaintPending = false;
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = _animationRepaintRect;
-	_animationRepaintRect = current;
+	const auto current = mapped.value_or(QRect());
+	const auto previous = _animationRepaintRect.value_or(QRect());
+	_animationRepaintRect = mapped;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}

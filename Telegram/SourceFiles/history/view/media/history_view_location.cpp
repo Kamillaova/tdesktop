@@ -454,9 +454,9 @@ void Location::recordAnimationRepaint(
 	auto geometryKnown = true;
 	if (!rect.isEmpty()) {
 		const auto mapped = context.mapToElement(p, rect);
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			geometryKnown = false;
-		} else {
+		} else if (!mapped->isEmpty()) {
 			current = QRegion(*mapped);
 		}
 	}

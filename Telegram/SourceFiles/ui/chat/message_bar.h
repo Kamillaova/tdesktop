@@ -94,7 +94,6 @@ private:
 	void recordTextAnimationDamage(
 		QRect current,
 		QRect fallback,
-		bool known,
 		const QRegion &repaintRegion);
 	void scheduleTextAnimationRepaint(QRect damage);
 	[[nodiscard]] QPixmap prepareImage(const QImage &preview);

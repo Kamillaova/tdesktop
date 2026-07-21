@@ -262,7 +262,7 @@ public:
 	bool drawBubble() const override;
 	bool hasBubble() const override;
 	TopicButton *displayedTopicButton() const override;
-	void prepareTopicButtonNamePaint(
+	void paintTopicButtonName(
 		Painter &p,
 		const PaintContext &context,
 		QRect textRect) const override;
@@ -384,7 +384,9 @@ private:
 		Painter &p,
 		QRect &trect,
 		const PaintContext &context,
-		const QTransform &initialTransform) const;
+		std::optional<QRect> *paintedStatusRect) const;
+	void finishFromNameStatusPaint(
+		std::optional<QRect> paintedRect) const;
 	void paintEphemeralBadge(
 		Painter &p,
 		QRect &trect,
@@ -508,7 +510,9 @@ private:
 	void recordTopicButtonNameRepaint(
 		const Painter &p,
 		const PaintContext &context,
-		QRect textRect) const;
+		QRect textRect,
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds) const;
 	void invalidateTopicButtonNameRepaint() const;
 	void repaintTopicButtonNameRegion(const QRegion &region) const;
 	void refreshInfoSkipBlock(HistoryItem *textItem);

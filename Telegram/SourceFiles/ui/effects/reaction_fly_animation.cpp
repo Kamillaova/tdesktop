@@ -319,7 +319,7 @@ QRect ReactionFlyAnimation::paintCenterFrame(
 		const auto position = QPoint(
 			target.x() + (target.width() - _customSize) / 2,
 			target.y() + (target.height() - _customSize) / 2);
-		const auto painted = _custom->paint(p, {
+		const auto bounds = _custom->paint(p, {
 			.textColor = colored,
 			.size = { _customSize, _customSize },
 			.now = now,
@@ -327,13 +327,7 @@ QRect ReactionFlyAnimation::paintCenterFrame(
 			.position = position,
 			.scaled = scaled,
 			.internal = { .forceFirstFrame = _forceFirstFrame },
-		});
-		const auto fallback = QRectF(position, QSize(_customSize, _customSize));
-		const auto bounds = !painted.isEmpty()
-			? painted
-			: _custom->ready()
-			? QRectF()
-			: fallback;
+		}).repaintBounds();
 		return MapPaintedRect(
 			p,
 			invertedInitialTransform,
@@ -387,13 +381,9 @@ QRect ReactionFlyAnimation::paintMiniCopies(
 				mini.finalY,
 				mini.flyUp,
 				value));
-		const auto painted = _custom->paint(p, context);
-		const auto fallback = QRectF(context.position, context.size);
-		const auto bounds = !painted.isEmpty()
-			? painted
-			: _custom->ready()
-			? QRectF()
-			: fallback;
+		const auto bounds = _custom->paint(
+			p,
+			context).repaintBounds();
 		result = result.united(MapPaintedRect(
 			p,
 			invertedInitialTransform,

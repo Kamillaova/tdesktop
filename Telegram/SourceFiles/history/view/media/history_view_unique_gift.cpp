@@ -47,7 +47,7 @@ namespace {
 
 struct PaintedRectRepaint {
 	not_null<Element*> view;
-	QRect rect;
+	std::optional<QRect> rect;
 	bool pending = false;
 };
 
@@ -95,7 +95,7 @@ private:
 
 	mutable QPoint _lastPoint;
 	mutable Element *_buttonRepaintOwner = nullptr;
-	mutable QRect _buttonRepaintRect;
+	mutable std::optional<QRect> _buttonRepaintRect;
 	mutable bool _buttonRepaintPending = false;
 	mutable Ui::Premium::ColoredMiniStars _stars;
 	mutable std::optional<QColor> _starsLastColor;
@@ -134,14 +134,14 @@ private:
 };
 
 void RepaintPaintedRect(not_null<PaintedRectRepaint*> state) {
-	if (state->pending) {
+	if (state->pending || (state->rect && state->rect->isEmpty())) {
 		return;
 	}
 	state->pending = true;
-	if (state->rect.isEmpty()) {
-		state->view->repaint();
+	if (state->rect) {
+		state->view->repaint(*state->rect);
 	} else {
-		state->view->repaint(state->rect);
+		state->view->repaint();
 	}
 }
 
@@ -162,16 +162,16 @@ void RecordPaintedRect(
 		const Ui::ChatPaintContext &context,
 		QRectF rect) {
 	if (!context.hasElementPainter(p)) {
-		if (state->rect.isEmpty()) {
+		if (!state->rect || state->rect->isEmpty()) {
 			state->pending = false;
 		}
 		return;
 	}
 	state->pending = false;
 	const auto mapped = context.mapToElement(p, rect);
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = state->rect;
-	state->rect = current;
+	const auto current = mapped.value_or(QRect());
+	const auto previous = state->rect.value_or(QRect());
+	state->rect = mapped;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}
@@ -333,12 +333,14 @@ void ButtonPart::draw(
 }
 
 void ButtonPart::repaintButton() const {
-	if (_buttonRepaintPending) {
+	if (_buttonRepaintPending
+		|| (_buttonRepaintRect && _buttonRepaintRect->isEmpty())) {
 		return;
 	}
 	_buttonRepaintPending = true;
-	if (_buttonRepaintOwner && !_buttonRepaintRect.isEmpty()) {
-		_buttonRepaintOwner->repaint(_buttonRepaintRect);
+	if (_buttonRepaintRect) {
+		Assert(_buttonRepaintOwner != nullptr);
+		_buttonRepaintOwner->repaint(*_buttonRepaintRect);
 	} else {
 		_repaint();
 	}
@@ -350,17 +352,17 @@ void ButtonPart::recordButtonRepaintRect(
 		const PaintContext &context,
 		QRect rect) const {
 	if (!context.hasElementPainter(p)) {
-		if (_buttonRepaintRect.isEmpty()) {
+		if (!_buttonRepaintRect || _buttonRepaintRect->isEmpty()) {
 			_buttonRepaintPending = false;
 		}
 		return;
 	}
 	_buttonRepaintPending = false;
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto previous = _buttonRepaintRect;
-	if (!mapped || mapped->isEmpty()) {
+	const auto previous = _buttonRepaintRect.value_or(QRect());
+	if (!mapped) {
 		_buttonRepaintOwner = nullptr;
-		_buttonRepaintRect = QRect();
+		_buttonRepaintRect = std::nullopt;
 		if (!previous.isEmpty()) {
 			_buttonRepaintPending = true;
 			_repaint();
@@ -369,7 +371,7 @@ void ButtonPart::recordButtonRepaintRect(
 	}
 	_buttonRepaintOwner = owner;
 	const auto current = *mapped;
-	_buttonRepaintRect = current;
+	_buttonRepaintRect = mapped;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}
@@ -934,7 +936,7 @@ void AttributeTable::draw(
 			int left,
 			int availableWidth,
 			style::align align,
-			Ui::Text::CustomEmojiPaintedBounds *customEmojiBounds = nullptr) {
+			Ui::Text::CustomEmojiRepaintBounds *customEmojiBounds = nullptr) {
 		text.draw(p, {
 			.position = { left, top },
 			.outerWidth = outerWidth,
@@ -946,7 +948,7 @@ void AttributeTable::draw(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.elisionLines = 1,
-			.customEmojiPaintedBounds = customEmojiBounds,
+			.customEmojiRepaintBounds = customEmojiBounds,
 		});
 	};
 	const auto forLabel = labelRight - _margins.left();
@@ -958,7 +960,7 @@ void AttributeTable::draw(
 		paint(part.label, _margins.left(), forLabel, style::al_topright);
 		p.setPen(_valueColor(context));
 		const auto customEmoji = part.value.hasCustomEmoji();
-		auto customEmojiBounds = Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiBounds = Ui::Text::CustomEmojiRepaintBounds();
 		paint(
 			part.value,
 			_valueLeft,
@@ -974,15 +976,17 @@ void AttributeTable::draw(
 					std::min(forValue, part.value.maxWidth()),
 					0),
 				st::normalFont->height);
-			auto rect = customEmojiBounds.repaintRect();
-			if (customEmoji) {
-				animationKnown = animationKnown
-					&& customEmojiBounds.repaintRectKnown();
-			}
-			if (spoilers) {
+			auto rect = customEmojiBounds.rect;
+			if ((customEmoji
+					&& !customEmojiBounds.repaintBoundsKnown)
+				|| spoilers) {
 				rect = rect.isEmpty()
 					? textRect
 					: rect.united(textRect);
+				if (customEmoji
+					&& !customEmojiBounds.repaintBoundsKnown) {
+					animationKnown = animationKnown && !textRect.isEmpty();
+				}
 			}
 			animationRect = animationRect.isEmpty()
 				? rect

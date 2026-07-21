@@ -108,7 +108,7 @@ protected:
 
 		Ui::Animations::Simple a_thumbOver;
 		Ui::RadialAnimation radial;
-		QRect radialRepaintRect;
+		std::optional<QRect> radialRepaintRect;
 		bool radialRepaintPending = false;
 	};
 	mutable std::unique_ptr<AnimationData> _animation;

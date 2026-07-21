@@ -97,7 +97,7 @@ struct InlineList::Button {
 	uint64 customGeneration = 0;
 	mutable uint64 flyGeneration = 0;
 	mutable uint64 rippleGeneration = 0;
-	mutable QRect animationRepaintRect;
+	mutable std::optional<QRect> animationRepaintRect;
 	mutable bool animationRepaintPending = false;
 	bool chosen = false;
 	bool paid = false;
@@ -368,7 +368,7 @@ uint64 InlineList::startAnimationRepaint(
 		? button.flyGeneration
 		: button.rippleGeneration;
 	generation = ++_animationGeneration;
-	button.animationRepaintRect = QRect();
+	button.animationRepaintRect = std::nullopt;
 	button.animationRepaintPending = false;
 	return generation;
 }
@@ -393,20 +393,19 @@ void InlineList::animationUpdated(
 	const auto currentGeneration = (part == AnimationPart::Fly)
 		? i->flyGeneration
 		: i->rippleGeneration;
-	if (currentGeneration != generation || i->animationRepaintPending) {
+	if (currentGeneration != generation
+		|| i->animationRepaintPending
+		|| (i->animationRepaintRect
+			&& i->animationRepaintRect->isEmpty())) {
 		return;
 	}
 	i->animationRepaintPending = true;
-	if (i->animationRepaintRect.isEmpty()) {
-		_animationRepaint(QRect());
-	} else {
-		_animationRepaint(i->animationRepaintRect);
-	}
+	_animationRepaint(i->animationRepaintRect.value_or(QRect()));
 }
 
 void InlineList::invalidateAnimationRepaints() {
 	for (auto &button : _buttons) {
-		button.animationRepaintRect = QRect();
+		button.animationRepaintRect = std::nullopt;
 		button.animationRepaintPending = false;
 	}
 }
@@ -420,20 +419,18 @@ void InlineList::recordAnimationRepaintRect(
 		|| (!button.flyGeneration && !button.rippleGeneration)) {
 		return;
 	}
-	const auto previous = button.animationRepaintRect;
+	const auto previous = button.animationRepaintRect.value_or(QRect());
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = (mapped && !mapped->isEmpty())
-		? *mapped
-		: QRect();
-	button.animationRepaintRect = current;
+	const auto current = mapped.value_or(QRect());
+	button.animationRepaintRect = mapped;
 	button.animationRepaintPending = false;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}
 	button.animationRepaintPending = true;
-	_animationRepaint(current.isEmpty()
-		? QRect()
-		: previous.united(current));
+	_animationRepaint(mapped
+		? previous.united(current)
+		: QRect());
 }
 
 void InlineList::layout() {

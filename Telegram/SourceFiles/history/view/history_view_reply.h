@@ -156,7 +156,7 @@ private:
 	mutable int _minHeight = 0;
 	mutable int _height = 0;
 	mutable int _nameVersion = 0;
-	mutable QRect _animationRepaintRect;
+	mutable std::optional<QRect> _animationRepaintRect;
 	uint8 _hiddenSenderColorIndexPlusOne : 7 = 0;
 	uint8 _hasQuoteIcon : 1 = 0;
 	uint8 _expanded : 1 = 0;

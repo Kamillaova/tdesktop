@@ -98,15 +98,6 @@ constexpr int kAttachMessageToPreviousSecondsDelta = 900;
 constexpr auto kMaxShownLine = 1024 * 1024;
 constexpr auto kMaxPathShiftGradientRepaintRects = 16;
 
-[[nodiscard]] QMargins CustomEmojiTextRepaintMargins() {
-	const auto inner = st::emojiSize;
-	const auto outer = Ui::Text::AdjustCustomEmojiSize(inner);
-	const auto skip = (inner - outer) / 2;
-	const auto before = std::max(-skip, 0);
-	const auto after = std::max(skip + outer - inner, 0);
-	return { before, before, after, after };
-}
-
 Element *HoveredElement/* = nullptr*/;
 Element *PressedElement/* = nullptr*/;
 Element *HoveredLinkElement/* = nullptr*/;
@@ -533,8 +524,10 @@ void PathShiftGradientRepaintTracker::record(
 		return;
 	}
 	const auto mapped = context.mapToElement(p, rect);
-	if (!mapped || mapped->isEmpty()) {
+	if (!mapped) {
 		_unknown = true;
+		return;
+	} else if (mapped->isEmpty()) {
 		return;
 	}
 	const auto ownerRect = mapped->translated(ownerOffset);
@@ -1189,44 +1182,6 @@ void ServicePreMessage::paint(
 		const auto rect = QRect(0, 0, width, height)
 			- st::msgServiceMargin;
 		const auto trect = rect - st::msgServicePadding;
-		auto repaintRegion = QRegion();
-		auto repaintGeometryKnown = context.hasElementPainter(p);
-		if (text.hasCustomEmoji() || text.hasSpoilers()) {
-			const auto lineWidths = text.countLineWidths(trect.width());
-			const auto customEmoji = text.hasCustomEmoji();
-			const auto margins = customEmoji
-				? CustomEmojiTextRepaintMargins()
-				: QMargins();
-			for (auto i = 0, count = int(lineWidths.size()); i != count; ++i) {
-				const auto lineWidth = std::clamp(
-					lineWidths[i],
-					0,
-					trect.width());
-				if (!lineWidth) {
-					continue;
-				}
-				auto repaintRect = QRectF(
-					trect.x() + (trect.width() - lineWidth) / 2,
-					trect.y() + i * st::msgServiceFont->height,
-					lineWidth,
-					st::msgServiceFont->height);
-				if (customEmoji) {
-					repaintRect = repaintRect.marginsAdded(QMarginsF(margins));
-				}
-				const auto mapped = context.mapToElement(p, repaintRect);
-				if (!mapped || mapped->isEmpty()) {
-					repaintGeometryKnown = false;
-					break;
-				}
-				repaintRegion += *mapped;
-			}
-		}
-		finishTextRepaint(
-			p,
-			context,
-			std::move(repaintRegion),
-			repaintGeometryKnown);
-
 		ServiceMessagePainter::PaintComplexBubble(
 			p,
 			context.st,
@@ -1240,6 +1195,8 @@ void ServicePreMessage::paint(
 		p.setFont(st::msgServiceFont);
 		Assert(owner != nullptr);
 		owner->prepareCustomEmojiPaint(p, context, text);
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		text.draw(p, {
 			.position = trect.topLeft(),
 			.availableWidth = trect.width(),
@@ -1250,8 +1207,60 @@ void ServicePreMessage::paint(
 			.pausedEmoji = context.paused || On(PowerSaving::kEmojiChat),
 			.pausedSpoiler = context.paused || On(PowerSaving::kChatSpoiler),
 			.fullWidthSelection = false,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 			//.selection = context.selection,
 		});
+
+		auto repaintRegion = QRegion();
+		auto repaintGeometryKnown = true;
+		if (!customEmojiRepaintBounds.rect.isEmpty()) {
+			const auto mapped = context.mapToElement(
+				p,
+				customEmojiRepaintBounds.rect);
+			if (!mapped) {
+				repaintGeometryKnown = false;
+			} else if (!mapped->isEmpty()) {
+				repaintRegion += *mapped;
+			}
+		}
+		const auto needsTextFallback
+			= !customEmojiRepaintBounds.repaintBoundsKnown
+			|| text.hasSpoilers();
+		if (repaintGeometryKnown && needsTextFallback) {
+			const auto lineWidths = text.countLineWidths(trect.width());
+			auto hasTextFallback = false;
+			for (auto i = 0, count = int(lineWidths.size()); i != count; ++i) {
+				const auto lineWidth = std::clamp(
+					lineWidths[i],
+					0,
+					trect.width());
+				if (!lineWidth) {
+					continue;
+				}
+				hasTextFallback = true;
+				const auto repaintRect = QRectF(
+					trect.x() + (trect.width() - lineWidth) / 2,
+					trect.y() + i * st::msgServiceFont->height,
+					lineWidth,
+					st::msgServiceFont->height);
+				const auto mapped = context.mapToElement(p, repaintRect);
+				if (!mapped) {
+					repaintGeometryKnown = false;
+					break;
+				} else if (!mapped->isEmpty()) {
+					repaintRegion += *mapped;
+				}
+			}
+			if (!customEmojiRepaintBounds.repaintBoundsKnown
+				&& !hasTextFallback) {
+				repaintGeometryKnown = false;
+			}
+		}
+		finishTextRepaint(
+			p,
+			context,
+			std::move(repaintRegion),
+			repaintGeometryKnown);
 
 		p.translate(0, -top);
 	}
@@ -1585,24 +1594,42 @@ void Element::repaintServicePreMessage(uint64 generation) {
 void Element::recordTextRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		QRectF rect) const {
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds,
+		QRectF textFallback) const {
 	if (!context.hasElementPainter(p)) {
 		if (_textRepaintRect.isEmpty()) {
+			if ((_flags & Flag::TextRepaintPending)
+				&& !(_flags & Flag::TextRepaintGeometryKnown)) {
+				clearCustomEmojiRepaint();
+			}
 			_flags &= ~Flag::TextRepaintPending;
 		}
 		return;
 	}
+	if ((_flags & Flag::TextRepaintPending)
+		&& !(_flags & Flag::TextRepaintGeometryKnown)) {
+		clearCustomEmojiRepaint();
+	}
 	_flags &= ~Flag::TextRepaintPending;
 	auto current = QRect();
-	auto geometryKnown = rect.isEmpty();
-	if (!rect.isEmpty()) {
-		if (_text.hasCustomEmoji()) {
-			rect = rect.marginsAdded(
-				QMarginsF(CustomEmojiTextRepaintMargins()));
-		}
-		if (const auto mapped = context.mapToElement(p, rect)) {
+	const auto needsTextFallback
+		= !customEmojiRepaintBounds.repaintBoundsKnown
+		|| _text.hasSpoilers();
+	auto geometryKnown = customEmojiRepaintBounds.repaintBoundsKnown
+		|| (needsTextFallback && !textFallback.isEmpty());
+	auto repaintRect = customEmojiRepaintBounds.rect;
+	if (needsTextFallback && !textFallback.isEmpty()) {
+		repaintRect = repaintRect.isEmpty()
+			? textFallback
+			: repaintRect.united(textFallback);
+	}
+	if (geometryKnown && !repaintRect.isEmpty()) {
+		if (const auto mapped = context.mapToElement(p, repaintRect)) {
 			current = *mapped;
-			geometryKnown = !current.isEmpty();
+			geometryKnown = true;
+		} else {
+			geometryKnown = false;
 		}
 	}
 	if (geometryKnown) {
@@ -1622,6 +1649,10 @@ void Element::recordTextRepaintRect(
 }
 
 void Element::invalidateTextRepaintRect() {
+	if ((_flags & Flag::TextRepaintPending)
+		&& !(_flags & Flag::TextRepaintGeometryKnown)) {
+		clearCustomEmojiRepaint();
+	}
 	_textStaleRepaintRect = _textStaleRepaintRect.united(
 		base::take(_textRepaintRect));
 	_flags &= ~Flag::TextRepaintPending;
@@ -2883,10 +2914,10 @@ TopicButton *Element::displayedTopicButton() const {
 	return nullptr;
 }
 
-void Element::prepareTopicButtonNamePaint(
-		Painter &,
-		const PaintContext &,
-		QRect) const {
+void Element::paintTopicButtonName(
+	Painter &,
+	const PaintContext &,
+	QRect) const {
 }
 
 bool Element::displayForwardedFrom() const {

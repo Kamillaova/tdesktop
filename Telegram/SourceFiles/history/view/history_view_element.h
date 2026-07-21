@@ -46,6 +46,10 @@ class RippleAnimation;
 struct ColorCollectible;
 } // namespace Ui
 
+namespace Ui::Text {
+struct CustomEmojiRepaintBounds;
+} // namespace Ui::Text
+
 namespace HistoryView::Reactions {
 struct ButtonParameters;
 class InlineList;
@@ -691,7 +695,7 @@ public:
 	[[nodiscard]] bool displayReply() const;
 	[[nodiscard]] virtual bool displayFromName() const;
 	[[nodiscard]] virtual TopicButton *displayedTopicButton() const;
-	virtual void prepareTopicButtonNamePaint(
+	virtual void paintTopicButtonName(
 		Painter &p,
 		const PaintContext &context,
 		QRect textRect) const;
@@ -853,7 +857,9 @@ protected:
 	void recordTextRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		QRectF rect) const;
+		const Ui::Text::CustomEmojiRepaintBounds
+			&customEmojiRepaintBounds,
+		QRectF textFallback = {}) const;
 	void validateText();
 	void invalidateTextSizeCache();
 	void validateTextSkipBlock(bool has, int width, int height);

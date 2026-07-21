@@ -335,11 +335,10 @@ void UnwrappedMedia::drawSurrounding(
 			recty += st::topicButtonPadding.top();
 			rectw -= st::msgReplyPadding.left() + st::topicButtonPadding.right() + st::topicButtonArrowSkip;
 			p.setTextPalette(st->serviceTextPalette());
-			_parent->prepareTopicButtonNamePaint(
+			_parent->paintTopicButtonName(
 				p,
 				context,
 				QRect(rectx, recty, rectw, st::msgNameFont->height));
-			topic->name.drawElided(p, rectx, recty, rectw);
 			p.restoreTextPalette();
 
 			const auto &icon = st::topicButtonArrow;

@@ -98,7 +98,7 @@ struct Photo::Streamed {
 	QImage frozenFrame;
 	std::array<QImage, 4> roundingCorners;
 	QImage roundingMask;
-	QRect repaintRect;
+	std::optional<QRect> repaintRect;
 	bool repaintPending = false;
 };
 
@@ -207,7 +207,7 @@ void Photo::unloadHeavyPart() {
 	if (_spoiler) {
 		_spoiler->background = _spoiler->cornerCache = QImage();
 		_spoiler->animation = nullptr;
-		_spoiler->lastPaintedRect = QRect();
+		_spoiler->lastPaintedRect = std::nullopt;
 	}
 	_imageCache = QImage();
 	togglePollingStory(false);
@@ -1095,11 +1095,15 @@ void Photo::repaintStreamedContent() {
 		repaint();
 		return;
 	}
+	if (_streamed->repaintRect
+		&& _streamed->repaintRect->isEmpty()) {
+		return;
+	}
 	_streamed->repaintPending = true;
-	if (_streamed->repaintRect.isEmpty()) {
-		repaint();
+	if (_streamed->repaintRect) {
+		_parent->repaint(*_streamed->repaintRect);
 	} else {
-		_parent->repaint(_streamed->repaintRect);
+		repaint();
 	}
 }
 
@@ -1112,16 +1116,16 @@ void Photo::recordStreamedContentRect(
 	}
 	auto &streamed = *_streamed;
 	if (!context.hasElementPainter(p)) {
-		if (streamed.repaintRect.isEmpty()) {
+		if (!streamed.repaintRect || streamed.repaintRect->isEmpty()) {
 			streamed.repaintPending = false;
 		}
 		return;
 	}
 	streamed.repaintPending = false;
 	const auto mapped = context.mapToElement(p, QRectF(rect));
-	const auto current = mapped ? *mapped : QRect();
-	const auto previous = base::take(streamed.repaintRect);
-	streamed.repaintRect = current;
+	const auto current = mapped.value_or(QRect());
+	const auto previous = base::take(streamed.repaintRect).value_or(QRect());
+	streamed.repaintRect = mapped;
 	if (previous.isEmpty() || previous == current) {
 		return;
 	}
@@ -1192,7 +1196,7 @@ bool Photo::videoAutoplayEnabled() const {
 void Photo::hideSpoilers() {
 	if (_spoiler) {
 		_spoiler->revealed = false;
-		_spoiler->lastPaintedRect = QRect();
+		_spoiler->lastPaintedRect = std::nullopt;
 	}
 }
 

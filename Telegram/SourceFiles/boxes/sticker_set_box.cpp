@@ -362,7 +362,7 @@ private:
 		Media::Clip::ReaderPointer webm;
 		Ui::Text::CustomEmoji *emoji = nullptr;
 		Ui::Animations::Simple overAnimation;
-		mutable QRect customEmojiPaintedRect;
+		mutable QRect customEmojiRepaintRect;
 		mutable QRect customEmojiNominalRect;
 		mutable QRect customEmojiStaleRect;
 
@@ -2389,12 +2389,12 @@ void StickerSetBox::Inner::paintSticker(
 	auto lottieFrame = QImage();
 	if (element.emoji) {
 		const auto paintTransform = p.transform();
-		const auto painted = element.emoji->paint(p, {
+		const auto repaintBounds = element.emoji->paint(p, {
 			.textColor = st::windowFg->c,
 			.now = now,
 			.position = target.topLeft(),
 			.paused = paused,
-		});
+		}).repaintBounds();
 		if (p.device() == this) {
 			const auto fallback = QRectF(style::rtlrect(
 				QRect(position, _singleSize),
@@ -2407,15 +2407,15 @@ void StickerSetBox::Inner::paintSticker(
 					.toAlignedRect();
 			};
 			const auto nominal = mapRect(fallback);
-			const auto mapped = painted.isEmpty()
+			const auto mapped = repaintBounds.isEmpty()
 				? nominal
-				: mapRect(painted);
+				: mapRect(repaintBounds);
 			element.customEmojiNominalRect = nominal;
-			if (element.customEmojiPaintedRect != mapped) {
+			if (element.customEmojiRepaintRect != mapped) {
 				element.customEmojiStaleRect
 					= element.customEmojiStaleRect.united(
-						element.customEmojiPaintedRect);
-				element.customEmojiPaintedRect = mapped;
+						element.customEmojiRepaintRect);
+				element.customEmojiRepaintRect = mapped;
 			}
 		}
 	} else if (element.lottie && element.lottie->ready()) {
@@ -2708,9 +2708,9 @@ QRect StickerSetBox::Inner::takeItemRepaintRect(int index) {
 	if (!element.emoji) {
 		return fallback;
 	}
-	auto current = element.customEmojiPaintedRect.isEmpty()
+	auto current = element.customEmojiRepaintRect.isEmpty()
 		? fallback
-		: element.customEmojiPaintedRect;
+		: element.customEmojiRepaintRect;
 	if (element.customEmojiNominalRect != fallback) {
 		current = current.united(fallback);
 	}

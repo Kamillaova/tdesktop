@@ -100,7 +100,7 @@ private:
 
 	const not_null<Element*> _parent;
 	std::vector<std::vector<LargeCustomEmoji>> _lines;
-	std::vector<QRect> _customRepaintRects;
+	std::vector<std::optional<QRect>> _customRepaintRects;
 	std::vector<uint8> _customRepaintPending;
 	ClickHandlerPtr _interactionLink;
 	QImage _selectedFrame;

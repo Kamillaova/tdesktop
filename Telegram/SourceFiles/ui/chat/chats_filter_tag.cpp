@@ -22,7 +22,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -40,7 +40,7 @@ public:
 
 	int width() override;
 	QString entityData() override;
-	QRectF paint(QPainter &p, const Context &context) override;
+	PaintResult paint(QPainter &p, const Context &context) override;
 	void unload() override;
 	bool ready() override;
 	bool readyInDefaultState() override;
@@ -57,6 +57,17 @@ private:
 	return st::dialogRowFilterTagStyle.font->height - 2 * st::lineWidth;
 }
 
+[[nodiscard]] QRectF ScaledCustomRepaintBounds(QPoint position) {
+	const auto width = ScaledSize();
+	const auto smalladjust = Ui::Text::AdjustCustomEmojiSize(width);
+	const auto adjusted = Ui::Text::AdjustCustomEmojiSize(st::emojiSize);
+	const auto xskip = (st::emojiSize - adjusted) / 2;
+	const auto yskip = xskip + (width - st::emojiSize) / 2;
+	const auto add = (width - smalladjust) / 2;
+	const auto shift = QPoint(xskip, yskip) - QPoint(add, add);
+	return QRectF(position - shift, QSize(smalladjust, smalladjust));
+}
+
 ScaledSimpleEmoji::ScaledSimpleEmoji(EmojiPtr emoji)
 : _emoji(emoji) {
 }
@@ -69,7 +80,9 @@ QString ScaledSimpleEmoji::entityData() {
 	return u"scaled-simple:"_q + _emoji->text();
 }
 
-QRectF ScaledSimpleEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult ScaledSimpleEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	if (_frame.isNull()) {
 		const auto adjusted = Text::AdjustCustomEmojiSize(st::emojiSize);
 		const auto xskip = (st::emojiSize - adjusted) / 2;
@@ -95,7 +108,7 @@ QRectF ScaledSimpleEmoji::paint(QPainter &p, const Context &context) {
 
 	const auto position = context.position - _shift;
 	p.drawImage(position, _frame);
-	return QRectF(position, _frame.deviceIndependentSize());
+	return PaintResult(QRectF(position, _frame.deviceIndependentSize()));
 }
 
 void ScaledSimpleEmoji::unload() {
@@ -122,10 +135,13 @@ QString ScaledCustomEmoji::entityData() {
 	return u"scaled-custom:"_q + _wrapped->entityData();
 }
 
-QRectF ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
+Ui::Text::CustomEmoji::PaintResult ScaledCustomEmoji::paint(
+		QPainter &p,
+		const Context &context) {
+	const auto repaintBounds = ScaledCustomRepaintBounds(context.position);
 	if (_frame.isNull() || _frameColor != context.textColor) {
 		if (!_wrapped->ready()) {
-			return {};
+			return PaintResult(QRectF(), repaintBounds);
 		}
 		const auto ratio = style::DevicePixelRatio();
 		const auto large = Emoji::GetSizeLarge();
@@ -139,8 +155,9 @@ QRectF ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
 		q.translate(-context.position);
 		const auto was = context.internal.forceFirstFrame;
 		context.internal.forceFirstFrame = true;
-		const auto painted = _wrapped->paint(q, context);
+		const auto result = _wrapped->paint(q, context);
 		context.internal.forceFirstFrame = was;
+		const auto painted = result.paintedBounds();
 		const auto sourceBounds = painted.isEmpty()
 			? QRectF()
 			: q.transform().map(
@@ -149,7 +166,7 @@ QRectF ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
 				QRectF(QPointF(), frame.deviceIndependentSize()));
 		q.end();
 		if (sourceBounds.isEmpty()) {
-			return {};
+			return PaintResult(QRectF(), repaintBounds);
 		}
 
 		const auto smalladjust = Text::AdjustCustomEmojiSize(width());
@@ -159,17 +176,13 @@ QRectF ScaledCustomEmoji::paint(QPainter &p, const Context &context) {
 			Qt::SmoothTransformation);
 		_frameColor = context.textColor;
 		_wrapped->unload();
-
-		const auto adjusted = Text::AdjustCustomEmojiSize(st::emojiSize);
-		const auto xskip = (st::emojiSize - adjusted) / 2;
-		const auto yskip = xskip + (width() - st::emojiSize) / 2;
-
-		const auto add = (width() - smalladjust) / 2;
-		_shift = QPoint(xskip, yskip) - QPoint(add, add);
+		_shift = context.position - repaintBounds.topLeft().toPoint();
 	}
 	const auto position = context.position - _shift;
 	p.drawImage(position, _frame);
-	return QRectF(position, _frame.deviceIndependentSize());
+	return PaintResult(
+		QRectF(position, _frame.deviceIndependentSize()),
+		repaintBounds);
 }
 
 void ScaledCustomEmoji::unload() {

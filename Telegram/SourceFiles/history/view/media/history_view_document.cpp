@@ -792,7 +792,8 @@ QRect Document::draw(
 		recordCaptionRepaintRect(
 			p,
 			context,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds(),
+			QRectF());
 		return QRect();
 	}
 
@@ -1188,8 +1189,8 @@ QRect Document::draw(
 		p.setPen(stm->historyTextFg);
 		_parent->prepareCustomEmojiPaint(p, context, captioned->caption);
 
-		auto customEmojiPaintedBounds
-			= Ui::Text::CustomEmojiPaintedBounds();
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		auto highlightRequest = context.computeHighlightCache();
 		captioned->caption.draw(p, {
 			.position = { st::msgPadding.left(), captiontop },
@@ -1207,24 +1208,23 @@ QRect Document::draw(
 			.selection = selection,
 			.highlight = highlightRequest ? &*highlightRequest : nullptr,
 			.useFullWidth = true,
-			.customEmojiPaintedBounds = &customEmojiPaintedBounds,
+			.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 		});
-		customEmojiPaintedBounds.complete
-			= customEmojiPaintedBounds.repaintRectKnown();
-		customEmojiPaintedBounds.rect
-			= customEmojiPaintedBounds.repaintRect();
-		customEmojiPaintedBounds.repaintFallback = QRectF();
-		if (customEmojiPaintedBounds.complete
-			&& captioned->caption.hasSpoilers()) {
-			customEmojiPaintedBounds.rect
-				= customEmojiPaintedBounds.rect.united(captionRect);
-		}
-		recordCaptionRepaintRect(p, context, customEmojiPaintedBounds);
+		const auto fallback = (!customEmojiRepaintBounds.repaintBoundsKnown
+			|| captioned->caption.hasSpoilers())
+			? captionRect
+			: QRectF();
+		recordCaptionRepaintRect(
+			p,
+			context,
+			customEmojiRepaintBounds,
+			fallback);
 	} else {
 		recordCaptionRepaintRect(
 			p,
 			context,
-			Ui::Text::CustomEmojiPaintedBounds());
+			Ui::Text::CustomEmojiRepaintBounds(),
+			QRectF());
 	}
 	return playbackBlobs;
 }
@@ -2030,9 +2030,11 @@ void Document::recordTtlAnimationRepaintRegion(
 	auto known = true;
 	for (const auto &rect : region) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
 			break;
+		} else if (mapped->isEmpty()) {
+			continue;
 		}
 		current += *mapped;
 	}
@@ -2151,12 +2153,20 @@ void Document::repaintVoiceProgressAnimation() const {
 		return;
 	}
 	auto &playback = *voice->playback;
-	if (_parent->delegate()->elementContext() == Context::TTLViewer
-		|| playback.progressRepaintRect.isEmpty()) {
+	if (playback.progressRepaintRect
+		&& playback.progressRepaintRect->isEmpty()) {
+		return;
+	} else if (_parent->delegate()->elementContext() == Context::TTLViewer) {
 		repaint();
-	} else if (!playback.progressRepaintPending) {
-		playback.progressRepaintPending = true;
-		_parent->repaint(playback.progressRepaintRect);
+		return;
+	} else if (playback.progressRepaintPending) {
+		return;
+	}
+	playback.progressRepaintPending = true;
+	if (playback.progressRepaintRect) {
+		_parent->repaint(*playback.progressRepaintRect);
+	} else {
+		repaint();
 	}
 }
 
@@ -2170,23 +2180,22 @@ void Document::recordVoiceProgressAnimationRepaintRect(
 	}
 	auto &playback = *voice->playback;
 	if (context.hasElementPainter(p)) {
-		playback.progressRepaintRect = QRect();
+		playback.progressRepaintRect = std::nullopt;
 		playback.progressRepaintPending = false;
 	} else {
-		if (playback.progressRepaintRect.isEmpty()) {
+		if (!playback.progressRepaintRect
+			|| playback.progressRepaintRect->isEmpty()) {
 			playback.progressRepaintPending = false;
 		}
 		return;
 	}
-	if (const auto mapped = context.mapToElement(p, QRectF(rect))) {
-		playback.progressRepaintRect = *mapped;
-	}
+	playback.progressRepaintRect = context.mapToElement(p, QRectF(rect));
 }
 
 void Document::clearVoiceProgressAnimationRepaintRect() const {
 	const auto voice = Get<HistoryDocumentVoice>();
 	if (voice && voice->playback) {
-		voice->playback->progressRepaintRect = QRect();
+		voice->playback->progressRepaintRect = std::nullopt;
 		voice->playback->progressRepaintPending = false;
 	}
 }
@@ -2215,9 +2224,11 @@ void Document::recordVoiceInteractionRepaintRegion(
 	auto known = true;
 	for (const auto &rect : region) {
 		const auto mapped = context.mapToElement(p, QRectF(rect));
-		if (!mapped || mapped->isEmpty()) {
+		if (!mapped) {
 			known = false;
 			break;
+		} else if (mapped->isEmpty()) {
+			continue;
 		}
 		current += *mapped;
 	}
@@ -2271,7 +2282,8 @@ void Document::repaintCaption(uint64 generation) const {
 void Document::recordCaptionRepaintRect(
 		const Painter &p,
 		const PaintContext &context,
-		const Ui::Text::CustomEmojiPaintedBounds &bounds) const {
+		const Ui::Text::CustomEmojiRepaintBounds &bounds,
+		QRectF fallback) const {
 	if (!context.hasElementPainter(p)) {
 		if (!_captionRepaintKnown || _captionRepaintRect.isEmpty()) {
 			_captionRepaintPending = false;
@@ -2280,11 +2292,12 @@ void Document::recordCaptionRepaintRect(
 	}
 	_captionRepaintPending = false;
 	auto current = QRect();
-	auto known = bounds.complete;
-	if (known && !bounds.rect.isEmpty()) {
-		const auto mapped = context.mapToElement(p, bounds.rect);
-		known = mapped.has_value() && !mapped->isEmpty();
-		if (known) {
+	auto known = bounds.repaintBoundsKnown || !fallback.isEmpty();
+	const auto repaintRect = bounds.rect.united(fallback);
+	if (known && !repaintRect.isEmpty()) {
+		const auto mapped = context.mapToElement(p, repaintRect);
+		known = mapped.has_value();
+		if (mapped) {
 			current = *mapped;
 		}
 	}

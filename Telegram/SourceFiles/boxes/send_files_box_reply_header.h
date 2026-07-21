@@ -68,7 +68,6 @@ private:
 		AnimationDamage &damage,
 		QRegion current,
 		QRegion fallback,
-		bool known,
 		const QRegion &repaintRegion);
 	void scheduleAnimationRepaint(
 		AnimationDamage &state,

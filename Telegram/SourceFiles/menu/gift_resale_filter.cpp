@@ -122,7 +122,9 @@ QString GiftResaleColorEmoji::entityData() {
 	return DataFor(_color);
 }
 
-QRectF GiftResaleColorEmoji::paint(QPainter &p, const Context &context) {
+Text::CustomEmoji::PaintResult GiftResaleColorEmoji::paint(
+		QPainter &p,
+		const Context &context) {
 	auto hq = PainterHighQualityEnabler(p);
 	p.setBrush(_color);
 	p.setPen(Qt::NoPen);
@@ -132,7 +134,7 @@ QRectF GiftResaleColorEmoji::paint(QPainter &p, const Context &context) {
 		width(),
 		width());
 	p.drawEllipse(rect);
-	return rect;
+	return PaintResult(rect);
 }
 
 void GiftResaleColorEmoji::unload() {
