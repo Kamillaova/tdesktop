@@ -16,6 +16,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rp_widget.h"
 #include "ui/userpic_view.h"
 
+#include <QtGui/QRegion>
+#include <QtGui/QTransform>
+
 namespace Data {
 class ForumTopic;
 class DocumentMedia;
@@ -193,6 +196,10 @@ private:
 		QPainter &p,
 		const QRect &rect,
 		const QRect &userpicGeometry);
+	[[nodiscard]] float64 pinnedToTopGiftsProgress() const;
+	[[nodiscard]] QRegion pinnedToTopGiftsRepaintRegion() const;
+	void repaintPinnedToTopGifts();
+	void clearPinnedToTopGifts();
 	[[nodiscard]] QPointF calculateGiftPosition(
 		int position,
 		float64 progress,
@@ -355,8 +362,12 @@ private:
 		std::shared_ptr<Data::DocumentMedia> media;
 		QImage bg;
 		QImage lastFrame;
+		QRectF paintedEnvelope;
+		QPointF paintedCenter;
+		QTransform paintedTransform;
 		int position = 0;
 		base::unique_qptr<Ui::AbstractButton> button;
+		bool repaintFallbackUsed = false;
 	};
 	bool _pinnedToTopGiftsFirstTimeShowed = false;
 	std::vector<PinnedToTopGiftEntry> _pinnedToTopGifts;

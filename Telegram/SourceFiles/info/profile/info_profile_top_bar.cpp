@@ -111,6 +111,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QPolygonF>
 
 namespace Info::Profile {
 namespace {
@@ -699,7 +700,7 @@ void TopBar::updateCollectibleStatus() {
 		setupAnimatedPattern();
 	} else {
 		_animatedPoints.clear();
-		_pinnedToTopGifts.clear();
+		clearPinnedToTopGifts();
 	}
 	const auto verifiedFg = [&]() -> std::optional<QColor> {
 		if (collectible) {
@@ -3214,19 +3215,20 @@ void TopBar::setupPinnedToTopGifts(
 		if (shouldHideFirst) {
 			_giftsHiding = std::make_unique<Ui::Animations::Simple>();
 			_giftsHiding->start([=](float64 value) {
-				update();
 				if (value <= 0.) {
+					clearPinnedToTopGifts();
 					_giftsHiding = nullptr;
-					_pinnedToTopGifts.clear();
 					_giftsLoadingLifetime.destroy();
 					updateCollectibleStatus();
 					setupNewGifts(controller, gifts);
+				} else {
+					repaintPinnedToTopGifts();
 				}
 			}, 1., 0., 300, anim::linear);
 			return;
 		}
 
-		_pinnedToTopGifts.clear();
+		clearPinnedToTopGifts();
 		_giftsLoadingLifetime.destroy();
 
 		updateCollectibleStatus();
@@ -3263,7 +3265,7 @@ void TopBar::setupNewGifts(
 		_lottiePlayer = std::make_unique<Lottie::MultiPlayer>(
 			Lottie::Quality::Default);
 		_lottiePlayer->updates() | rpl::on_next([=] {
-			update();
+			repaintPinnedToTopGifts();
 		}, lifetime());
 	}
 
@@ -3347,7 +3349,7 @@ void TopBar::setupNewGifts(
 			_giftsLoadingLifetime.destroy();
 			_giftsAppearing->stop();
 			_giftsAppearing->start([=](float64 value) {
-				update();
+				repaintPinnedToTopGifts();
 				if (value >= 1.) {
 					_giftsAppearing = nullptr;
 					_pinnedToTopGiftsFirstTimeShowed = true;
@@ -3367,6 +3369,66 @@ void TopBar::setupNewGifts(
 			}, 0., 1., 400, anim::easeOutQuint);
 		}
 	}, _giftsLoadingLifetime);
+}
+
+float64 TopBar::pinnedToTopGiftsProgress() const {
+	return _giftsHiding
+		? _progress.current() * _giftsHiding->value(1.)
+		: (_giftsAppearing
+			? _progress.current() * _giftsAppearing->value(0.)
+			: _progress.current());
+}
+
+QRegion TopBar::pinnedToTopGiftsRepaintRegion() const {
+	const auto progress = pinnedToTopGiftsProgress();
+	const auto userpicRect = userpicGeometry();
+	auto result = QRegion();
+	for (const auto &gift : _pinnedToTopGifts) {
+		if (gift.paintedEnvelope.isEmpty()) {
+			continue;
+		}
+		const auto predictedCenter = gift.paintedTransform.map(
+			calculateGiftPosition(
+				gift.position,
+				progress,
+				userpicRect));
+		const auto delta = predictedCenter - gift.paintedCenter;
+		result += gift.paintedEnvelope.toAlignedRect();
+		result += gift.paintedEnvelope.translated(delta).toAlignedRect();
+	}
+	return result.intersected(rect());
+}
+
+void TopBar::repaintPinnedToTopGifts() {
+	const auto progress = pinnedToTopGiftsProgress();
+	auto fallback = false;
+	for (auto &gift : _pinnedToTopGifts) {
+		const auto drawable = !gift.lastFrame.isNull()
+			|| (gift.animation && gift.animation->ready());
+		if (progress > 0.
+			&& drawable
+			&& gift.paintedEnvelope.isEmpty()
+			&& !gift.repaintFallbackUsed) {
+			gift.repaintFallbackUsed = true;
+			fallback = true;
+		}
+	}
+	if (fallback) {
+		update();
+		return;
+	}
+	const auto region = pinnedToTopGiftsRepaintRegion();
+	if (!region.isEmpty()) {
+		update(region);
+	}
+}
+
+void TopBar::clearPinnedToTopGifts() {
+	const auto region = pinnedToTopGiftsRepaintRegion();
+	_pinnedToTopGifts.clear();
+	if (!region.isEmpty()) {
+		update(region);
+	}
 }
 
 QPointF TopBar::calculateGiftPosition(
@@ -3446,11 +3508,7 @@ void TopBar::paintPinnedToTopGifts(
 		return;
 	}
 
-	const auto progress = _giftsHiding
-		? _progress.current() * _giftsHiding->value(1.)
-		: (_giftsAppearing
-			? _progress.current() * _giftsAppearing->value(0.)
-			: _progress.current());
+	const auto progress = pinnedToTopGiftsProgress();
 
 	for (auto &gift : _pinnedToTopGifts) {
 		if (!gift.animation
@@ -3499,21 +3557,30 @@ void TopBar::paintPinnedToTopGifts(
 			}
 		}
 		if (!frameToRender.isNull()) {
-			const auto frameSize = frameToRender.width()
-				/ style::DevicePixelRatio();
-			const auto halfFrameSize = frameSize / 2.;
-			const auto resultPos = QPointF(
-				giftPos.x() - halfFrameSize,
-				giftPos.y() - halfFrameSize);
+			const auto frameSize = frameToRender.deviceIndependentSize();
+			const auto frameRect = QRectF(
+				giftPos - QPointF(
+					frameSize.width() / 2.,
+					frameSize.height() / 2.),
+				frameSize);
+			auto paintedEnvelope = frameRect;
 			if (!gift.bg.isNull()) {
-				const auto bgSize = gift.bg.width()
-					/ style::DevicePixelRatio();
-				const auto bgPos = QPointF(
-					resultPos.x() + (frameSize - bgSize) / 2.,
-					resultPos.y() + (frameSize - bgSize) / 2.);
-				p.drawImage(bgPos, gift.bg);
+				const auto bgSize = gift.bg.deviceIndependentSize();
+				const auto bgRect = QRectF(
+					frameRect.center() - QPointF(
+						bgSize.width() / 2.,
+						bgSize.height() / 2.),
+					bgSize);
+				p.drawImage(bgRect.topLeft(), gift.bg);
+				paintedEnvelope = paintedEnvelope.united(bgRect);
 			}
-			p.drawImage(resultPos, frameToRender);
+			p.drawImage(frameRect.topLeft(), frameToRender);
+			const auto transform = p.transform();
+			gift.paintedEnvelope = transform.map(
+				QPolygonF(paintedEnvelope)
+			).boundingRect();
+			gift.paintedCenter = transform.map(giftPos);
+			gift.paintedTransform = transform;
 		}
 	}
 	p.setOpacity(1.);
