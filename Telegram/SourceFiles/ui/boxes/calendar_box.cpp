@@ -550,6 +550,8 @@ private:
 
 	int rowsLeft() const;
 	int rowsTop() const;
+	[[nodiscard]] QRect dynamicImageRect(QDate date) const;
+	void repaintDynamicImage(QDate date);
 	void resizeToCurrent();
 	void paintRows(QPainter &p, QRect clip);
 
@@ -673,6 +675,7 @@ CalendarBox::Inner::Inner(
 , _dynamicImageForDate(std::move(dynamicImageForDate))
 , _animation([=](crl::time now) {
 	auto animating = false;
+	auto repaint = QRegion();
 	for (auto &[date, state] : _dynamicImageStates) {
 		if (!state.animating()) {
 			continue;
@@ -688,8 +691,11 @@ CalendarBox::Inner::Inner(
 		} else {
 			animating = true;
 		}
+		repaint += dynamicImageRect(date);
 	}
-	update();
+	if (!repaint.isEmpty()) {
+		update(repaint);
+	}
 	return animating;
 }) {
 	setMouseTracking(true);
@@ -768,6 +774,29 @@ int CalendarBox::Inner::rowsLeft() const {
 
 int CalendarBox::Inner::rowsTop() const {
 	return _st.padding.top();
+}
+
+QRect CalendarBox::Inner::dynamicImageRect(QDate date) const {
+	const auto index = _context->daysShift()
+		+ int(_context->month().daysTo(date));
+	if (index < 0 || index >= _context->rowsCount() * kDaysInWeek) {
+		return {};
+	}
+	const auto row = index / kDaysInWeek;
+	const auto column = index % kDaysInWeek;
+	const auto left = rowsLeft()
+		+ column * _st.cellSize.width()
+		+ (_st.cellSize.width() - _st.cellInner) / 2;
+	const auto top = rowsTop()
+		+ row * _st.cellSize.height()
+		+ (_st.cellSize.height() - _st.cellInner) / 2;
+	return myrtlrect(left, top, _st.cellInner, _st.cellInner);
+}
+
+void CalendarBox::Inner::repaintDynamicImage(QDate date) {
+	if (const auto rect = dynamicImageRect(date); !rect.isEmpty()) {
+		update(rect);
+	}
 }
 
 void CalendarBox::Inner::paintRows(QPainter &p, QRect clip) {
@@ -1072,11 +1101,13 @@ void CalendarBox::Inner::setDynamicImage(
 	auto &state = _dynamicImageStates[date];
 	if (image) {
 		state.image = std::move(image);
-		state.image->subscribeToUpdates([=] { update(); });
+		state.image->subscribeToUpdates([=] {
+			repaintDynamicImage(date);
+		});
 	} else {
 		_dynamicImageStates.remove(date);
 	}
-	update();
+	repaintDynamicImage(date);
 }
 
 void CalendarBox::Inner::setRequireImage(bool require) {
