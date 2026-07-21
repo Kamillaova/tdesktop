@@ -39,6 +39,11 @@ using GiftBackdrop = Data::UniqueGiftBackdrop;
 constexpr auto kSwitchTimeout = 3 * crl::time(1000);
 constexpr auto kGiftsPerRow = 3;
 
+enum class SharedAnimationRepaint {
+	Backdrop,
+	PatternAndBackdrop,
+};
+
 struct AttributeDescriptor
 	: std::variant<GiftModel, GiftPattern, GiftBackdrop> {
 
@@ -134,7 +139,7 @@ private:
 
 class Delegate final : public AttributeDelegate {
 public:
-	explicit Delegate(Fn<void()> fullUpdate);
+	explicit Delegate(Fn<void(SharedAnimationRepaint)> repaint);
 
 	Delegate(Delegate &&other) = default;
 	~Delegate() = default;
@@ -167,7 +172,7 @@ private:
 		std::shared_ptr<Text::CustomEmoji> custom;
 	};
 
-	Fn<void()> _fullUpdate;
+	Fn<void(SharedAnimationRepaint)> _repaint;
 	QSize _single;
 	QImage _bg;
 
@@ -209,6 +214,7 @@ public:
 	[[nodiscard]] rpl::producer<Selection> selected() const;
 	[[nodiscard]] auto modelsToggled() const
 		-> rpl::producer<std::vector<Data::UniqueGiftModel>>;
+	void repaintSharedAnimation(SharedAnimationRepaint reason);
 
 private:
 	struct Entry {
@@ -739,8 +745,8 @@ void AttributeButton::recordPlayerFramePaint(QRect rect) {
 	}
 }
 
-Delegate::Delegate(Fn<void()> fullUpdate)
-: _fullUpdate(std::move(fullUpdate)) {
+Delegate::Delegate(Fn<void(SharedAnimationRepaint)> repaint)
+: _repaint(std::move(repaint)) {
 }
 
 void Delegate::update(
@@ -758,6 +764,7 @@ void Delegate::update(
 			const std::optional<Data::UniqueGift> &gift) {
 		Expects(gift.has_value());
 
+		const auto repaint = _repaint;
 		const auto document = model.document = gift->model.document;
 		const auto media = document->createMediaView();
 		media->checkStickerLarge();
@@ -792,10 +799,12 @@ void Delegate::update(
 					media->bytes(),
 					st::uniqueAttributeStickerSize);
 			}
-			result->setRepaintCallback(_fullUpdate);
+			result->setRepaintCallback([=] {
+				repaint(SharedAnimationRepaint::Backdrop);
+			});
 			model.playerDocument = media->owner();
 			model.player = std::move(result);
-			_fullUpdate();
+			repaint(SharedAnimationRepaint::Backdrop);
 		});
 		if (model.playerDocument) {
 			model.mediaLifetime.destroy();
@@ -817,10 +826,13 @@ void Delegate::update(
 		}
 		const auto document = gift->pattern.document;
 		if (emoji.document != document) {
+			const auto repaint = _repaint;
 			emoji.document = document;
 			emoji.custom = document->owner().customEmojiManager().create(
 				document,
-				_fullUpdate,
+				[=] {
+					repaint(SharedAnimationRepaint::Backdrop);
+				},
 				Data::CustomEmojiSizeTag::Large);
 		}
 	};
@@ -876,7 +888,7 @@ void Delegate::update(
 		_backdropDirty = true;
 	}
 	if (!wasDirty && _backdropDirty) {
-		_fullUpdate();
+		_repaint(SharedAnimationRepaint::PatternAndBackdrop);
 	}
 }
 
@@ -1123,6 +1135,18 @@ void AttributesList::refreshButtons() {
 	_viewsTillRow = 0;
 	resizeToWidth(width());
 	validateButtons();
+}
+
+void AttributesList::repaintSharedAnimation(SharedAnimationRepaint reason) {
+	const auto tab = _tab.current();
+	if (tab != Tab::Backdrop
+		&& (tab != Tab::Pattern
+			|| reason != SharedAnimationRepaint::PatternAndBackdrop)) {
+		return;
+	}
+	for (const auto &view : _views) {
+		view.button->update();
+	}
 }
 
 void AttributesList::validateButtons() {
@@ -1436,9 +1460,9 @@ void StarGiftPreviewBox(
 			Data::GiftAttributeIdType tab,
 			std::shared_ptr<Data::UniqueGift> selected)
 		: title(title)
-		, delegate([=] {
-			if (this->tab.current() != Tab::Model && list) {
-				list->update();
+		, delegate([=](SharedAnimationRepaint reason) {
+			if (list) {
+				list->repaintSharedAnimation(reason);
 			}
 		})
 		, attributes(attributes)
