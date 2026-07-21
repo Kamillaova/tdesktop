@@ -33,6 +33,7 @@ public:
 	}
 	bool paused, lastRow;
 	Ui::PathShiftGradient *pathGradient = nullptr;
+	Fn<void(QRect)> pathGradientPainted;
 
 };
 

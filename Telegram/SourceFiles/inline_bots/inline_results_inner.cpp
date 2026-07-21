@@ -46,6 +46,7 @@ namespace {
 
 constexpr auto kMinRepaintDelay = crl::time(33);
 constexpr auto kMinAfterScrollDelay = crl::time(33);
+constexpr auto kMaxPathGradientRepaintRects = 16;
 
 [[nodiscard]] int64 RectArea(const QRect &rect) {
 	return int64(rect.width()) * rect.height();
@@ -61,7 +62,7 @@ Inner::Inner(
 , _pathGradient(std::make_unique<Ui::PathShiftGradient>(
 	st::windowBgRipple,
 	st::windowBgOver,
-	[=] { repaintItems(); }))
+	[=] { repaintPathGradient(); }))
 , _updateInlineItems([=] { repaintPendingItems(); })
 , _mosaic(st::emojiPanWidth - st::emojiScroll.width - st::inlineResultsLeft)
 , _previewTimer([=] { showPreview(); }) {
@@ -257,6 +258,28 @@ void Inner::paintInlineItems(
 	PaintContext context(crl::now(), false, gifPaused, false);
 	context.pathGradient = _pathGradient.get();
 	context.pathGradient->startFrame(0, width(), width() / 2);
+	context.pathGradientPainted = [&](QRect rect) {
+		const auto mapped = p.transform().mapRect(
+			QRectF(rect)).toAlignedRect().intersected(this->rect());
+		if (mapped.isEmpty()) {
+			return;
+		}
+		_pathGradientRepaintBounds = _pathGradientRepaintBounds.isEmpty()
+			? mapped
+			: _pathGradientRepaintBounds.united(mapped);
+		if (_pathGradientRepaintBounding) {
+			_pathGradientRepaintRegion = QRegion(
+				_pathGradientRepaintBounds);
+			return;
+		}
+		_pathGradientRepaintRegion += mapped;
+		if (_pathGradientRepaintRegion.rectCount()
+				> kMaxPathGradientRepaintRects) {
+			_pathGradientRepaintRegion = QRegion(
+				_pathGradientRepaintBounds);
+			_pathGradientRepaintBounding = true;
+		}
+	};
 
 	auto paintItem = [&](not_null<const ItemBase*> item, QPoint point) {
 		p.translate(point.x(), point.y());
@@ -928,6 +951,17 @@ void Inner::repaintItems(crl::time now) {
 	_repaintVisiblePending = false;
 	_repaintAllPending = false;
 	update();
+}
+
+void Inner::repaintPathGradient() {
+	const auto region = base::take(_pathGradientRepaintRegion)
+		.intersected(rect());
+	_pathGradientRepaintBounds = QRect();
+	_pathGradientRepaintBounding = false;
+	if (region.isEmpty()) {
+		return;
+	}
+	update(region);
 }
 
 void Inner::switchPm() {

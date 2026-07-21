@@ -555,15 +555,19 @@ void Sticker::paint(Painter &p, const QRect &clip, const PaintContext *context) 
 		const auto thumbSize = getThumbSize();
 		const auto w = thumbSize.width();
 		const auto h = thumbSize.height();
-		ChatHelpers::PaintStickerThumbnailPath(
+		const auto target = QRect(
+			(st::stickerPanSize.width() - w) / 2,
+			(st::stickerPanSize.height() - h) / 2,
+			w,
+			h);
+		const auto painted = ChatHelpers::PaintStickerThumbnailPath(
 			p,
 			_dataMedia.get(),
-			QRect(
-				(st::stickerPanSize.width() - w) / 2,
-				(st::stickerPanSize.height() - h) / 2,
-				w,
-				h),
+			target,
 			context->pathGradient);
+		if (painted && context->pathGradientPainted) {
+			context->pathGradientPainted(target);
+		}
 	}
 }
 

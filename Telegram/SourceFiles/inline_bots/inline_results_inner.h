@@ -18,6 +18,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "inline_bots/inline_bot_layout_item.h"
 #include "layout/layout_mosaic.h"
 
+#include <QtGui/QRegion>
+
 namespace Api {
 struct SendOptions;
 } // namespace Api
@@ -45,8 +47,6 @@ struct ResultSelected;
 namespace SendMenu {
 struct Details;
 } // namespace SendMenu
-
-class QRegion;
 
 namespace InlineBots {
 namespace Layout {
@@ -159,6 +159,7 @@ private:
 	void updateInlineItems(const ItemBase *layout = nullptr);
 	void repaintPendingItems();
 	void repaintItems(crl::time now = 0);
+	void repaintPathGradient();
 	void clearInlineRows(bool resultsDeleted);
 	ItemBase *layoutPrepareInlineResult(std::shared_ptr<Result> result);
 
@@ -172,6 +173,9 @@ private:
 		bool open);
 
 	not_null<Window::SessionController*> _controller;
+	QRegion _pathGradientRepaintRegion;
+	QRect _pathGradientRepaintBounds;
+	bool _pathGradientRepaintBounding = false;
 	const std::unique_ptr<Ui::PathShiftGradient> _pathGradient;
 
 	int _visibleTop = 0;
