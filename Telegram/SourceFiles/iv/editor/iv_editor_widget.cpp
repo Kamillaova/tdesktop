@@ -7738,6 +7738,16 @@ void Widget::requestRepaint(QRect articleRect) {
 	});
 }
 
+void Widget::requestRepaint(const QRegion &articleRegion) {
+	crl::on_main(this, [=] {
+		if (!_article || articleRegion.isEmpty()) {
+			return;
+		}
+		const auto topLeft = articleTopLeft();
+		update(articleRegion.translated(topLeft.x(), topLeft.y()));
+	});
+}
+
 void Widget::requestRelayout(QRect articleRect) {
 	crl::on_main(this, [=] {
 		if (!_article) {

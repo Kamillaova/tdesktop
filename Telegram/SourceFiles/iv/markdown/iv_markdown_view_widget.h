@@ -77,6 +77,7 @@ public:
 	[[nodiscard]] int lastRelayoutMs() const;
 	int resizeGetHeight(int newWidth) override;
 	void requestRepaint(QRect articleRect) override;
+	void requestRepaint(const QRegion &articleRegion) override;
 	void requestRelayout(QRect articleRect) override;
 	void setPlaceholderLoading(PreparedPlaceholderBlockId id);
 	void clearPlaceholderLoading(PreparedPlaceholderBlockId id);

@@ -464,6 +464,12 @@ void ChannelMediaBlock::handleJoinedChange() {
 
 } // namespace
 
+void MediaBlockHost::requestRepaint(const QRegion &articleRegion) {
+	if (!articleRegion.isEmpty()) {
+		requestRepaint(articleRegion.boundingRect());
+	}
+}
+
 MediaBlock::~MediaBlock() = default;
 
 bool MediaBlock::alive() const {

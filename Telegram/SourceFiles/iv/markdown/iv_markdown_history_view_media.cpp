@@ -147,6 +147,20 @@ struct IvHistoryViewHit {
 	bool supported = true;
 };
 
+[[nodiscard]] MarkdownArticlePaintContext HistoryMediaPaintContext(
+		const MarkdownArticlePaintContext &context,
+		const QPainter &p,
+		QRect geometry,
+		QRect visible) {
+	auto result = context.translated(-geometry.topLeft());
+	result.clip = visible.translated(-geometry.topLeft());
+	if (!result.elementTransform) {
+		result.elementPaintDevice = p.device();
+		result.elementTransform = p.transform();
+	}
+	return result;
+}
+
 [[nodiscard]] MediaActivation ExternalActivation(QString url) {
 	auto result = MediaActivation();
 	if (!url.isEmpty()) {
@@ -430,10 +444,9 @@ void IvHistoryViewBlock::paint(
 	if (visible.isEmpty()) {
 		return;
 	}
+	auto local = HistoryMediaPaintContext(context, p, _geometry, visible);
 	p.save();
 	p.translate(_geometry.topLeft());
-	auto local = context.translated(-_geometry.topLeft());
-	local.clip = visible.translated(-_geometry.topLeft());
 	_media->draw(p, local);
 	p.restore();
 }
@@ -1138,10 +1151,9 @@ void IvHistoryViewSlideshowBlock::paint(
 		RoundedRectPath(_geometry, st.radius),
 		Qt::IntersectClip);
 
+	auto local = HistoryMediaPaintContext(context, p, _geometry, visible);
 	p.save();
 	p.translate(_geometry.topLeft());
-	auto local = context.translated(-_geometry.topLeft());
-	local.clip = visible.translated(-_geometry.topLeft());
 	media->draw(p, local);
 	p.restore();
 
@@ -1396,9 +1408,13 @@ void IvHistoryViewMediaHost::registerViewRequestBridge(MediaBlockHost *host) {
 	_state->session->viewRepaintRequest(
 	) | rpl::filter([=](::Data::RequestViewRepaint data) {
 		return (data.view == _state->view);
-	}) | rpl::on_next([=](::Data::RequestViewRepaint) {
+	}) | rpl::on_next([=](::Data::RequestViewRepaint data) {
 		if (_state->bridgeHost) {
-			_state->bridgeHost->requestRepaint(QRect());
+			if (data.region.isEmpty()) {
+				_state->bridgeHost->requestRepaint(data.rect);
+			} else {
+				_state->bridgeHost->requestRepaint(data.region);
+			}
 		}
 	}, _state->bridgeLifetime);
 	_state->session->viewResizeRequest(

@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
 #include "ui/layers/show.h"
+#include "ui/paint/damage.h"
 #include "ui/text/text_extended_data.h"
 #include "ui/toast/toast.h"
 #include "ui/ui_utility.h"
@@ -426,6 +427,22 @@ void MarkdownDocumentWidget::requestRepaint(QRect articleRect) {
 			update();
 		} else {
 			update(articleRectToWidget(articleRect));
+		}
+	});
+}
+
+void MarkdownDocumentWidget::requestRepaint(
+		const QRegion &articleRegion) {
+	crl::on_main(this, [=] {
+		if (!_article || articleRegion.isEmpty()) {
+			return;
+		}
+		auto widgetRegion = QRegion();
+		for (const auto &articleRect : articleRegion) {
+			widgetRegion += articleRectToWidget(articleRect);
+		}
+		if (!widgetRegion.isEmpty()) {
+			update(widgetRegion);
 		}
 	});
 }
@@ -1220,17 +1237,9 @@ QRect MarkdownDocumentWidget::articleRectToWidget(QRect articleRect) const {
 		return rect();
 	}
 	const auto scale = zoomScale();
-	const auto left = int(std::floor(articleRect.x() * scale));
-	const auto top = int(std::floor(articleRect.y() * scale));
-	const auto right = int(std::ceil(
-		(articleRect.x() + articleRect.width()) * scale));
-	const auto bottom = int(std::ceil(
-		(articleRect.y() + articleRect.height()) * scale));
-	return QRect(
-		left,
-		top,
-		std::max(right - left, 1),
-		std::max(bottom - top, 1));
+	auto transform = QTransform();
+	transform.scale(scale, scale);
+	return Ui::DamageRect(QRectF(articleRect), transform);
 }
 
 Ui::Text::QuotePaintCache *MarkdownDocumentWidget::ensurePrePaintCache() {

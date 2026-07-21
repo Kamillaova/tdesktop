@@ -18,6 +18,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QPoint>
 #include <QtCore/QRect>
+#include <QtGui/QRegion>
 
 namespace style {
 struct Markdown;
@@ -39,6 +40,7 @@ public:
 	virtual ~MediaBlockHost() = default;
 
 	virtual void requestRepaint(QRect articleRect) = 0;
+	virtual void requestRepaint(const QRegion &articleRegion);
 	virtual void requestRelayout(QRect articleRect) = 0;
 };
 

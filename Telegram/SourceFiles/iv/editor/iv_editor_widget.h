@@ -267,6 +267,7 @@ protected:
 	void visibleTopBottomUpdated(int visibleTop, int visibleBottom) override;
 	void wheelEvent(QWheelEvent *e) override;
 	void requestRepaint(QRect articleRect) override;
+	void requestRepaint(const QRegion &articleRegion) override;
 	void requestRelayout(QRect articleRect) override;
 
 private:

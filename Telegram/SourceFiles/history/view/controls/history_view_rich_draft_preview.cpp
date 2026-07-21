@@ -36,8 +36,10 @@ class PreviewMediaBlockHost final : public Iv::Markdown::MediaBlockHost {
 public:
 	PreviewMediaBlockHost(
 		Fn<void(QRect)> repaint,
+		Fn<void(const QRegion &)> repaintRegion,
 		Fn<void(QRect)> relayout)
 	: _repaint(std::move(repaint))
+	, _repaintRegion(std::move(repaintRegion))
 	, _relayout(std::move(relayout)) {
 	}
 
@@ -45,6 +47,14 @@ public:
 		crl::on_main([repaint = _repaint, articleRect] {
 			if (repaint) {
 				repaint(articleRect);
+			}
+		});
+	}
+
+	void requestRepaint(const QRegion &articleRegion) override {
+		crl::on_main([repaint = _repaintRegion, articleRegion] {
+			if (repaint) {
+				repaint(articleRegion);
 			}
 		});
 	}
@@ -59,6 +69,7 @@ public:
 
 private:
 	const Fn<void(QRect)> _repaint;
+	const Fn<void(const QRegion &)> _repaintRegion;
 	const Fn<void(QRect)> _relayout;
 
 };
@@ -92,6 +103,11 @@ RichDraftPreview::RichDraftPreview(
 		[weak](QRect articleRect) {
 			if (const auto owner = weak.get()) {
 				owner->requestArticleRepaint(articleRect);
+			}
+		},
+		[weak](const QRegion &articleRegion) {
+			if (const auto owner = weak.get()) {
+				owner->requestArticleRepaint(articleRegion);
 			}
 		},
 		[weak](QRect articleRect) {
@@ -349,6 +365,22 @@ void RichDraftPreview::regenerateFadePixmap() {
 
 void RichDraftPreview::requestArticleRepaint(QRect articleRect) {
 	const auto translated = translatedArticleRect(articleRect);
+	if (!translated.isEmpty()) {
+		update(translated);
+	}
+}
+
+void RichDraftPreview::requestArticleRepaint(
+		const QRegion &articleRegion) {
+	const auto content = articleRect();
+	if (content.isEmpty() || articleRegion.isEmpty()) {
+		return;
+	}
+	const auto topLeft = content.topLeft();
+	const auto translated = articleRegion.translated(
+		topLeft.x(),
+		topLeft.y()
+	).intersected(QRegion(content));
 	if (!translated.isEmpty()) {
 		update(translated);
 	}

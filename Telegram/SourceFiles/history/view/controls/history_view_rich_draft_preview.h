@@ -69,6 +69,7 @@ private:
 	void refreshPaletteDependentCaches();
 	void regenerateFadePixmap();
 	void requestArticleRepaint(QRect articleRect);
+	void requestArticleRepaint(const QRegion &articleRegion);
 	void requestArticleRelayout(QRect articleRect);
 	void detachArticleBindings();
 	[[nodiscard]] QRect articleRect() const;
