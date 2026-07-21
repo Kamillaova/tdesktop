@@ -47,6 +47,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/controls/userpic_button.h"
 #include "ui/effects/premium_bubble.h"
 #include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
 #include "ui/text/custom_emoji_helper.h"
 #include "ui/text/custom_emoji_text_badge.h"
 #include "ui/text/format_values.h"
@@ -72,8 +73,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_settings.h"
 #include "styles/style_widgets.h"
 
-#include <QtWidgets/QApplication>
 #include <QtGui/QClipboard>
+#include <QtWidgets/QApplication>
 
 namespace Ui {
 namespace {
@@ -1905,6 +1906,12 @@ struct Single {
 	TimeId ends = 0;
 };
 
+struct ActiveAuctionEmojiRepaintState {
+	QRect last;
+	QRect stale;
+	bool hasBounds = false;
+};
+
 object_ptr<Ui::RpWidget> MakeActiveAuctionRow(
 		not_null<QWidget*> parent,
 		not_null<Window::SessionController*> window,
@@ -1932,20 +1939,37 @@ object_ptr<Ui::RpWidget> MakeActiveAuctionRow(
 		st::auctionListTitlePadding);
 
 	const auto tag = Data::CustomEmojiSizeTag::Isolated;
+	const auto repaint = raw->lifetime().make_state<
+		ActiveAuctionEmojiRepaintState>();
 	const auto sticker = std::shared_ptr<Ui::Text::CustomEmoji>(
 		document->owner().customEmojiManager().create(
 			document,
-			[=] { raw->update(); },
+			[=] {
+				if (!repaint->hasBounds) {
+					raw->update();
+					return;
+				}
+				raw->update(repaint->last.united(base::take(repaint->stale)));
+			},
 			tag));
 
 	raw->paintRequest(
 	) | rpl::on_next([=] {
 		auto q = QPainter(raw);
-		sticker->paint(q, {
+		const auto transform = q.transform();
+		const auto repaintBounds = sticker->paint(q, {
 			.textColor = st::windowFg->c,
 			.now = crl::now(),
 			.position = QPoint(),
-		});
+		}).repaintBounds();
+		const auto mapped = Ui::DamageRect(repaintBounds, transform);
+		if (!mapped.isEmpty()) {
+			if (repaint->hasBounds && repaint->last != mapped) {
+				repaint->stale = repaint->stale.united(repaint->last);
+			}
+			repaint->last = mapped;
+			repaint->hasBounds = true;
+		}
 	}, raw->lifetime());
 
 	auto helper = Ui::Text::CustomEmojiHelper();
