@@ -15,6 +15,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/rows_scroll_cache.h"
 #include "base/timer.h"
 
+class QRegion;
+
 namespace style {
 struct PeerList;
 struct PeerListItem;
@@ -382,6 +384,9 @@ public:
 	virtual void peerListPrependRow(std::unique_ptr<PeerListRow> row) = 0;
 	virtual void peerListPrependRowFromSearchResult(not_null<PeerListRow*> row) = 0;
 	virtual void peerListUpdateRow(not_null<PeerListRow*> row) = 0;
+	virtual void peerListRepaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage) = 0;
 	virtual void peerListRemoveRow(not_null<PeerListRow*> row) = 0;
 	virtual void peerListConvertRowToSearchResult(not_null<PeerListRow*> row) = 0;
 	virtual bool peerListIsRowChecked(not_null<PeerListRow*> row) = 0;
@@ -741,6 +746,9 @@ public:
 	void updateRow(not_null<PeerListRow*> row) {
 		updateRow(row, RowIndex());
 	}
+	void repaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage);
 	void removeRow(not_null<PeerListRow*> row);
 	void convertRowToSearchResult(not_null<PeerListRow*> row);
 	int fullRowsCount() const;
@@ -1025,6 +1033,11 @@ public:
 	}
 	void peerListUpdateRow(not_null<PeerListRow*> row) override {
 		_content->updateRow(row);
+	}
+	void peerListRepaintRow(
+			not_null<PeerListRow*> row,
+			const QRegion &localDamage) override {
+		_content->repaintRow(row, localDamage);
 	}
 	void peerListRemoveRow(not_null<PeerListRow*> row) override {
 		_content->removeRow(row);

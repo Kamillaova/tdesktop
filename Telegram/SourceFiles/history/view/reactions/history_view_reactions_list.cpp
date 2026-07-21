@@ -35,6 +35,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_boxes.h"
 #include "styles/style_menu_icons.h"
 
+#include <QtGui/QRegion>
+
 namespace HistoryView::Reactions {
 namespace {
 
@@ -51,7 +53,7 @@ public:
 		const Ui::Text::CustomEmojiFactory &factory,
 		ReactionId reaction,
 		QStringView reactionEntityData,
-		Fn<void(Row*)> repaint,
+		Fn<void(Row*, const QRegion &)> repaint,
 		Fn<bool()> paused);
 
 	[[nodiscard]] const ReactionId &reaction() const;
@@ -60,6 +62,7 @@ public:
 	QSize rightActionSize() const override;
 	QMargins rightActionMargins() const override;
 	bool rightActionDisabled() const override;
+	[[nodiscard]] bool elementsAnimating() const override;
 	void rightActionPaint(
 		Painter &p,
 		int x,
@@ -69,7 +72,14 @@ public:
 		bool actionSelected) override;
 
 private:
+	void repaintCustomEmoji();
+	void trackCustomEmojiPaint(QRectF painted, QRectF fallback);
+
+	Fn<void(Row*, const QRegion &)> _repaint;
 	ReactionId _reaction;
+	QRectF _customPaintedRect;
+	QRectF _customFallbackRect;
+	QRegion _customRepaintDamage;
 	std::unique_ptr<Ui::Text::CustomEmoji> _custom;
 	Fn<bool()> _paused;
 
@@ -170,13 +180,16 @@ Row::Row(
 	const Ui::Text::CustomEmojiFactory &factory,
 	ReactionId reaction,
 	QStringView reactionEntityData,
-	Fn<void(Row*)> repaint,
+	Fn<void(Row*, const QRegion &)> repaint,
 	Fn<bool()> paused)
 : PeerListRow(peer, id)
+, _repaint(std::move(repaint))
 , _reaction(std::move(reaction))
 , _custom(reactionEntityData.isEmpty()
 	? nullptr
-	: factory(reactionEntityData, { .repaint = [=] { repaint(this); } }))
+	: factory(reactionEntityData, {
+		.repaint = [this] { repaintCustomEmoji(); },
+	}))
 , _paused(std::move(paused)) {
 }
 
@@ -209,6 +222,10 @@ bool Row::rightActionDisabled() const {
 	return true;
 }
 
+bool Row::elementsAnimating() const {
+	return (_custom != nullptr);
+}
+
 void Row::rightActionPaint(
 		Painter &p,
 		int x,
@@ -221,12 +238,45 @@ void Row::rightActionPaint(
 	}
 	const auto size = Ui::Emoji::GetSizeNormal() / style::DevicePixelRatio();
 	const auto skip = (size - Ui::Text::AdjustCustomEmojiSize(size)) / 2;
-	_custom->paint(p, {
+	const auto transform = p.transform();
+	const auto origin = transform.map(QPointF());
+	const auto mapToRow = [&](QRectF rect) {
+		return transform.mapRect(rect).translated(-origin.x(), -origin.y());
+	};
+	const auto painted = _custom->paint(p, {
 		.textColor = st::windowFg->c,
 		.now = crl::now(),
 		.position = { x + skip, y + skip },
 		.paused = _paused(),
 	});
+	trackCustomEmojiPaint(
+		painted.isEmpty() ? QRectF() : mapToRow(painted),
+		mapToRow(QRectF(QPoint(x, y), rightActionSize())));
+}
+
+void Row::repaintCustomEmoji() {
+	const auto damage = !_customRepaintDamage.isEmpty()
+		? _customRepaintDamage
+		: QRegion(_customFallbackRect.toAlignedRect());
+	if (!damage.isEmpty()) {
+		_repaint(this, damage);
+	}
+}
+
+void Row::trackCustomEmojiPaint(QRectF painted, QRectF fallback) {
+	const auto previous = _customPaintedRect;
+	_customPaintedRect = painted;
+	_customFallbackRect = fallback;
+	const auto currentDamage = QRegion(painted.toAlignedRect());
+	if (painted == previous) {
+		_customRepaintDamage = currentDamage;
+		return;
+	}
+	_customRepaintDamage = QRegion(previous.toAlignedRect()).united(
+		currentDamage);
+	if (!_customRepaintDamage.isEmpty()) {
+		_repaint(this, _customRepaintDamage);
+	}
 }
 
 Controller::Controller(
@@ -548,7 +598,9 @@ std::unique_ptr<PeerListRow> Controller::createRow(
 		_factory,
 		reaction,
 		Data::ReactionEntityData(reaction),
-		[=](Row *row) { delegate()->peerListUpdateRow(row); },
+		[=](Row *row, const QRegion &damage) {
+			delegate()->peerListRepaintRow(row, damage);
+		},
 		[=] { return _window->parentController()->isGifPausedAtLeastFor(
 			Window::GifPauseReason::Layer); });
 }

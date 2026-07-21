@@ -12,6 +12,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/vertical_layout.h"
 #include "styles/style_boxes.h"
 
+#include <QtGui/QRegion>
+
 namespace {
 
 using State = std::unique_ptr<PeerListState>;
@@ -167,6 +169,24 @@ void PeerListWidgets::updateRow(not_null<PeerListRow*> row) {
 	}
 }
 
+void PeerListWidgets::repaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage) {
+	const auto it = ranges::find_if(
+		_rows,
+		[row](const auto &r) { return r.get() == row; });
+	if (it == _rows.end()) {
+		return;
+	}
+	const auto index = std::distance(_rows.begin(), it);
+	if (const auto widget = _content->widgetAt(index)) {
+		const auto damage = localDamage.intersected(QRegion(widget->rect()));
+		if (!damage.isEmpty()) {
+			widget->update(damage);
+		}
+	}
+}
+
 int PeerListWidgets::fullRowsCount() {
 	return _rows.size();
 }
@@ -232,6 +252,12 @@ auto PeerListWidgetsDelegate::peerListLastRowMousePosition()
 
 void PeerListWidgetsDelegate::peerListUpdateRow(not_null<PeerListRow*> row) {
 	_content->updateRow(row);
+}
+
+void PeerListWidgetsDelegate::peerListRepaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage) {
+	_content->repaintRow(row, localDamage);
 }
 
 void PeerListWidgetsDelegate::peerListRemoveRow(not_null<PeerListRow*> row) {

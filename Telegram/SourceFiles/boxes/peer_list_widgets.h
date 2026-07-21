@@ -27,6 +27,9 @@ public:
 	void appendRow(std::unique_ptr<PeerListRow> row);
 	PeerListRow* findRow(PeerListRowId id);
 	void updateRow(not_null<PeerListRow*> row);
+	void repaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage);
 	int fullRowsCount();
 	[[nodiscard]] not_null<PeerListRow*> rowAt(int index);
 	void refreshRows();
@@ -56,6 +59,9 @@ public:
 	PeerListRow *peerListFindRow(PeerListRowId id) override;
 	std::optional<QPoint> peerListLastRowMousePosition() override;
 	void peerListUpdateRow(not_null<PeerListRow*> row) override;
+	void peerListRepaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage) override;
 	void peerListRemoveRow(not_null<PeerListRow*> row) override;
 	void peerListConvertRowToSearchResult(
 		not_null<PeerListRow*> row) override;

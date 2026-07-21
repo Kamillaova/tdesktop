@@ -42,6 +42,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_widgets.h"
 
 #include <xxhash.h> // XXH64.
+#include <QtGui/QRegion>
 #include <QtWidgets/QApplication>
 
 [[nodiscard]] PeerListRowId UniqueRowIdFromString(const QString &d) {
@@ -2778,6 +2779,22 @@ base::flat_set<QString> PeerListContent::visibleSectionLetters() const {
 
 void PeerListContent::updateRow(not_null<PeerListRow*> row, RowIndex hint) {
 	updateRow(findRowIndex(row, hint));
+}
+
+void PeerListContent::repaintRow(
+		not_null<PeerListRow*> row,
+		const QRegion &localDamage) {
+	const auto index = findRowIndex(row);
+	if (index.value < 0) {
+		return;
+	}
+	const auto damage = localDamage.intersected(QRegion(
+		QRect(0, 0, width(), _rowHeight)));
+	if (damage.isEmpty()) {
+		return;
+	}
+	_rowsScrollCache.invalidate(row->id());
+	update(damage.translated(0, getRowTop(index)));
 }
 
 void PeerListContent::updateRow(RowIndex index) {
