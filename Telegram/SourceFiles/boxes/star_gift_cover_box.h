@@ -97,12 +97,15 @@ private:
 		ModelView &model,
 		const PaintContext &context,
 		float64 scale = 1.,
-		bool paused = false);
+		bool paused = false,
+		QRect *repaintRect = nullptr);
 	bool paintGift(
 		QPainter &p,
 		GiftView &gift,
 		const PaintContext &context,
-		float64 shown);
+		float64 shown,
+		QRect *repaintRect = nullptr);
+	void recordModelFramePaint(ModelView &model, QRect rect);
 
 	void paintSpinnerAnimation(QPainter &p, const PaintContext &context);
 	void paintNormalAnimation(

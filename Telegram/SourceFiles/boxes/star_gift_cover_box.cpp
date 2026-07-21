@@ -23,6 +23,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_common.h"
 #include "lottie/lottie_single_player.h"
 #include "ui/effects/premium_stars_colored.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/text/format_values.h"
 #include "ui/top_background_gradient.h"
@@ -125,6 +126,7 @@ struct UniqueGiftCoverWidget::ModelView {
 	std::shared_ptr<Data::DocumentMedia> media;
 	std::unique_ptr<Lottie::SinglePlayer> lottie;
 	rpl::lifetime lifetime;
+	QRect repaintRect;
 };
 
 struct UniqueGiftCoverWidget::GiftView {
@@ -189,6 +191,7 @@ UniqueGiftCoverWidget::UniqueGiftCoverWidget(
 			ModelView &to,
 			const Data::UniqueGiftModel &model) {
 		to.lifetime.destroy();
+		to.repaintRect = {};
 
 		const auto document = model.document;
 		to.media = document->createMediaView();
@@ -208,9 +211,15 @@ UniqueGiftCoverWidget::UniqueGiftCoverWidget(
 			to.lifetime.destroy();
 			const auto lottie = to.lottie.get();
 			lottie->updates() | rpl::on_next([this, lottie] {
-				if (_state->now.model.lottie.get() == lottie
-					|| _state->crossfade.animating()) {
+				if (_state->crossfading || _state->spinStarted) {
 					update();
+				} else if (_state->now.model.lottie.get() == lottie) {
+					const auto rect = _state->now.model.repaintRect;
+					if (rect.isEmpty()) {
+						update();
+					} else {
+						update(rect);
+					}
 				}
 				if (const auto onstack = _state->checkSpinnerStart) {
 					onstack();
@@ -913,7 +922,8 @@ bool UniqueGiftCoverWidget::paintModel(
 		ModelView &model,
 		const PaintContext &context,
 		float64 scale,
-		bool paused) {
+		bool paused,
+		QRect *repaintRect) {
 	const auto lottieSize = st::creditsHistoryEntryStarGiftSize;
 	const auto lottie = model.lottie.get();
 	const auto factor = style::DevicePixelRatio();
@@ -924,6 +934,9 @@ bool UniqueGiftCoverWidget::paintModel(
 		? lottie->frameInfo(request)
 		: Lottie::Animation::FrameInfo();
 	if (frame.image.isNull()) {
+		if (repaintRect) {
+			*repaintRect = {};
+		}
 		return false;
 	}
 	const auto size = frame.image.size() / factor;
@@ -937,12 +950,31 @@ bool UniqueGiftCoverWidget::paintModel(
 		p.translate(-origin);
 	}
 	p.drawImage(rect, frame.image);
+	if (repaintRect) {
+		*repaintRect = Ui::DamageRect(QRectF(rect), p.transform());
+	}
 	const auto count = lottie->framesCount();
 	const auto finished = lottie->frameIndex() == (count - 1);
 	if (!paused) {
 		lottie->markFrameShown();
 	}
 	return finished;
+}
+
+void UniqueGiftCoverWidget::recordModelFramePaint(
+		ModelView &model,
+		QRect rect) {
+	if (rect.isEmpty()) {
+		rect = {};
+	}
+	if (model.repaintRect == rect) {
+		return;
+	}
+	const auto previous = model.repaintRect;
+	model.repaintRect = rect;
+	if (!previous.isEmpty()) {
+		update(rect.isEmpty() ? previous : previous.united(rect));
+	}
 }
 
 QRect UniqueGiftCoverWidget::prepareCraftFrame(
@@ -1027,14 +1059,21 @@ bool UniqueGiftCoverWidget::paintGift(
 		QPainter &p,
 		GiftView &gift,
 		const PaintContext &context,
-		float64 shown) {
+		float64 shown,
+		QRect *repaintRect) {
 	Expects(gift.gift.has_value());
 
 	paintBackdrop(p, gift.backdrop, context);
 	if (gift.gift->pattern.document != gift.gift->model.document) {
 		paintPattern(p, gift.pattern, gift.backdrop, context, shown);
 	}
-	const auto finished = paintModel(p, gift.model, context);
+	const auto finished = paintModel(
+		p,
+		gift.model,
+		context,
+		1.,
+		false,
+		repaintRect);
 	if (gift.gift->crafted) {
 		const auto padding = st::chatUniqueGiftBadgePadding;
 		auto badge = Info::PeerGifts::GiftBadge{
@@ -1284,10 +1323,20 @@ void UniqueGiftCoverWidget::paintNormalAnimation(
 		const PaintContext &context,
 		float64 progress) {
 	if (progress < 1.) {
-		const auto finished = paintGift(p, _state->now, context, 1. - progress)
+		auto repaintRect = QRect();
+		const auto record = !_state->crossfading;
+		const auto finished = paintGift(
+			p,
+			_state->now,
+			context,
+			1. - progress,
+			record ? &repaintRect : nullptr)
 			|| (_state->next.forced
 				&& (!_state->crossfading
 					|| !_state->crossfade.animating()));
+		if (record) {
+			recordModelFramePaint(_state->now.model, repaintRect);
+		}
 		const auto next = finished
 			? _state->next.model.lottie.get()
 			: nullptr;
