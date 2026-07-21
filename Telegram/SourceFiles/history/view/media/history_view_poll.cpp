@@ -2625,7 +2625,7 @@ Poll::Footer::Footer(not_null<Poll*> owner)
 					owner->_parent->data()->fullId());
 			}
 		})))
-, _closeTimer([=] { owner->repaint(); }) {
+, _closeTimer([this] { _owner->repaintGeometry(_contentRepaint); }) {
 }
 
 Poll::Poll(
