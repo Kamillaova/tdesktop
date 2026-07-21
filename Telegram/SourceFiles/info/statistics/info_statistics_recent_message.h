@@ -9,6 +9,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "ui/rp_widget.h"
 
+#include <QtGui/QRegion>
+
 class HistoryItem;
 
 namespace Data {
@@ -41,14 +43,32 @@ public:
 
 protected:
 	void paintEvent(QPaintEvent *e) override;
+	void resizeEvent(QResizeEvent *e) override;
 
 	int resizeGetHeight(int newWidth) override;
 
 private:
+	struct AnimationDamage {
+		QRegion current;
+		QRegion stale;
+		QRegion fallback;
+		bool known = false;
+		bool scheduled = false;
+	};
+
 	void processPreview();
+	void textAnimationRepaint();
+	void invalidateTextAnimationDamage();
+	void recordTextAnimationDamage(
+		QRegion current,
+		QRegion fallback,
+		const QRegion &repaintRegion);
+	void scheduleTextAnimationRepaint(QRegion damage);
+	[[nodiscard]] QRect previewRect() const;
 
 	FullMsgId _messageId;
 	FullStoryId _storyId;
+	AnimationDamage _textAnimationDamage;
 	Ui::Text::String _text;
 	Ui::Text::String _date;
 	Ui::Text::String _views;

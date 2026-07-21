@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/outline_segments.h" // UnreadStoryOutlineGradient
 #include "ui/effects/ripple_animation.h"
 #include "ui/effects/spoiler_mess.h"
+#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
@@ -89,10 +90,12 @@ MessagePreview::MessagePreview(
 		Ui::DialogTextOptions(),
 		Core::TextContext({
 			.session = &item->history()->session(),
-			.repaint = [=] { update(); },
+			.repaint = [=] { textAnimationRepaint(); },
 		}));
 	if (item->media() && item->media()->hasSpoiler()) {
-		_spoiler = std::make_unique<Ui::SpoilerAnimation>([=] { update(); });
+		_spoiler = std::make_unique<Ui::SpoilerAnimation>([=] {
+			update(previewRect());
+		});
 	}
 	if (_preview.isNull()) {
 		if (const auto media = item->media()) {
@@ -133,7 +136,7 @@ MessagePreview::MessagePreview(
 		Ui::DialogTextOptions(),
 		Core::TextContext({
 			.session = &story->peer()->session(),
-			.repaint = [=] { update(); },
+			.repaint = [=] { textAnimationRepaint(); },
 		}));
 	if (_preview.isNull()) {
 		if (const auto photo = story->photo()) {
@@ -148,6 +151,7 @@ MessagePreview::MessagePreview(
 }
 
 void MessagePreview::setInfo(int views, int shares, int reactions) {
+	invalidateTextAnimationDamage();
 	_views = Ui::Text::String(
 		st::defaultPeerListItem.nameStyle,
 		(views >= 0)
@@ -201,7 +205,7 @@ void MessagePreview::processPreview() {
 		session->downloaderTaskFinished()
 	) | rpl::on_next([=] {
 		const auto computed = computeThumbInfo();
-		const auto guard = gsl::finally([&] { update(); });
+		const auto guard = gsl::finally([&] { update(previewRect()); });
 		if (!computed.image) {
 			if (_documentMedia && !_documentMedia->owner()->hasThumbnail()) {
 				_preview = QImage();
@@ -253,6 +257,99 @@ int MessagePreview::resizeGetHeight(int newWidth) {
 	return st::peerListBoxItem.height;
 }
 
+void MessagePreview::textAnimationRepaint() {
+	if (!_text.hasCustomEmoji() && !_text.hasSpoilers()) {
+		return;
+	}
+	auto &state = _textAnimationDamage;
+	if (state.scheduled) {
+		return;
+	}
+	const auto fallback = state.fallback.isEmpty()
+		? QRegion(rect())
+		: state.fallback;
+	const auto damage = state.known
+		? state.stale.united(state.current)
+		: state.stale.united(fallback);
+	scheduleTextAnimationRepaint(damage);
+}
+
+void MessagePreview::invalidateTextAnimationDamage() {
+	auto &state = _textAnimationDamage;
+	state.stale += state.known ? state.current : state.fallback;
+	state.current = QRegion();
+	state.fallback = QRegion();
+	state.known = false;
+}
+
+void MessagePreview::recordTextAnimationDamage(
+		QRegion current,
+		QRegion fallback,
+		const QRegion &repaintRegion) {
+	auto &state = _textAnimationDamage;
+	const auto widgetRegion = QRegion(rect());
+	state.current &= widgetRegion;
+	state.stale &= widgetRegion;
+	state.fallback &= widgetRegion;
+	current &= widgetRegion;
+	fallback &= widgetRegion;
+	fallback += current;
+	const auto repainted = repaintRegion.intersected(widgetRegion);
+	const auto relevant = state.current
+		.united(state.stale)
+		.united(state.fallback)
+		.united(current)
+		.united(fallback);
+	if (!repainted.intersects(relevant)) {
+		return;
+	}
+	state.fallback = fallback;
+	state.scheduled = false;
+	if (!state.known) {
+		const auto required = state.stale.united(state.fallback);
+		if (!required.subtracted(repainted).isEmpty()) {
+			scheduleTextAnimationRepaint(required);
+			return;
+		}
+		state.current = current;
+		state.stale = QRegion();
+		state.known = true;
+		return;
+	}
+	const auto combined = state.stale
+		.united(state.current)
+		.united(current);
+	if (!combined.subtracted(repainted).isEmpty()) {
+		state.current += current;
+		scheduleTextAnimationRepaint(combined);
+		return;
+	}
+	state.current = current;
+	state.stale = QRegion();
+}
+
+void MessagePreview::scheduleTextAnimationRepaint(QRegion damage) {
+	auto &state = _textAnimationDamage;
+	if (state.scheduled) {
+		return;
+	}
+	damage &= QRegion(rect());
+	if (!damage.isEmpty()) {
+		state.scheduled = true;
+		update(damage);
+	}
+}
+
+QRect MessagePreview::previewRect() const {
+	return QRect(
+		st::peerListBoxItem.photoPosition,
+		Size(st::peerListBoxItem.photoSize));
+}
+
+void MessagePreview::resizeEvent(QResizeEvent *) {
+	invalidateTextAnimationDamage();
+}
+
 void MessagePreview::paintEvent(QPaintEvent *e) {
 	auto p = QPainter(this);
 
@@ -275,9 +372,7 @@ void MessagePreview::paintEvent(QPaintEvent *e) {
 		? st::peerListBoxItem.photoPosition.x()
 		: st::peerListBoxItem.namePosition.x();
 	if (left) {
-		const auto rect = QRect(
-			st::peerListBoxItem.photoPosition,
-			Size(st::peerListBoxItem.photoSize));
+		const auto rect = previewRect();
 		p.drawImage(rect.topLeft(), _preview);
 		if (_spoiler) {
 			const auto paused = On(PowerSaving::kChatSpoiler);
@@ -296,6 +391,8 @@ void MessagePreview::paintEvent(QPaintEvent *e) {
 
 	p.setBrush(Qt::NoBrush);
 	p.setPen(st::boxTextFg);
+	auto customEmojiRepaintBounds
+		= Ui::Text::CustomEmojiRepaintBounds();
 	_text.draw(p, {
 		.position = { left, topTextTop },
 		.outerWidth = width() - left,
@@ -304,7 +401,40 @@ void MessagePreview::paintEvent(QPaintEvent *e) {
 		.now = crl::now(),
 		.elisionHeight = st::statisticsDetailsPopupHeaderStyle.font->height,
 		.elisionLines = 1,
+		.customEmojiRepaintBounds = &customEmojiRepaintBounds,
 	});
+	if (_text.hasCustomEmoji() || _text.hasSpoilers()) {
+		const auto available = std::max(width() - rightWidth - left, 0);
+		const auto needsFallback = _text.hasSpoilers()
+			|| !customEmojiRepaintBounds.repaintBoundsKnown;
+		auto fallback = QRegion();
+		if (needsFallback) {
+			const auto textWidth = std::min(available, _text.maxWidth());
+			const auto line = QRectF(
+				QPoint(left, topTextTop),
+				QSize(textWidth, _text.lineHeight()));
+			fallback += Ui::DamageRect(line, p.transform());
+			fallback += Ui::DamageRect(
+				line.translated(available - textWidth, 0),
+				p.transform());
+		}
+		auto current = QRegion();
+		if (_text.hasCustomEmoji()) {
+			current += Ui::DamageRect(
+				customEmojiRepaintBounds.rect,
+				p.transform());
+			if (!customEmojiRepaintBounds.repaintBoundsKnown) {
+				current += fallback;
+			}
+		}
+		if (_text.hasSpoilers()) {
+			current += fallback;
+		}
+		recordTextAnimationDamage(
+			std::move(current),
+			fallback,
+			e->region());
+	}
 	_views.draw(p, {
 		.position = { width() - _viewsWidth, topTextTop },
 		.outerWidth = _viewsWidth,
