@@ -35,6 +35,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_color_indices.h"
 #include "styles/style_dialogs.h"
 
+#include <QtGui/QPaintEvent>
+#include <QtGui/QRegion>
+
 namespace Ui {
 namespace {
 
@@ -180,17 +183,109 @@ void FillSponsoredMessageBar(
 		}
 	});
 
+	struct AnimationDamage final {
+		QRegion painted;
+		QRegion fallback;
+		bool complete = true;
+	};
+
 	struct State final {
 		Ui::Text::String title;
 		Ui::Text::String contentTitle;
 		Ui::Text::String contentText;
 		rpl::variable<int> lastPaintedContentLineAmount = 0;
 		rpl::variable<int> lastPaintedContentTop = 0;
+		Ui::Text::CustomEmojiPaintedBounds contentTextPaintedBounds;
+		QRegion animationDamage;
+		QRegion staleAnimationDamage;
+		QRegion animationFallback;
+		QSize animationSize;
+		bool animationDamageKnown = false;
+		bool animationFallbackKnown = false;
+		bool animationRepaintScheduled = false;
 
 		std::shared_ptr<Ui::DynamicImage> rightPhoto;
 		QImage rightPhotoImage;
 	};
 	const auto state = widget->lifetime().make_state<State>();
+	const auto invalidateAnimationDamage = [=] {
+		if (state->animationDamageKnown) {
+			state->staleAnimationDamage += state->animationDamage;
+		} else if (state->animationFallbackKnown) {
+			state->staleAnimationDamage += state->animationFallback;
+		}
+		state->animationDamage = QRegion();
+		state->animationFallback = QRegion();
+		state->animationDamageKnown = false;
+		state->animationFallbackKnown = false;
+	};
+	const auto scheduleAnimationRepaint = [=](QRegion damage) {
+		if (state->animationRepaintScheduled) {
+			return;
+		}
+		damage &= QRegion(widget->rect());
+		if (!damage.isEmpty()) {
+			state->animationRepaintScheduled = true;
+			widget->update(damage);
+		}
+	};
+	const auto requestAnimationRepaint = [=] {
+		const auto fallback = state->animationFallbackKnown
+			? state->animationFallback
+			: QRegion(widget->rect());
+		const auto damage = state->animationDamageKnown
+			? state->animationDamage
+			: state->staleAnimationDamage.united(fallback);
+		scheduleAnimationRepaint(damage);
+	};
+	const auto trackAnimationDamage = [=](
+			AnimationDamage damage,
+			const QRegion &repaintRegion) {
+		const auto widgetRegion = QRegion(widget->rect());
+		state->staleAnimationDamage &= widgetRegion;
+		damage.painted &= widgetRegion;
+		damage.fallback &= widgetRegion;
+		damage.fallback += damage.painted;
+		const auto repainted = repaintRegion.intersected(widgetRegion);
+		state->animationFallback = damage.complete
+			? damage.fallback
+			: widgetRegion;
+		state->animationFallbackKnown = true;
+		if (!damage.complete) {
+			if (state->animationDamageKnown) {
+				state->staleAnimationDamage = state->animationDamage;
+			}
+			state->animationDamage = QRegion();
+			state->animationDamageKnown = false;
+			return;
+		}
+		if (!state->animationDamageKnown) {
+			const auto required = state->staleAnimationDamage.united(
+				state->animationFallback);
+			if (!required.subtracted(repainted).isEmpty()) {
+				scheduleAnimationRepaint(required);
+				return;
+			}
+			state->animationDamage = damage.painted;
+			state->staleAnimationDamage = QRegion();
+			state->animationDamageKnown = true;
+			return;
+		}
+		const auto combined = state->animationDamage.united(damage.painted);
+		if (!combined.subtracted(repainted).isEmpty()) {
+			state->animationDamage = combined;
+			scheduleAnimationRepaint(combined);
+			return;
+		}
+		state->animationDamage = damage.painted;
+		state->staleAnimationDamage = QRegion();
+	};
+	widget->sizeValue() | rpl::on_next([=](const QSize &size) {
+		if (state->animationSize != size) {
+			invalidateAnimationDamage();
+			state->animationSize = size;
+		}
+	}, widget->lifetime());
 	const auto &titleSt = st::semiboldTextStyle;
 	const auto &contentTitleSt = st::semiboldTextStyle;
 	const auto &contentTextSt = st::defaultTextStyle;
@@ -206,7 +301,7 @@ void FillSponsoredMessageBar(
 		kMarkupTextOptions,
 		Core::TextContext({
 			.session = session,
-			.repaint = [=] { widget->update(); },
+			.repaint = requestAnimationRepaint,
 		}));
 	const auto hostedClick = [=](ClickHandlerPtr handler) {
 		return [=] {
@@ -274,6 +369,8 @@ void FillSponsoredMessageBar(
 	badgeButton->show();
 
 	const auto draw = [=](QPainter &p) {
+		auto result = AnimationDamage();
+		const auto canonical = (p.device() == widget);
 		const auto r = widget->rect();
 		p.fillRect(r, st::historyPinnedBg);
 		widget->paintRipple(p, 0, 0);
@@ -337,6 +434,7 @@ void FillSponsoredMessageBar(
 					+ contentTitleSt.font->height)
 				: topPadding + titleSt.font->height;
 			auto lastContentLineAmount = 0;
+			auto paintedBounds = Ui::Text::CustomEmojiPaintedBounds();
 			const auto lineHeight = contentTextSt.font->height;
 			const auto lineLayout = [&](int line) -> Ui::Text::LineGeometry {
 				line++;
@@ -368,9 +466,37 @@ void FillSponsoredMessageBar(
 				},
 				.pausedEmoji = On(PowerSaving::kEmojiChat) || paused(),
 				.pausedSpoiler = On(PowerSaving::kChatSpoiler) || paused(),
+				.customEmojiPaintedBounds = canonical
+					? &paintedBounds
+					: nullptr,
 			});
 			state->lastPaintedContentTop = top;
 			state->lastPaintedContentLineAmount = lastContentLineAmount;
+			if (canonical
+				&& (state->contentText.hasCustomEmoji()
+					|| state->contentText.hasSpoilers())) {
+				state->contentTextPaintedBounds = paintedBounds;
+				const auto mapRect = [&](QRectF rect) {
+					return p.transform().mapRect(rect).toAlignedRect();
+				};
+				const auto fallback = mapRect(QRectF(
+					left,
+					top,
+					std::max(availableWidthNoPhoto, 0),
+					std::max(r.y() + r.height() - top, 0)));
+				result.fallback += fallback;
+				if (state->contentText.hasCustomEmoji()) {
+					if (state->contentTextPaintedBounds.repaintRectKnown()) {
+						result.painted += mapRect(
+							state->contentTextPaintedBounds.repaintRect());
+					} else {
+						result.complete = false;
+					}
+				}
+				if (state->contentText.hasSpoilers()) {
+					result.painted += fallback;
+				}
+			}
 		}
 		if (hasRightPhoto) {
 			p.drawImage(
@@ -378,10 +504,21 @@ void FillSponsoredMessageBar(
 				topPadding + (rightPhotoPlaceholder - rightPhotoSize) / 2,
 				state->rightPhotoImage);
 		}
+		return result;
 	};
-	widget->paintRequest() | rpl::on_next([=] {
+	widget->events(
+	) | rpl::filter([](not_null<QEvent*> event) {
+		return event->type() == QEvent::Paint;
+	}) | rpl::on_next([=](not_null<QEvent*> event) {
 		auto p = QPainter(widget);
-		draw(p);
+		const auto damage = draw(p);
+		if (p.device() != widget) {
+			return;
+		}
+		state->animationRepaintScheduled = false;
+		trackAnimationDamage(
+			damage,
+			static_cast<QPaintEvent*>(event.get())->region());
 	}, widget->lifetime());
 	rpl::combine(
 		state->lastPaintedContentTop.value(),
