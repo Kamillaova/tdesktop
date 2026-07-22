@@ -728,10 +728,6 @@ void TopPeersStrip::repaintUserpic(uint64 id) {
 		_strip.update();
 		return;
 	}
-	if (_expanded.current()) {
-		_strip.update(0, rowTop, _strip.width(), st::topPeers.height);
-		return;
-	}
 	if (i->userpicRect.intersects(_strip.rect())) {
 		_strip.update(i->userpicRect);
 	}
@@ -751,14 +747,6 @@ void TopPeersStrip::repaintRipple(uint64 id) {
 	} else if (i->rippleRect.isEmpty()
 		|| i->rippleRect.y() != rowTop + innerRounded().y()) {
 		Ui::LogUnknownGeometryRepaint("top peers ripple");
-		_strip.update();
-		return;
-	}
-	if (_expanded.current()) {
-		_strip.update(0, rowTop, _strip.width(), st::topPeers.height);
-		return;
-	}
-	if (style::RightToLeft()) {
 		_strip.update();
 		return;
 	}
