@@ -55,6 +55,14 @@ public:
 		Painter &p,
 		const PaintContext &context,
 		const QRect &geometry) = 0;
+	virtual void transferUpdated(
+		not_null<const HistoryItem*>,
+		not_null<const PhotoData*>) {
+	}
+	virtual void transferUpdated(
+		not_null<const HistoryItem*>,
+		not_null<const DocumentData*>) {
+	}
 	[[nodiscard]] virtual ClickHandlerPtr createViewLink() = 0;
 	[[nodiscard]] virtual ClickHandlerPtr authorLink() {
 		return nullptr;
@@ -82,6 +90,12 @@ public:
 	QSize countCurrentSize(int newWidth) override;
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	[[nodiscard]] bool toggleSelectionByHandlerClick(

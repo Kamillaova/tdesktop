@@ -273,7 +273,9 @@ void ListWidget::subscribeToSession(
 		itemRemoved(item);
 	}, lifetime);
 
-	session->data().itemRepaintRequest(
+	rpl::merge(
+		session->data().itemRepaintRequest(),
+		session->data().itemTransferRepaintRequest()
 	) | rpl::on_next([this](auto item) {
 		repaintItem(item);
 	}, lifetime);

@@ -7,9 +7,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "iv/markdown/iv_markdown_history_view_media.h"
 
-#include "iv/markdown/iv_markdown_article.h"
-#include "base/unixtime.h"
+#include "base/algorithm.h"
 #include "base/flat_set.h"
+#include "base/unixtime.h"
+#include "iv/markdown/iv_markdown_article.h"
 #include "iv/markdown/iv_markdown_media_block.h"
 #include "iv/markdown/iv_markdown_slideshow_chrome.h"
 
@@ -286,6 +287,7 @@ public:
 	[[nodiscard]] uint64 stableId() const override;
 
 	[[nodiscard]] bool supported() const;
+	void registerMedia();
 
 	[[nodiscard]] int resizeGetHeight(int width) override;
 
@@ -353,12 +355,14 @@ private:
 	const bool _spoiler = false;
 	const bool _editMode = false;
 	const std::shared_ptr<IvHistoryViewMediaHost> _host;
-	const std::vector<std::shared_ptr<void>> _keepAlive;
+	std::vector<std::shared_ptr<void>> _keepAlive;
 	std::unique_ptr<HistoryView::Media> _media;
+	std::shared_ptr<void> _itemDeathHandler;
 	QRect _geometry;
 	int _requestedWidth = 0;
 	bool _supported = false;
 	MediaBlockHost *_registeredBridgeHost = nullptr;
+
 };
 
 IvHistoryViewBlock::IvHistoryViewBlock(
@@ -384,8 +388,34 @@ IvHistoryViewBlock::IvHistoryViewBlock(
 		_media->initDimensions();
 	}
 	_supported = _media && probeSupport();
-	if (_supported && _kind == IvHistoryViewMediaKind::Audio) {
-		_host->registerPlaybackMedia(not_null{ _media.get() });
+}
+
+void IvHistoryViewBlock::registerMedia() {
+	Expects(_supported);
+
+	const auto weak = std::weak_ptr<IvHistoryViewBlock>(
+		std::static_pointer_cast<IvHistoryViewBlock>(
+			shared_from_this()));
+	_itemDeathHandler = _host->registerItemDeathHandler([weak] {
+		if (const auto strong = weak.lock()) {
+			strong->_media = nullptr;
+			strong->_keepAlive.clear();
+		}
+	});
+	const auto media = not_null{ _media.get() };
+	if (_kind != IvHistoryViewMediaKind::GroupedMedia) {
+		_host->registerMedia(media);
+		return;
+	}
+	for (const auto &entry : _groupedPhotoRuntimes) {
+		_host->registerMedia(
+			media,
+			_host->session()->photo(PhotoId(entry.first)));
+	}
+	for (const auto &entry : _groupedDocumentRuntimes) {
+		_host->registerMedia(
+			media,
+			_host->session()->document(DocumentId(entry.first)));
 	}
 }
 
@@ -735,6 +765,7 @@ public:
 	[[nodiscard]] uint64 stableId() const override;
 
 	[[nodiscard]] bool supported() const;
+	void registerMedia();
 
 	[[nodiscard]] int resizeGetHeight(int width) override;
 
@@ -795,7 +826,7 @@ private:
 	const uint64 _stableId = 0;
 	const QString _copyText;
 	const std::shared_ptr<IvHistoryViewMediaHost> _host;
-	const std::vector<std::shared_ptr<void>> _keepAlive;
+	std::vector<std::shared_ptr<void>> _keepAlive;
 	const base::flat_map<
 		uint64,
 		std::shared_ptr<PhotoRuntime>> _groupedPhotoRuntimes;
@@ -806,6 +837,7 @@ private:
 	const base::flat_set<uint64> _groupedSpoileredIds;
 	const bool _editMode = false;
 	std::vector<std::unique_ptr<HistoryView::Media>> _slides;
+	std::shared_ptr<void> _itemDeathHandler;
 	std::vector<QSize> _slideOriginalSizes;
 	QRect _geometry;
 	QRect _previousRect;
@@ -846,6 +878,33 @@ IvHistoryViewSlideshowBlock::IvHistoryViewSlideshowBlock(
 		return;
 	}
 	_supported = probeSupport();
+}
+
+void IvHistoryViewSlideshowBlock::registerMedia() {
+	Expects(_supported);
+
+	const auto weak = std::weak_ptr<IvHistoryViewSlideshowBlock>(
+		std::static_pointer_cast<IvHistoryViewSlideshowBlock>(
+			shared_from_this()));
+	_itemDeathHandler = _host->registerItemDeathHandler([weak] {
+		if (const auto strong = weak.lock()) {
+			strong->_slides.clear();
+			strong->_keepAlive.clear();
+		}
+	});
+	for (auto i = 0, count = int(_slides.size()); i != count; ++i) {
+		const auto media = not_null{ _slides[i].get() };
+		const auto active = [weak, i] {
+			const auto strong = weak.lock();
+			return strong && strong->_activeIndex == i;
+		};
+		if (const auto photo = media->getPhoto()) {
+			_host->registerMedia(media, not_null{ photo }, active);
+		}
+		if (const auto document = media->getDocument()) {
+			_host->registerMedia(media, not_null{ document }, active);
+		}
+	}
 }
 
 IvHistoryViewSlideshowBlock::~IvHistoryViewSlideshowBlock() {
@@ -1246,6 +1305,10 @@ void IvHistoryViewSlideshowBlock::hostUpdated() {
 } // namespace
 
 struct IvHistoryViewMediaHost::State {
+	struct ItemDeathHandler {
+		Fn<void()> callback;
+	};
+
 	State(
 		not_null<Window::SessionController*> controller,
 		not_null<History*> history,
@@ -1273,6 +1336,7 @@ struct IvHistoryViewMediaHost::State {
 	bool itemDead = false;
 	bool itemTornDown = false;
 	rpl::lifetime itemDeathLifetime;
+	std::vector<std::weak_ptr<ItemDeathHandler>> itemDeathHandlers;
 };
 
 IvHistoryViewMediaHost::State::State(
@@ -1296,7 +1360,7 @@ IvHistoryViewMediaHost::State::State(
 	static_cast<HistoryView::Message*>(view)->setInstantViewMediaRuntime(
 		this->pageUrl);
 	static_cast<HistoryView::Message*>(view)
-		->suppressBackingMediaForHostedPlayback();
+		->suppressBackingMediaForHostedMedia();
 	watchItemLifetime();
 }
 
@@ -1319,7 +1383,7 @@ IvHistoryViewMediaHost::State::State(
 	static_cast<HistoryView::Message*>(view)->setInstantViewMediaRuntime(
 		this->pageUrl);
 	static_cast<HistoryView::Message*>(view)
-		->suppressBackingMediaForHostedPlayback();
+		->suppressBackingMediaForHostedMedia();
 	watchItemLifetime();
 }
 
@@ -1349,6 +1413,14 @@ void IvHistoryViewMediaHost::State::handleItemDeath() {
 	itemDead = true;
 	itemDeathLifetime.destroy();
 	bridgeLifetime.destroy();
+	for (const auto &weak : itemDeathHandlers) {
+		if (const auto handler = weak.lock()) {
+			if (const auto callback = base::take(handler->callback)) {
+				callback();
+			}
+		}
+	}
+	itemDeathHandlers.clear();
 	view = nullptr;
 	realView = nullptr;
 	owned = {};
@@ -1401,6 +1473,25 @@ bool IvHistoryViewMediaHost::needsViewRequestBridge() const {
 	return _state->needsViewRequestBridge;
 }
 
+std::shared_ptr<void> IvHistoryViewMediaHost::registerItemDeathHandler(
+		Fn<void()> callback) const {
+	Expects(callback != nullptr);
+	Expects(!_state->itemDead);
+
+	const auto result = std::make_shared<State::ItemDeathHandler>();
+	result->callback = std::move(callback);
+	auto &registered = _state->itemDeathHandlers;
+	for (auto i = begin(registered); i != end(registered);) {
+		if (i->expired()) {
+			i = registered.erase(i);
+		} else {
+			++i;
+		}
+	}
+	registered.push_back(result);
+	return result;
+}
+
 void IvHistoryViewMediaHost::registerViewRequestBridge(MediaBlockHost *host) {
 	if (!host || !_state->needsViewRequestBridge) {
 		return;
@@ -1449,11 +1540,31 @@ void IvHistoryViewMediaHost::unregisterViewRequestBridge(MediaBlockHost *host) {
 	_state->bridgeLifetime.destroy();
 }
 
-void IvHistoryViewMediaHost::registerPlaybackMedia(
+void IvHistoryViewMediaHost::registerMedia(
 		not_null<HistoryView::Media*> media) const {
 	if (_state->view) {
 		static_cast<HistoryView::Message*>(_state->view)
-			->registerHostedMediaPlayback(media);
+			->registerHostedMedia(media);
+	}
+}
+
+void IvHistoryViewMediaHost::registerMedia(
+		not_null<HistoryView::Media*> media,
+		not_null<const PhotoData*> photo,
+		Fn<bool()> active) const {
+	if (_state->view) {
+		static_cast<HistoryView::Message*>(_state->view)
+			->registerHostedMedia(media, photo, std::move(active));
+	}
+}
+
+void IvHistoryViewMediaHost::registerMedia(
+		not_null<HistoryView::Media*> media,
+		not_null<const DocumentData*> document,
+		Fn<bool()> active) const {
+	if (_state->view) {
+		static_cast<HistoryView::Message*>(_state->view)
+			->registerHostedMedia(media, document, std::move(active));
 	}
 }
 
@@ -1519,11 +1630,19 @@ std::shared_ptr<MediaBlock> CreateIvHistoryViewMediaBlock(
 	if (descriptor.kind == IvHistoryViewMediaKind::Slideshow) {
 		const auto block = std::make_shared<IvHistoryViewSlideshowBlock>(
 			std::move(descriptor));
-		return block->supported() ? block : nullptr;
+		if (!block->supported()) {
+			return nullptr;
+		}
+		block->registerMedia();
+		return block;
 	}
 	const auto block = std::make_shared<IvHistoryViewBlock>(
 		std::move(descriptor));
-	return block->supported() ? block : nullptr;
+	if (!block->supported()) {
+		return nullptr;
+	}
+	block->registerMedia();
+	return block;
 }
 
 } // namespace Iv::Markdown

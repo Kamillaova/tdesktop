@@ -2671,6 +2671,15 @@ bool Gif::playbackUpdated(
 	return true;
 }
 
+void Gif::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_realParent != item || _data != document.get()) {
+		return;
+	}
+	repaintTransferProgress();
+}
+
 void Gif::repaintStreamedContent(bool force) const {
 	const auto own = activeOwnStreamed();
 	if (!force && own && !own->frozenFrame.isNull()) {

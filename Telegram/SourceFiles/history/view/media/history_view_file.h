@@ -68,6 +68,7 @@ protected:
 
 	void radialAnimationCallback(crl::time now) const;
 	void repaintRadialAnimation() const;
+	void repaintTransferProgress() const;
 	void recordRadialAnimationRepaintRect(
 		const Painter &p,
 		const PaintContext &context,

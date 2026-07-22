@@ -20,6 +20,8 @@ namespace HistoryView {
 
 class UserpicSuggestion final : public ServiceBoxContent {
 public:
+	using ServiceBoxContent::transferUpdated;
+
 	UserpicSuggestion(
 		not_null<Element*> parent,
 		not_null<PeerData*> chat,
@@ -36,6 +38,9 @@ public:
 		Painter &p,
 		const PaintContext &context,
 		const QRect &geometry) override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) override;
 	ClickHandlerPtr createViewLink() override;
 
 	bool hideServiceText() override {

@@ -411,6 +411,12 @@ public:
 	void requestItemPlaybackRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);
+	void requestItemTransferRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo);
+	void requestItemTransferRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document);
 	void requestItemPlaybackViewRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);
@@ -418,6 +424,8 @@ public:
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);
 	[[nodiscard]] auto itemPlaybackFrameRepaintRequest() const
+	-> rpl::producer<not_null<const HistoryItem*>>;
+	[[nodiscard]] auto itemTransferRepaintRequest() const
 	-> rpl::producer<not_null<const HistoryItem*>>;
 	[[nodiscard]] rpl::producer<not_null<const HistoryItem*>> itemRepaintRequest() const;
 	void requestDrawToReply(DrawToReplyRequest request);
@@ -1169,6 +1177,10 @@ private:
 	void enumerateItemViews(
 		not_null<const HistoryItem*> item,
 		Method method);
+	template <typename MediaData>
+	void requestItemTransferViewRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const MediaData*> data);
 	void insertCheckedServiceNotification(
 		const TextWithEntities &message,
 		const MTPMessageMedia &media,
@@ -1217,6 +1229,8 @@ private:
 	rpl::event_stream<not_null<const HistoryItem*>> _itemRepaintRequest;
 	rpl::event_stream<not_null<const HistoryItem*>>
 		_itemPlaybackFrameRepaintRequest;
+	rpl::event_stream<not_null<const HistoryItem*>>
+		_itemTransferRepaintRequest;
 	rpl::event_stream<RequestViewRepaint> _viewRepaintRequest;
 	rpl::event_stream<not_null<const HistoryItem*>> _itemResizeRequest;
 	rpl::event_stream<not_null<ViewElement*>> _viewResizeRequest;

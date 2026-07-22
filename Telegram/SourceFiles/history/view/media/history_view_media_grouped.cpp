@@ -294,6 +294,26 @@ bool GroupedMedia::playbackUpdated(
 	return handled;
 }
 
+void GroupedMedia::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	for (const auto &part : _parts) {
+		if (part.item == item) {
+			part.content->transferUpdated(item, photo);
+		}
+	}
+}
+
+void GroupedMedia::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	for (const auto &part : _parts) {
+		if (part.item == item) {
+			part.content->transferUpdated(item, document);
+		}
+	}
+}
+
 Ui::BubbleRounding GroupedMedia::applyRoundingSides(
 		Ui::BubbleRounding already,
 		RectParts sides) const {

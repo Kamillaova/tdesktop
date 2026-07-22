@@ -31,6 +31,8 @@ class Document final
 	: public File
 	, public RuntimeComposer<Document> {
 public:
+	using Media::transferUpdated;
+
 	Document(
 		not_null<Element*> parent,
 		not_null<HistoryItem*> realParent,
@@ -45,6 +47,9 @@ public:
 	[[nodiscard]] bool playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 	void updatePressed(QPoint point) override;
 

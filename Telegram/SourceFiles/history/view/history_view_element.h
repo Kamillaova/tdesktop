@@ -15,10 +15,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtGui/QRegion>
 
+class DocumentData;
 class History;
 class HistoryBlock;
 class HistoryItem;
-class DocumentData;
+class PhotoData;
 class QPaintDevice;
 class QPainter;
 class QWidget;
@@ -780,6 +781,12 @@ public:
 	virtual void playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const;
+	virtual void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const;
+	virtual void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const;
 
 	virtual void unloadHeavyPart();
 	void checkHeavyPart();

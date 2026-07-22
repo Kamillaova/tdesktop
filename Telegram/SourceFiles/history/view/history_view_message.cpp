@@ -6188,10 +6188,68 @@ WebPage *Message::factcheckBlock() const {
 	return nullptr;
 }
 
+namespace {
+
+template <typename MediaData>
+void RegisterHostedMedia(
+		base::flat_map<
+			const MediaData*,
+			std::vector<HostedMediaEntry>> &mediaByData,
+		not_null<Media*> media,
+		const MediaData *data,
+		Fn<bool()> active) {
+	auto &list = mediaByData[data];
+	for (auto i = begin(list); i != end(list);) {
+		const auto existing = i->media.get();
+		if (!existing) {
+			i = list.erase(i);
+		} else if (existing == media.get()) {
+			i->active = std::move(active);
+			return;
+		} else {
+			++i;
+		}
+	}
+	list.push_back({
+		.media = base::make_weak(media.get()),
+		.active = std::move(active),
+	});
+}
+
+template <typename MediaData, typename Callback>
+void DispatchHostedMedia(
+		base::flat_map<
+			const MediaData*,
+			std::vector<HostedMediaEntry>> &mediaByData,
+		const MediaData *data,
+		Callback callback) {
+	const auto found = mediaByData.find(data);
+	if (found == end(mediaByData)) {
+		return;
+	}
+	auto &list = found->second;
+	for (auto i = begin(list); i != end(list);) {
+		const auto media = i->media.get();
+		if (!media) {
+			i = list.erase(i);
+		} else {
+			if (!i->active || i->active()) {
+				callback(not_null{ media });
+			}
+			++i;
+		}
+	}
+	if (list.empty()) {
+		mediaByData.erase(found);
+	}
+}
+
+} // namespace
+
 void Message::playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const {
-	const auto hosted = Get<HostedMediaPlayback>();
+	const auto hosted = Get<HostedMediaUpdates>();
 	if (!hosted || !hosted->suppressBackingMedia) {
 		Element::playbackUpdated(item, document);
 		if (const auto page = logEntryOriginal()) {
@@ -6201,44 +6259,100 @@ void Message::playbackUpdated(
 			static_cast<void>(page->playbackUpdated(item, document));
 		}
 	}
-	if (!hosted) {
-		return;
+	if (hosted) {
+		DispatchHostedMedia(
+			hosted->mediaByDocument,
+			document.get(),
+			[&](not_null<Media*> media) {
+				static_cast<void>(media->playbackUpdated(item, document));
+			});
 	}
-	const auto i = hosted->mediaByDocument.find(document.get());
-	if (i == end(hosted->mediaByDocument)) {
-		return;
-	}
-	for (const auto &weak : i->second) {
-		if (const auto media = weak.get()) {
-			static_cast<void>(media->playbackUpdated(item, document));
+}
+
+void Message::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	const auto hosted = Get<HostedMediaUpdates>();
+	if (!hosted || !hosted->suppressBackingMedia) {
+		Element::transferUpdated(item, photo);
+		if (const auto page = logEntryOriginal()) {
+			page->transferUpdated(item, photo);
+		}
+		if (const auto page = factcheckBlock()) {
+			page->transferUpdated(item, photo);
 		}
 	}
-}
-
-void Message::suppressBackingMediaForHostedPlayback() {
-	AddComponents(HostedMediaPlayback::Bit());
-	Get<HostedMediaPlayback>()->suppressBackingMedia = true;
-}
-
-void Message::registerHostedMediaPlayback(not_null<Media*> media) {
-	const auto document = media->getDocument();
-	if (!document) {
-		return;
+	if (hosted) {
+		DispatchHostedMedia(
+			hosted->mediaByPhoto,
+			photo.get(),
+			[&](not_null<Media*> media) {
+				media->transferUpdated(item, photo);
+			});
 	}
-	const auto hosted = Get<HostedMediaPlayback>();
+}
+
+void Message::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	const auto hosted = Get<HostedMediaUpdates>();
+	if (!hosted || !hosted->suppressBackingMedia) {
+		Element::transferUpdated(item, document);
+		if (const auto page = logEntryOriginal()) {
+			page->transferUpdated(item, document);
+		}
+		if (const auto page = factcheckBlock()) {
+			page->transferUpdated(item, document);
+		}
+	}
+	if (hosted) {
+		DispatchHostedMedia(
+			hosted->mediaByDocument,
+			document.get(),
+			[&](not_null<Media*> media) {
+				media->transferUpdated(item, document);
+			});
+	}
+}
+
+void Message::suppressBackingMediaForHostedMedia() {
+	AddComponents(HostedMediaUpdates::Bit());
+	Get<HostedMediaUpdates>()->suppressBackingMedia = true;
+}
+
+void Message::registerHostedMedia(not_null<Media*> media) {
+	if (const auto photo = media->getPhoto()) {
+		registerHostedMedia(media, not_null{ photo });
+	}
+	if (const auto document = media->getDocument()) {
+		registerHostedMedia(media, not_null{ document });
+	}
+}
+
+void Message::registerHostedMedia(
+		not_null<Media*> media,
+		not_null<const PhotoData*> photo,
+		Fn<bool()> active) {
+	const auto hosted = Get<HostedMediaUpdates>();
 	Expects(hosted != nullptr);
-	auto &list = hosted->mediaByDocument[document];
-	for (auto i = begin(list); i != end(list);) {
-		const auto existing = i->get();
-		if (!existing) {
-			i = list.erase(i);
-		} else if (existing == media.get()) {
-			return;
-		} else {
-			++i;
-		}
-	}
-	list.push_back(base::make_weak(media.get()));
+	RegisterHostedMedia(
+		hosted->mediaByPhoto,
+		media,
+		photo.get(),
+		std::move(active));
+}
+
+void Message::registerHostedMedia(
+		not_null<Media*> media,
+		not_null<const DocumentData*> document,
+		Fn<bool()> active) {
+	const auto hosted = Get<HostedMediaUpdates>();
+	Expects(hosted != nullptr);
+	RegisterHostedMedia(
+		hosted->mediaByDocument,
+		media,
+		document.get(),
+		std::move(active));
 }
 
 bool Message::toggleSelectionByHandlerClick(

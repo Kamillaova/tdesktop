@@ -455,6 +455,18 @@ void ServiceBox::draw(Painter &p, const PaintContext &context) const {
 	p.translate(0, -st::msgServiceGiftBoxTopSkip);
 }
 
+void ServiceBox::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	_content->transferUpdated(item, photo);
+}
+
+void ServiceBox::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	_content->transferUpdated(item, document);
+}
+
 TextState ServiceBox::textState(QPoint point, StateRequest request) const {
 	auto result = TextState(_parent);
 	point.setY(point.y() - st::msgServiceGiftBoxTopSkip);

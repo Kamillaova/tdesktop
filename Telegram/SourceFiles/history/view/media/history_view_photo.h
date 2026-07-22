@@ -29,6 +29,8 @@ namespace HistoryView {
 
 class Photo final : public File {
 public:
+	using Media::transferUpdated;
+
 	Photo(
 		not_null<Element*> parent,
 		not_null<HistoryItem*> realParent,
@@ -46,6 +48,9 @@ public:
 	}
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	PhotoData *getPhoto() const override {

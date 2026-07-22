@@ -127,6 +127,11 @@ void File::repaintRadialAnimation() const {
 	}
 }
 
+void File::repaintTransferProgress() const {
+	ensureAnimation();
+	repaintRadialAnimation();
+}
+
 void File::recordRadialAnimationRepaintRect(
 		const Painter &p,
 		const PaintContext &context,

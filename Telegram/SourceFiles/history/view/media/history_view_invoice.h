@@ -25,6 +25,12 @@ public:
 	[[nodiscard]] bool playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const override;
 
 	MsgId getReceiptMsgId() const {
 		return _receiptMsgId;

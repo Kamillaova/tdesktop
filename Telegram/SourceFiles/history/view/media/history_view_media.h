@@ -11,7 +11,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/message_bubble.h"
 #include "ui/rect_part.h"
 
+class DocumentData;
 class History;
+class PhotoData;
 struct HistoryMessageEdited;
 struct TextSelection;
 
@@ -391,6 +393,14 @@ public:
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const {
 		return false;
+	}
+	virtual void transferUpdated(
+		not_null<const HistoryItem*>,
+		not_null<const PhotoData*>) const {
+	}
+	virtual void transferUpdated(
+		not_null<const HistoryItem*>,
+		not_null<const DocumentData*>) const {
 	}
 	virtual void paintBubbleFireworks(
 		Painter &p,

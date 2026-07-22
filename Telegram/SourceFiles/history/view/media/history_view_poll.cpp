@@ -1597,6 +1597,12 @@ struct Poll::Header : public Poll::Part {
 	[[nodiscard]] bool playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const;
 	bool hasHeavyPart() const override;
 	void unloadHeavyPart() override;
 	uint16 selectionLength() const override;
@@ -1714,6 +1720,28 @@ bool Poll::Header::playbackUpdated(
 		handled = true;
 	}
 	return handled;
+}
+
+void Poll::Header::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	if (_attachedMediaAttach) {
+		_attachedMediaAttach->transferUpdated(item, photo);
+	}
+	if (_solutionShown && _solutionAttach) {
+		_solutionAttach->transferUpdated(item, photo);
+	}
+}
+
+void Poll::Header::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_attachedMediaAttach) {
+		_attachedMediaAttach->transferUpdated(item, document);
+	}
+	if (_solutionShown && _solutionAttach) {
+		_solutionAttach->transferUpdated(item, document);
+	}
 }
 
 void Poll::Header::draw(
@@ -2665,6 +2693,18 @@ bool Poll::playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const {
 	return _headerPart->playbackUpdated(item, document);
+}
+
+void Poll::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	_headerPart->transferUpdated(item, photo);
+}
+
+void Poll::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	_headerPart->transferUpdated(item, document);
 }
 
 void Poll::recordRepaintGeometry(

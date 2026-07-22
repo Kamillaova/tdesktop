@@ -58,9 +58,19 @@ public:
 	[[nodiscard]] not_null<HistoryView::Element*> view() const;
 	[[nodiscard]] const QString &pageUrl() const;
 	[[nodiscard]] bool needsViewRequestBridge() const;
+	[[nodiscard]] std::shared_ptr<void> registerItemDeathHandler(
+		Fn<void()> handler) const;
 	void registerViewRequestBridge(MediaBlockHost *host);
 	void unregisterViewRequestBridge(MediaBlockHost *host);
-	void registerPlaybackMedia(not_null<HistoryView::Media*> media) const;
+	void registerMedia(not_null<HistoryView::Media*> media) const;
+	void registerMedia(
+		not_null<HistoryView::Media*> media,
+		not_null<const PhotoData*> photo,
+		Fn<bool()> active = {}) const;
+	void registerMedia(
+		not_null<HistoryView::Media*> media,
+		not_null<const DocumentData*> document,
+		Fn<bool()> active = {}) const;
 
 	void registerPhoto(not_null<PhotoData*> photo) const;
 	void registerDocument(not_null<DocumentData*> document) const;

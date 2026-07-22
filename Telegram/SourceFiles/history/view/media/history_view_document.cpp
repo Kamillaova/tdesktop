@@ -791,6 +791,15 @@ bool Document::playbackUpdated(
 	return true;
 }
 
+void Document::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_realParent != item || _data != document.get()) {
+		return;
+	}
+	repaintTransferProgress();
+}
+
 QRect Document::draw(
 		Painter &p,
 		const PaintContext &context,

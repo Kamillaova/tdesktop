@@ -258,6 +258,12 @@ void UserpicSuggestion::draw(
 	p.translate(-geometry.topLeft());
 }
 
+void UserpicSuggestion::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) {
+	_photo.transferUpdated(item, photo);
+}
+
 void UserpicSuggestion::stickerClearLoopPlayed() {
 }
 

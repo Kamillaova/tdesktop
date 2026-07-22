@@ -277,7 +277,12 @@ void Uploader::sendProgressUpdate(
 			manager.update(history, item->topicRootId(), type, progress);
 		}
 	}
-	_api->session().data().requestItemRepaint(item);
+	const auto media = item->media();
+	if (const auto photo = media ? media->photo() : nullptr) {
+		_api->session().data().requestItemTransferRepaint(item, photo);
+	} else if (const auto document = media ? media->document() : nullptr) {
+		_api->session().data().requestItemTransferRepaint(item, document);
+	}
 }
 
 Uploader::~Uploader() {

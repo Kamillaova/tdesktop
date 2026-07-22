@@ -136,9 +136,15 @@ ThemeDocument::ThemeDocument(
 			nullptr,
 			nullptr);
 	}
+	if (_data) {
+		_data->owner().registerDocumentItem(_data, _realParent);
+	}
 }
 
 ThemeDocument::~ThemeDocument() {
+	if (_data) {
+		_data->owner().unregisterDocumentItem(_data, _realParent);
+	}
 	if (_dataMedia) {
 		_data->owner().keepAlive(base::take(_dataMedia));
 		_parent->checkHeavyPart();
@@ -311,6 +317,15 @@ void ThemeDocument::draw(Painter &p, const PaintContext &context) const {
 			}
 		}
 	}
+}
+
+void ThemeDocument::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_realParent != item || _data != document.get()) {
+		return;
+	}
+	repaintTransferProgress();
 }
 
 void ThemeDocument::ensureDataMediaCreated() const {
@@ -597,6 +612,14 @@ void ThemeDocumentBox::draw(
 		p.translate(geometry.topLeft());
 		_preview->draw(p, context);
 		p.translate(-geometry.topLeft());
+	}
+}
+
+void ThemeDocumentBox::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) {
+	if (_preview) {
+		_preview->transferUpdated(item, document);
 	}
 }
 

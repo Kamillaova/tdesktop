@@ -25,6 +25,8 @@ namespace HistoryView {
 
 class ThemeDocument final : public File {
 public:
+	using Media::transferUpdated;
+
 	ThemeDocument(not_null<Element*> parent, DocumentData *document);
 	ThemeDocument(
 		not_null<Element*> parent,
@@ -34,6 +36,9 @@ public:
 	~ThemeDocument();
 
 	void draw(Painter &p, const PaintContext &context) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const override;
 	TextState textState(QPoint point, StateRequest request) const override;
 
 	DocumentData *getDocument() const override {
@@ -94,6 +99,8 @@ private:
 
 class ThemeDocumentBox final : public ServiceBoxContent {
 public:
+	using ServiceBoxContent::transferUpdated;
+
 	ThemeDocumentBox(
 		not_null<Element*> parent,
 		const Data::WallPaper &paper);
@@ -108,6 +115,9 @@ public:
 		Painter &p,
 		const PaintContext &context,
 		const QRect &geometry) override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) override;
 	ClickHandlerPtr createViewLink() override;
 
 	bool hideServiceText() override {

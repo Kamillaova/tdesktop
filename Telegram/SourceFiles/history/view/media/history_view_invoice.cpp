@@ -210,6 +210,22 @@ bool Invoice::playbackUpdated(
 	return _attach && _attach->playbackUpdated(item, document);
 }
 
+void Invoice::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	if (_attach) {
+		_attach->transferUpdated(item, photo);
+	}
+}
+
+void Invoice::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_attach) {
+		_attach->transferUpdated(item, document);
+	}
+}
+
 void Invoice::draw(Painter &p, const PaintContext &context) const {
 	if (width() < st::msgPadding.left() + st::msgPadding.right() + 1) return;
 	auto paintw = width();

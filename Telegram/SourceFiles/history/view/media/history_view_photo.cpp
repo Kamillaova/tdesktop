@@ -493,6 +493,15 @@ void Photo::draw(Painter &p, const PaintContext &context) const {
 	recordRadialAnimationRepaintRect(p, context, rthumb);
 }
 
+void Photo::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	if (_realParent != item || _data != photo.get()) {
+		return;
+	}
+	repaintTransferProgress();
+}
+
 void Photo::drawSpoilerTag(
 		Painter &p,
 		QRect rthumb,

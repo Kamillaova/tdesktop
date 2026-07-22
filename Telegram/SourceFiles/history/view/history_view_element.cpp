@@ -1588,6 +1588,30 @@ void Element::playbackUpdated(
 	}
 }
 
+void Element::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	if (_media) {
+		_media->transferUpdated(item, photo);
+	}
+	const auto service = Get<ServicePreMessage>();
+	if (service && service->media) {
+		service->media->transferUpdated(item, photo);
+	}
+}
+
+void Element::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_media) {
+		_media->transferUpdated(item, document);
+	}
+	const auto service = Get<ServicePreMessage>();
+	if (service && service->media) {
+		service->media->transferUpdated(item, document);
+	}
+}
+
 Context Element::context() const {
 	return _context;
 }
@@ -2320,7 +2344,7 @@ void Element::validateText() {
 			RemoveComponents(0
 				| HistoryMessageRichPage::Bit()
 				| InstantViewMediaRuntime::Bit()
-				| HostedMediaPlayback::Bit());
+				| HostedMediaUpdates::Bit());
 			invalidateTextSizeCache();
 		}
 	};
@@ -2332,11 +2356,11 @@ void Element::validateText() {
 			return;
 		}
 		if (!Has<HistoryMessageRichPage>()
-			|| !Has<HostedMediaPlayback>()) {
+			|| !Has<HostedMediaUpdates>()) {
 			AddComponents(0
 				| HistoryMessageRichPage::Bit()
 				| InstantViewMediaRuntime::Bit()
-				| HostedMediaPlayback::Bit());
+				| HostedMediaUpdates::Bit());
 		}
 		const auto runtime = Get<HistoryMessageRichPage>();
 		const auto needsBinding = (runtime->article.mediaBlockHost()
@@ -2384,6 +2408,9 @@ void Element::validateText() {
 		if (runtime->page == page && runtime->mediaRuntime) {
 			return;
 		}
+		const auto hosted = Get<HostedMediaUpdates>();
+		hosted->mediaByPhoto.clear();
+		hosted->mediaByDocument.clear();
 		const auto &layoutSt = st::messageMarkdown;
 		const auto session = &history()->session();
 		const auto richLimits = Iv::ResolveRichMessageLimits(session);

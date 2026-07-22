@@ -965,6 +965,22 @@ bool WebPage::playbackUpdated(
 	return _attach && _attach->playbackUpdated(item, document);
 }
 
+void WebPage::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const {
+	if (_attach) {
+		_attach->transferUpdated(item, photo);
+	}
+}
+
+void WebPage::transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const {
+	if (_attach) {
+		_attach->transferUpdated(item, document);
+	}
+}
+
 void WebPage::ensurePhotoMediaCreated() const {
 	Expects(_data->photo != nullptr);
 

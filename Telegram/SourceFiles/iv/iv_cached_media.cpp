@@ -1314,6 +1314,10 @@ auto CachedPageMediaRuntime::hostedMediaBlockFactory() const
 				return std::shared_ptr<Markdown::MediaBlock>();
 			}
 			host->registerPhoto(photo);
+			auto media = std::make_shared<::Data::MediaPhoto>(
+				host->item(),
+				photo,
+				prepared.spoiler);
 
 			auto descriptor = Markdown::IvHistoryViewMediaDescriptor();
 			descriptor.stableId = prepared.id.value;
@@ -1323,14 +1327,11 @@ auto CachedPageMediaRuntime::hostedMediaBlockFactory() const
 			descriptor.host = host;
 			descriptor.spoiler = prepared.spoiler;
 			descriptor.editMode = prepared.editMode;
-			descriptor.mediaFactory = [photo, spoiler = prepared.spoiler](
+			descriptor.mediaFactory = [media](
 					not_null<HistoryView::Element*> view) {
-				return std::make_unique<HistoryView::Photo>(
-					view,
-					view->data(),
-					photo,
-					spoiler);
+				return media->createView(view, view->data());
 			};
+			descriptor.keepAlive.push_back(base::take(media));
 			descriptor.photo = std::make_shared<CachedPagePhotoRuntime>(
 				session,
 				photo,

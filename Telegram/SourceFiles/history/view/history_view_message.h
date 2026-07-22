@@ -81,11 +81,19 @@ struct InstantViewMediaRuntime
 	double mediaPixelScale = 1.;
 };
 
-struct HostedMediaPlayback
-: RuntimeComponent<HostedMediaPlayback, Element> {
-	base::flat_map<
-		DocumentData*,
-		std::vector<base::weak_ptr<Media>>> mediaByDocument;
+struct HostedMediaEntry {
+	base::weak_ptr<Media> media;
+	Fn<bool()> active;
+};
+
+struct HostedMediaUpdates
+: RuntimeComponent<HostedMediaUpdates, Element> {
+	mutable base::flat_map<
+		const PhotoData*,
+		std::vector<HostedMediaEntry>> mediaByPhoto;
+	mutable base::flat_map<
+		const DocumentData*,
+		std::vector<HostedMediaEntry>> mediaByDocument;
 	bool suppressBackingMedia = false;
 };
 
@@ -300,8 +308,22 @@ public:
 	void playbackUpdated(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) const override;
-	void suppressBackingMediaForHostedPlayback();
-	void registerHostedMediaPlayback(not_null<Media*> media);
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) const override;
+	void transferUpdated(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) const override;
+	void suppressBackingMediaForHostedMedia();
+	void registerHostedMedia(not_null<Media*> media);
+	void registerHostedMedia(
+		not_null<Media*> media,
+		not_null<const PhotoData*> photo,
+		Fn<bool()> active = {});
+	void registerHostedMedia(
+		not_null<Media*> media,
+		not_null<const DocumentData*> document,
+		Fn<bool()> active = {});
 
 	VerticalRepaintRange verticalRepaintRange() const override;
 

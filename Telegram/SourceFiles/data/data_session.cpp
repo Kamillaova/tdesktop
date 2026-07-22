@@ -1910,7 +1910,12 @@ void Session::requestTodoListViewRepaint(
 }
 
 void Session::documentLoadProgress(not_null<DocumentData*> document) {
-	requestDocumentViewRepaint(document);
+	const auto i = _documentItems.find(document);
+	if (i != end(_documentItems)) {
+		for (const auto &item : i->second) {
+			requestItemTransferRepaint(item, document);
+		}
+	}
 	_documentLoadProgress.fire_copy(document);
 }
 
@@ -1927,7 +1932,12 @@ void Session::documentLoadFail(
 }
 
 void Session::photoLoadProgress(not_null<PhotoData*> photo) {
-	requestPhotoViewRepaint(photo);
+	const auto i = _photoItems.find(photo);
+	if (i != end(_photoItems)) {
+		for (const auto &item : i->second) {
+			requestItemTransferRepaint(item, photo);
+		}
+	}
 	_photoLoadProgress.fire_copy(photo);
 }
 
@@ -2139,6 +2149,43 @@ void Session::requestItemPlaybackRepaint(
 	requestItemPlaybackViewRepaint(item, document);
 }
 
+void Session::requestItemTransferRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const PhotoData*> photo) {
+	_itemTransferRepaintRequest.fire_copy(item);
+	requestItemTransferViewRepaint(item, photo);
+}
+
+void Session::requestItemTransferRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const DocumentData*> document) {
+	_itemTransferRepaintRequest.fire_copy(item);
+	requestItemTransferViewRepaint(item, document);
+}
+
+template <typename MediaData>
+void Session::requestItemTransferViewRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<const MediaData*> data) {
+	auto repaintGroupLeader = false;
+	auto repaintView = [&](not_null<ViewElement*> view) {
+		if (view->isHiddenByGroup()) {
+			repaintGroupLeader = true;
+		} else {
+			view->transferUpdated(item, data);
+		}
+	};
+	enumerateItemViews(item, repaintView);
+	if (repaintGroupLeader) {
+		if (const auto group = groups().find(item)) {
+			const auto leader = group->items.front();
+			if (leader != item) {
+				enumerateItemViews(leader, repaintView);
+			}
+		}
+	}
+}
+
 void Session::requestItemPlaybackFrameRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) {
@@ -2171,6 +2218,11 @@ void Session::requestItemPlaybackViewRepaint(
 auto Session::itemPlaybackFrameRepaintRequest() const
 -> rpl::producer<not_null<const HistoryItem*>> {
 	return _itemPlaybackFrameRepaintRequest.events();
+}
+
+auto Session::itemTransferRepaintRequest() const
+-> rpl::producer<not_null<const HistoryItem*>> {
+	return _itemTransferRepaintRequest.events();
 }
 
 rpl::producer<not_null<const HistoryItem*>> Session::itemRepaintRequest() const {
