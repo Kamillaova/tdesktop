@@ -718,7 +718,8 @@ void TopPeersStrip::repaintUserpic(uint64 id) {
 	}
 	const auto index = int(i - begin(_entries));
 	const auto layout = currentLayout();
-	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
+	const auto row = _expanded.current() ? (index / layout.inrow) : 0;
+	const auto rowTop = row * st::topPeers.height;
 	if (_expandAnimation.animating()) {
 		_strip.update();
 		return;
@@ -740,7 +741,8 @@ void TopPeersStrip::repaintRipple(uint64 id) {
 	}
 	const auto index = int(i - begin(_entries));
 	const auto layout = currentLayout();
-	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
+	const auto row = _expanded.current() ? (index / layout.inrow) : 0;
+	const auto rowTop = row * st::topPeers.height;
 	if (_expandAnimation.animating()) {
 		_strip.update();
 		return;
@@ -772,23 +774,42 @@ void TopPeersStrip::paintStrip(QRect clip) {
 		(clip.y() + clip.height() + st.height - 1) / st.height,
 		rows);
 	const auto layout = currentLayout();
+	const auto expanded = _expanded.current();
 	const auto fsingle = layout.fsingle;
 	const auto added = layout.added;
 
 	for (auto row = fromrow; row != tillrow; ++row) {
 		const auto shift = scroll + row * layout.inrow * fsingle;
-		const auto from = std::min(
+		const auto count = int(_entries.size());
+		const auto multiline = expanded || _expandAnimation.animating();
+		const auto rowFrom = multiline
+			? std::min(row * layout.inrow, count)
+			: 0;
+		const auto rowTill = multiline
+			? std::min(rowFrom + layout.inrow, count)
+			: count;
+		auto from = std::clamp(
 			int(std::floor((shift + clip.x()) / fsingle)),
-			int(_entries.size()));
-		const auto till = std::clamp(
+			rowFrom,
+			rowTill);
+		auto till = std::clamp(
 			int(std::ceil(
 				(shift + clip.x() + clip.width() + fsingle - 1) / fsingle + 1
 			)),
 			from,
-			int(_entries.size()));
+			rowTill);
+		if (style::RightToLeft() && !_expandAnimation.animating()) {
+			for (auto i = rowFrom; i != rowTill; ++i) {
+				const auto &entry = _entries[i];
+				if (entry.ripple
+					&& entry.rippleRect.intersects(clip)) {
+					from = std::min(from, i);
+					till = std::max(till, i + 1);
+				}
+			}
+		}
 
-		auto x = int(base::SafeRound(-shift + from * fsingle + added));
-		auto y = row * st.height;
+		const auto y = row * st.height;
 		const auto highlighted = (_contexted >= 0)
 			? _contexted
 			: (_pressed >= 0)
@@ -796,6 +817,8 @@ void TopPeersStrip::paintStrip(QRect clip) {
 			: _selected;
 		for (auto i = from; i != till; ++i) {
 			auto &entry = _entries[i];
+			const auto x = int(base::SafeRound(
+				-shift + i * fsingle + added));
 			const auto selected = (i == highlighted);
 			if (selected) {
 				_selection.paint(p, innerRounded().translated(x, y));
@@ -830,7 +853,6 @@ void TopPeersStrip::paintStrip(QRect clip) {
 				layout.single - 2 * st.nameLeft,
 				1,
 				style::al_top);
-			x += fsingle;
 		}
 	}
 }
