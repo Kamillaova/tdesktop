@@ -549,6 +549,7 @@ private:
 	Ui::Animations::Simple _searchSwapAnimation;
 	QPixmap _searchSwapBefore;
 	QPixmap _searchSwapAfter;
+	QRect _searchSwapRepaintRect;
 	int _searchSwapTop = 0;
 	bool _searchSwapReverse = false;
 	bool _searchSwapPartial = false;

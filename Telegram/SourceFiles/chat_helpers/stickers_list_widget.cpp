@@ -973,7 +973,18 @@ bool StickersListWidget::searchShortcutSelected() const {
 void StickersListWidget::startSearchSwapAnimation(
 		Fn<void()> change,
 		bool packToPack) {
-	if (!isVisible() || size().isEmpty()) {
+	const auto animate = isVisible() && !size().isEmpty();
+	const auto previousRepaint = base::take(_searchSwapRepaintRect);
+	if (animate && !previousRepaint.isEmpty()) {
+		update(previousRepaint);
+	}
+	_searchSwapAnimation.stop();
+	if (!animate) {
+		_searchSwapBefore = QPixmap();
+		_searchSwapAfter = QPixmap();
+		_searchSwapTop = 0;
+		_searchSwapReverse = false;
+		_searchSwapPartial = false;
 		change();
 		return;
 	}
@@ -983,20 +994,27 @@ void StickersListWidget::startSearchSwapAnimation(
 		const auto bottom = std::max(top + 1, getVisibleBottom());
 		return QRect(0, top, width(), bottom - top);
 	};
-	_searchSwapAnimation.stop();
 	const auto wasSelected = searchShortcutSelected();
-	_searchSwapBefore = Ui::GrabWidget(this, computeRect());
+	const auto beforeRect = computeRect();
+	_searchSwapBefore = Ui::GrabWidget(this, beforeRect);
 	_searchSwapTop = top;
 	_searchSwapPartial = packToPack;
 	change();
 	_searchSwapReverse = wasSelected && !searchShortcutSelected();
-	_searchSwapAfter = Ui::GrabWidget(this, computeRect());
+	const auto afterRect = computeRect();
+	_searchSwapAfter = Ui::GrabWidget(this, afterRect);
+	const auto slide = st().searchBackHeight;
+	_searchSwapRepaintRect = beforeRect
+		.united(afterRect)
+		.adjusted(0, -slide, 0, slide)
+		.intersected(rect());
 	_searchSwapAnimation.start(
 		[=, this] {
-			update();
+			update(_searchSwapRepaintRect);
 			if (!_searchSwapAnimation.animating()) {
 				_searchSwapBefore = QPixmap();
 				_searchSwapAfter = QPixmap();
+				_searchSwapRepaintRect = QRect();
 			}
 		},
 		0.,

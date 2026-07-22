@@ -95,6 +95,7 @@ private:
 	void setupPreview(const Set &set);
 	void setupAnimation();
 	void paintPreview(QPainter &p) const;
+	[[nodiscard]] QRectF radioGeometry() const;
 	void paintRadio(QPainter &p);
 	void setupHandler();
 	void load();
@@ -256,6 +257,22 @@ void Row::paintPreview(QPainter &p) const {
 	}
 }
 
+QRectF Row::radioGeometry() const {
+	const auto &radio = st::defaultRadio;
+	const auto left = width()
+		- st::manageEmojiMarginRight
+		- radio.diameter
+		- radio.thickness;
+	const auto top = (height() - radio.diameter - radio.thickness) / 2;
+	return style::rtlrect(
+		QRectF(
+			left,
+			top,
+			radio.diameter,
+			radio.diameter),
+		width());
+}
+
 void Row::paintRadio(QPainter &p) {
 	if (_loading && !_loading->animating()) {
 		_loading = nullptr;
@@ -271,29 +288,18 @@ void Row::paintRadio(QPainter &p) {
 
 	PainterHighQualityEnabler hq(p);
 
-	const auto left = width()
-		- st::manageEmojiMarginRight
-		- _st->diameter
-		- _st->thickness;
-	const auto top = (height() - _st->diameter - _st->thickness) / 2;
-	const auto outerWidth = width();
-
 	auto pen = anim::pen(_st->untoggledFg, _st->toggledFg, active);
 	pen.setWidth(_st->thickness);
 	pen.setCapStyle(Qt::RoundCap);
 	p.setPen(pen);
 	p.setBrush(_st->bg);
-	const auto rect = style::rtlrect(QRectF(
-		left,
-		top,
-		_st->diameter,
-		_st->diameter
-	).marginsRemoved(QMarginsF(
+	const auto geometry = radioGeometry();
+	const auto rect = geometry.marginsRemoved(QMarginsF(
 		_st->thickness / 2.,
 		_st->thickness / 2.,
 		_st->thickness / 2.,
 		_st->thickness / 2.
-	)), outerWidth);
+	));
 	if (loading.shown > 0 && anim::Disabled()) {
 		anim::DrawStaticLoading(
 			p,
@@ -314,17 +320,12 @@ void Row::paintRadio(QPainter &p) {
 		const auto skip0 = _st->diameter / 2.;
 		const auto skip1 = _st->skip / 10.;
 		const auto checkSkip = skip0 * (1. - toggled) + skip1 * toggled;
-		p.drawEllipse(style::rtlrect(QRectF(
-			left,
-			top,
-			_st->diameter,
-			_st->diameter
-		).marginsRemoved(QMarginsF(
+		p.drawEllipse(geometry.marginsRemoved(QMarginsF(
 			checkSkip,
 			checkSkip,
 			checkSkip,
 			checkSkip
-		)), outerWidth));
+		)));
 	}
 }
 
@@ -479,7 +480,7 @@ void Row::radialAnimationCallback(crl::time now) {
 		return false;
 	}();
 	if (!anim::Disabled() || updated) {
-		update();
+		update(radioGeometry().toAlignedRect());
 	}
 }
 
@@ -497,7 +498,10 @@ void Row::setupAnimation() {
 	) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](bool toggled) {
 		_toggled.start(
-			[=] { updateStatusColorOverride(); update(); },
+			[=] {
+				updateStatusColorOverride();
+				update(radioGeometry().toAlignedRect());
+			},
 			toggled ? 0. : 1.,
 			toggled ? 1. : 0.,
 			st::defaultRadio.duration);
@@ -509,7 +513,7 @@ void Row::setupAnimation() {
 	}) | rpl::distinct_until_changed(
 	) | rpl::on_next([=](bool active) {
 		_active.start(
-			[=] { update(); },
+			[=] { update(radioGeometry().toAlignedRect()); },
 			active ? 0. : 1.,
 			active ? 1. : 0.,
 			st::defaultRadio.duration);

@@ -119,8 +119,10 @@ private:
 	void setPressed(int pressed);
 	void clearMouseSelection();
 	void clearSelection();
+	void updateSelectedAnimation(float64 selected);
 	void updateSelectedItem();
 	void updateItem(int index);
+	[[nodiscard]] QRect selectedGeometry(float64 selected) const;
 	[[nodiscard]] QRect inner() const;
 	[[nodiscard]] QPoint innerShift() const;
 	[[nodiscard]] QPoint mapToInner(QPoint globalPosition) const;
@@ -171,6 +173,7 @@ private:
 	int _scrollValue = 0;
 	Ui::Animations::Simple _scrollAnimation;
 	Ui::Animations::Simple _selectedAnimation;
+	QRect _selectedAnimationGeometry;
 	int _scrollMax = 0;
 	int _oneWidth = 0;
 	QMargins _padding;
@@ -748,8 +751,10 @@ void SuggestionsWidget::setSelected(int selected, anim::type animated) {
 		selected = -1;
 	}
 	if (animated == anim::type::normal) {
+		_selectedAnimationGeometry = selectedGeometry(
+			_selectedAnimation.value(_selected));
 		_selectedAnimation.start(
-			[=] { update(); },
+			[=](float64 value) { updateSelectedAnimation(value); },
 			_selected,
 			selected,
 			st::universalDuration,
@@ -762,8 +767,10 @@ void SuggestionsWidget::setSelected(int selected, anim::type animated) {
 			scrollTo((_scrollMax * selectedForScroll) / selectedMax, animated);
 		}
 	} else if (_selectedAnimation.animating()) {
+		const auto previous = selectedGeometry(
+			_selectedAnimation.value(_selected));
 		_selectedAnimation.stop();
-		update();
+		update(previous.united(selectedGeometry(_selected)));
 	}
 	if (_selected != selected) {
 		updateSelectedItem();
@@ -820,6 +827,12 @@ void SuggestionsWidget::clearSelection() {
 	setSelected(-1);
 }
 
+void SuggestionsWidget::updateSelectedAnimation(float64 selected) {
+	const auto current = selectedGeometry(selected);
+	update(_selectedAnimationGeometry.united(current));
+	_selectedAnimationGeometry = current;
+}
+
 void SuggestionsWidget::updateItem(int index) {
 	if (index >= 0 && index < _rows.size()) {
 		update(
@@ -828,6 +841,16 @@ void SuggestionsWidget::updateItem(int index) {
 			_oneWidth,
 			_oneWidth);
 	}
+}
+
+QRect SuggestionsWidget::selectedGeometry(float64 selected) const {
+	return (selected > -1.)
+		? QRect(
+			int(selected * _oneWidth),
+			0,
+			_oneWidth,
+			_oneWidth).translated(-innerShift()).intersected(rect())
+		: QRect();
 }
 
 void SuggestionsWidget::updateSelectedItem() {
