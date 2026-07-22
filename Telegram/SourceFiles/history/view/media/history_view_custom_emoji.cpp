@@ -315,7 +315,7 @@ void CustomEmoji::paintCustom(
 		q.end();
 		painted = painted.intersected(QRectF(
 			QPointF(),
-			_selectedFrame.deviceIndependentSize()));
+			rect.size()));
 
 		_selectedFrame = Images::Colored(
 			std::move(_selectedFrame),

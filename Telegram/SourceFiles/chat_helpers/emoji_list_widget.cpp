@@ -2839,7 +2839,7 @@ void EmojiListWidget::drawRecent(
 			p.drawImage(exactPosition, _premiumMarkFrameCache);
 			const auto cacheRect = QRectF(
 				QPointF(),
-				_premiumMarkFrameCache.deviceIndependentSize());
+				QSize(_customSingleSize, _customSingleSize));
 			recordCustomPaint(
 				recent.paintedArea,
 				p,

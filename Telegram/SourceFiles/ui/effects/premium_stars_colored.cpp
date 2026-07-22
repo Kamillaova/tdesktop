@@ -211,7 +211,7 @@ Text::CustomEmoji::PaintResult CollectibleEmoji::paint(
 		const Context &context) {
 	prepareFrame();
 	p.drawImage(context.position, _frame);
-	auto result = QRectF(context.position, _frame.deviceIndependentSize());
+	auto result = QRectF(context.position, QSize(_size, _size));
 	if (context.paused) {
 		_animation.stop();
 	} else if (!_animation.animating()) {

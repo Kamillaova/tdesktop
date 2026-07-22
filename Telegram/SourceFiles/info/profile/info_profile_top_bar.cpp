@@ -3659,7 +3659,8 @@ void TopBar::paintPinnedToTopGifts(
 			}
 		}
 		if (!frameToRender.isNull()) {
-			const auto frameSize = frameToRender.deviceIndependentSize();
+			const auto frameSize = QSizeF(frameToRender.size())
+				/ frameToRender.devicePixelRatio();
 			const auto frameRect = QRectF(
 				giftPos - QPointF(
 					frameSize.width() / 2.,
@@ -3667,7 +3668,8 @@ void TopBar::paintPinnedToTopGifts(
 				frameSize);
 			auto paintedEnvelope = frameRect;
 			if (!gift.bg.isNull()) {
-				const auto bgSize = gift.bg.deviceIndependentSize();
+				const auto bgSize = QSizeF(gift.bg.size())
+					/ gift.bg.devicePixelRatio();
 				const auto bgRect = QRectF(
 					frameRect.center() - QPointF(
 						bgSize.width() / 2.,

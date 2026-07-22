@@ -110,7 +110,9 @@ Ui::Text::CustomEmoji::PaintResult ScaledBotVerifiedEmoji::paint(
 			: painter.transform().map(
 				QPolygonF(painted)
 			).boundingRect().intersected(
-				QRectF(QPointF(), frame.deviceIndependentSize()));
+				QRectF(
+					QPointF(),
+					QSize(sourcePx / ratio, sourcePx / ratio)));
 		painter.end();
 		if (sourceBounds.isEmpty()) {
 			return PaintResult(QRectF(), repaintBounds);
@@ -128,7 +130,7 @@ Ui::Text::CustomEmoji::PaintResult ScaledBotVerifiedEmoji::paint(
 	}
 	p.drawImage(position, _cache->frame);
 	return PaintResult(
-		QRectF(position, _cache->frame.deviceIndependentSize()),
+		QRectF(position, QSize(_innerSize, _innerSize)),
 		repaintBounds);
 }
 

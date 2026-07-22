@@ -118,7 +118,7 @@ Ui::Text::CustomEmoji::PaintResult DefaultIconEmoji::paint(
 		image.setDevicePixelRatio(_image.devicePixelRatio());
 	}
 	p.drawImage(position, image);
-	return PaintResult(QRectF(position, image.deviceIndependentSize()));
+	return PaintResult(QRectF(position, QSize(st.size, st.size)));
 }
 
 void DefaultIconEmoji::unload() {

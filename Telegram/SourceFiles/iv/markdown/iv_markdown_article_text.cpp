@@ -761,7 +761,9 @@ Ui::Text::CustomEmoji::PaintResult InlineFormulaSharedState::paint(
 					geometry.paintOffsetYScaled));
 			p.drawImage(position, *image);
 			return PaintResult(
-				QRectF(position, image->deviceIndependentSize()),
+				QRectF(
+					position,
+					QSizeF(geometry.width, geometry.imageHeight)),
 				repaintBounds);
 		}
 		return PaintResult(QRectF(), repaintBounds);

@@ -108,7 +108,7 @@ Ui::Text::CustomEmoji::PaintResult ScaledSimpleEmoji::paint(
 
 	const auto position = context.position - _shift;
 	p.drawImage(position, _frame);
-	return PaintResult(QRectF(position, _frame.deviceIndependentSize()));
+	return PaintResult(QRectF(position, QSize(width(), width())));
 }
 
 void ScaledSimpleEmoji::unload() {
@@ -163,7 +163,9 @@ Ui::Text::CustomEmoji::PaintResult ScaledCustomEmoji::paint(
 			: q.transform().map(
 				QPolygonF(painted)
 			).boundingRect().intersected(
-				QRectF(QPointF(), frame.deviceIndependentSize()));
+				QRectF(
+					QPointF(),
+					QSize(largeadjust, largeadjust)));
 		q.end();
 		if (sourceBounds.isEmpty()) {
 			return PaintResult(QRectF(), repaintBounds);
@@ -181,7 +183,9 @@ Ui::Text::CustomEmoji::PaintResult ScaledCustomEmoji::paint(
 	const auto position = context.position - _shift;
 	p.drawImage(position, _frame);
 	return PaintResult(
-		QRectF(position, _frame.deviceIndependentSize()),
+		QRectF(
+			position,
+			QSizeF(_frame.size()) / _frame.devicePixelRatio()),
 		repaintBounds);
 }
 

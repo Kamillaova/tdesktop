@@ -343,7 +343,9 @@ Ui::Text::CustomEmoji::PaintResult FormulaLikeObject::paint(
 		QPainter &p,
 		const Context &context) {
 	p.drawImage(context.position, _image);
-	return PaintResult(QRectF(context.position, _image.deviceIndependentSize()));
+	return PaintResult(QRectF(
+		context.position,
+		QSizeF(_image.size()) / _image.devicePixelRatio()));
 }
 
 void FormulaLikeObject::unload() {
