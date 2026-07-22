@@ -23,12 +23,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/streaming/media_streaming_utility.h"
 #include "main/main_session.h"
 #include "main/main_session_settings.h"
-#include "ui/image/image.h"
-#include "ui/effects/spoiler_mess.h"
 #include "ui/chat/chat_style.h"
+#include "ui/effects/spoiler_mess.h"
+#include "ui/image/image.h"
 #include "ui/text/text_utilities.h"
-#include "ui/grouped_layout.h"
 #include "ui/cached_round_corners.h"
+#include "ui/damage_debug.h"
+#include "ui/grouped_layout.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/ui_utility.h"
@@ -1103,6 +1104,7 @@ void Photo::repaintStreamedContent() {
 	if (_streamed->repaintRect) {
 		_parent->repaint(*_streamed->repaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("photo stream");
 		repaint();
 	}
 }

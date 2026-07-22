@@ -21,12 +21,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/effects/radial_animation.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "api/api_transcribes.h"
 #include "apiwrap.h"
-#include "styles/style_chat.h"
 #include "window/window_session_controller.h"
+#include "styles/style_chat.h"
 
 namespace HistoryView {
 namespace {
@@ -102,6 +103,7 @@ void TranscribeButton::repaintAnimation() {
 	if (_animationRepaintRect) {
 		_owner->repaint(*_animationRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("transcribe animation");
 		_owner->repaint();
 	}
 }

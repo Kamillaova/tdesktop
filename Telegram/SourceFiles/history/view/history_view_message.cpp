@@ -39,9 +39,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/tag_info_box.h"
 #include "ui/effects/reaction_fly_animation.h"
 #include "ui/effects/ripple_animation.h"
-#include "ui/text/text_utilities.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_extended_data.h"
+#include "ui/text/text_options.h"
+#include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
 //#include "ui/round_rect.h"
@@ -57,8 +60,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwidget.h"
 #include "main/main_session.h"
 #include "settings/sections/settings_premium.h"
-#include "ui/text/text_options.h"
-#include "ui/painter.h"
 #include "window/themes/window_theme.h" // IsNightMode.
 #include "window/window_session_controller.h"
 #include "apiwrap.h"
@@ -743,6 +744,7 @@ void Message::requestRichPageRepaint(
 	if (generation && generation != currentGeneration) {
 		return;
 	} else if (articleRect.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("rich page");
 		repaint();
 		return;
 	}
@@ -753,6 +755,7 @@ void Message::requestRichPageRepaint(
 	}
 	if (!geometry.known) {
 		geometry.pending = geometry.pending.united(articleRect);
+		Ui::LogUnknownGeometryRepaint("rich page");
 		repaint();
 		return;
 	}
@@ -764,6 +767,7 @@ void Message::requestRichPageRepaint(
 	geometry.pending = geometry.pending.united(clipped);
 	const auto mapped = MapRichPageRect(geometry, clipped);
 	if (mapped.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("rich page");
 		repaint();
 		return;
 	}
@@ -1839,6 +1843,7 @@ void Message::repaintTopicButtonRipple(uint64 generation) const {
 	}
 	repaint->pending = true;
 	if (!repaint->known) {
+		Ui::LogUnknownGeometryRepaint("topic button ripple");
 		this->repaint();
 	} else {
 		repaintTopicButtonRippleRegion(repaint->current);
@@ -1874,6 +1879,7 @@ void Message::recordTopicButtonRippleRepaint(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("topic button ripple");
 			this->repaint();
 		}
 		return;
@@ -1928,6 +1934,7 @@ void Message::repaintTopicButtonName(uint64 generation) const {
 	}
 	button->nameRepaint.pending = true;
 	if (!button->nameRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("topic button name");
 		repaint();
 	} else {
 		repaintTopicButtonNameRegion(button->nameRepaint.current);
@@ -4205,6 +4212,7 @@ void Message::recordLinkRippleRepaint(
 		ripple->stale = previous;
 		if (!previous.isEmpty()) {
 			ripple->pending = true;
+			Ui::LogUnknownGeometryRepaint("message link ripple");
 			repaint();
 		}
 	} else if (!previous.isEmpty()
@@ -4227,6 +4235,7 @@ void Message::repaintLinkRipple(uint64 generation) const {
 	if (ripple->known) {
 		repaint(ripple->current);
 	} else {
+		Ui::LogUnknownGeometryRepaint("message link ripple");
 		repaint();
 	}
 }
@@ -4967,6 +4976,7 @@ void Message::repaintFromNameStatus() const {
 	}
 	const auto painted = _fromNameStatus->lastRepaintRect;
 	if (!painted) {
+		Ui::LogUnknownGeometryRepaint("sender emoji status");
 		repaint();
 	} else if (!painted->isEmpty()) {
 		repaint(*painted);

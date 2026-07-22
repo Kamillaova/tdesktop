@@ -28,6 +28,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_theme.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
 #include "ui/dynamic_thumbnails.h"
 #include "ui/painter.h"
@@ -536,6 +537,9 @@ void SimilarChannels::repaintChannel(
 	}
 	repaint.pending = 1;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint((source == RepaintSource::Content)
+			? "similar channels content"
+			: "similar channels ripple");
 		this->repaint();
 	} else {
 		repaintChannelRegion(repaint.current);

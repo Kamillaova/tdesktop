@@ -32,6 +32,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/custom_emoji_helper.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "window/window_session_controller.h"
@@ -1060,6 +1061,7 @@ void Reply::repaintAnimation(not_null<const Element*> view) const {
 	if (_animationRepaintRect) {
 		view->repaint(*_animationRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("reply animation");
 		view->repaint();
 	}
 }
@@ -1097,9 +1099,12 @@ void Reply::createRippleAnimation(
 			size,
 			st::messageQuoteStyle.radius),
 		[=] {
-			view->repaint(_ripple.lastPaintedPoint.isNull()
-				? QRect()
-				: QRect(_ripple.lastPaintedPoint, size));
+			if (_ripple.lastPaintedPoint.isNull()) {
+				Ui::LogUnknownGeometryRepaint("reply ripple");
+				view->repaint();
+			} else {
+				view->repaint(QRect(_ripple.lastPaintedPoint, size));
+			}
 		});
 }
 

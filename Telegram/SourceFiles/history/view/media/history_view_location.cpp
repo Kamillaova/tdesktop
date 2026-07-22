@@ -17,12 +17,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "lang/lang_keys.h"
 #include "ui/chat/chat_style.h"
-#include "ui/dynamic_thumbnails.h"
-#include "ui/dynamic_image.h"
-#include "ui/widgets/shadow.h"
 #include "ui/image/image.h"
 #include "ui/text/text_options.h"
+#include "ui/widgets/shadow.h"
 #include "ui/cached_round_corners.h"
+#include "ui/damage_debug.h"
+#include "ui/dynamic_image.h"
+#include "ui/dynamic_thumbnails.h"
 #include "ui/painter.h"
 #include "data/data_session.h"
 #include "data/data_file_origin.h"
@@ -435,6 +436,7 @@ void Location::requestAnimationRepaint(AnimationRepaint &repaint) const {
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("location animation");
 		_parent->repaint();
 	} else {
 		repaintAnimationRegion(repaint.current);

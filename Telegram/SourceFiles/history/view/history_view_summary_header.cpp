@@ -20,11 +20,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/chat/chat_style.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/layers/generic_box.h"
+#include "ui/text/text_options.h"
+#include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
-#include "ui/text/text_options.h"
-#include "ui/text/text_utilities.h"
 #include "ui/ui_utility.h"
 #include "window/window_session_controller.h"
 #include "styles/style_chat.h"
@@ -289,6 +290,7 @@ void SummaryHeader::repaintParticles(
 	const auto state = base::take(_particlesRepaintState);
 	const auto rect = base::take(_particlesRepaintRect);
 	if (state == ParticlesRepaintState::Full) {
+		Ui::LogUnknownGeometryRepaint("summary header particles");
 		view->repaint();
 	} else if (state == ParticlesRepaintState::Rect) {
 		view->repaint(rect);
@@ -343,6 +345,7 @@ void SummaryHeader::repaintRipple(
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("summary header ripple");
 		view->repaint();
 	} else {
 		repaintRippleRegion(view, repaint.current);
@@ -377,6 +380,7 @@ void SummaryHeader::recordRippleRepaint(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("summary header ripple");
 			view->repaint();
 		}
 		return;

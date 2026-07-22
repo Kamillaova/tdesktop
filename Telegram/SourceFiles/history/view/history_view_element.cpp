@@ -51,9 +51,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/path_shift_gradient.h"
 #include "ui/effects/reaction_fly_animation.h"
 #include "ui/paint/damage.h"
-#include "ui/toast/toast.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
+#include "ui/toast/toast.h"
+#include "ui/damage_debug.h"
 #include "ui/item_text_options.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
@@ -573,6 +574,9 @@ void PathShiftGradientRepaintTracker::recordUnknown() {
 
 void PathShiftGradientRepaintTracker::repaint() {
 	const auto area = _repaintArea();
+	if (_unknown) {
+		Ui::LogUnknownGeometryRepaint("path shift gradient");
+	}
 	const auto region = _unknown
 		? QRegion(area)
 		: _pending.intersected(area);
@@ -1338,6 +1342,7 @@ void ServicePreMessage::repaintText() const {
 	}
 	_textRepaint.pending = true;
 	if (!_textRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("service pre-message text");
 		owner->customEmojiRepaint();
 	} else {
 		repaintTextRegion(_textRepaint.current);
@@ -1353,6 +1358,7 @@ void ServicePreMessage::repaintBeforeRemoval() const {
 		owner->clearCustomEmojiRepaint();
 	}
 	if (!known) {
+		Ui::LogUnknownGeometryRepaint("service pre-message removal");
 		owner->repaint();
 	} else {
 		repaintTextRegion(region);
@@ -1652,6 +1658,7 @@ void Element::repaintText(uint64 generation) {
 	}
 	_flags |= Flag::TextRepaintPending;
 	if (_textRepaintRect.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("message text");
 		customEmojiRepaint();
 	} else {
 		repaint(_textRepaintRect);
@@ -3183,12 +3190,15 @@ void Element::refreshReactions() {
 				if (region) {
 					repaint(*region);
 				} else {
+					Ui::LogUnknownGeometryRepaint("message reactions");
 					customEmojiRepaint();
 				}
 			},
 			[=](QRect rect) {
 				if (const auto strong = weak.get()) {
 					if (rect.isNull()) {
+						Ui::LogUnknownGeometryRepaint(
+							"reaction animation");
 						strong->repaint();
 					} else {
 						strong->repaint(rect);

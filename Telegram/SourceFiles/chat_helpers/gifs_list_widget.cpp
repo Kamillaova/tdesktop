@@ -24,12 +24,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mtproto/mtproto_config.h"
 #include "core/click_handler_types.h"
 #include "ui/controls/tabbed_search.h"
-#include "ui/layers/generic_box.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/fields/input_field.h"
-#include "ui/widgets/popup_menu.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/image/image.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/popup_menu.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "boxes/stickers_box.h"
 #include "inline_bots/inline_bot_result.h"
@@ -1038,6 +1039,7 @@ void GifsListWidget::updateInlineItems(const LayoutItem *layout) {
 			const auto result = layout->getResult();
 			const auto document = layout->getDocument();
 			if (!result && !document) {
+				Ui::LogUnknownGeometryRepaint("GIF panel item identity");
 				_repaintAllPending = true;
 			} else {
 				const auto identity = result
@@ -1050,6 +1052,8 @@ void GifsListWidget::updateInlineItems(const LayoutItem *layout) {
 					return;
 				}
 				if (i->second.position != position) {
+					Ui::LogUnknownGeometryRepaint(
+						"GIF panel item position");
 					_repaintAllPending = true;
 				} else if (!i->second.current.united(
 						i->second.stale).intersects(

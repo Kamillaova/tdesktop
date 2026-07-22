@@ -11,11 +11,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/text/text.h"
+#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
-#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/scroll_area.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
 #include "ui/painter.h"
 #include "ui/unread_badge_paint.h"
@@ -718,9 +719,12 @@ void TopPeersStrip::repaintUserpic(uint64 id) {
 	const auto index = int(i - begin(_entries));
 	const auto layout = currentLayout();
 	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
-	if (_expandAnimation.animating()
-		|| i->userpicRect.isEmpty()
+	if (_expandAnimation.animating()) {
+		_strip.update();
+		return;
+	} else if (i->userpicRect.isEmpty()
 		|| i->userpicRect.y() != rowTop + st::topPeers.photoTop) {
+		Ui::LogUnknownGeometryRepaint("top peers userpic");
 		_strip.update();
 		return;
 	}
@@ -741,9 +745,12 @@ void TopPeersStrip::repaintRipple(uint64 id) {
 	const auto index = int(i - begin(_entries));
 	const auto layout = currentLayout();
 	const auto rowTop = (index / layout.inrow) * st::topPeers.height;
-	if (_expandAnimation.animating()
-		|| i->rippleRect.isEmpty()
+	if (_expandAnimation.animating()) {
+		_strip.update();
+		return;
+	} else if (i->rippleRect.isEmpty()
 		|| i->rippleRect.y() != rowTop + innerRounded().y()) {
+		Ui::LogUnknownGeometryRepaint("top peers ripple");
 		_strip.update();
 		return;
 	}

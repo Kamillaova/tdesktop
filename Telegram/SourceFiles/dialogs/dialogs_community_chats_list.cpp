@@ -17,6 +17,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "dialogs/dialogs_row.h"
 #include "history/history.h"
 #include "main/main_session.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "window/window_session_controller.h"
 #include "styles/style_dialogs.h"
@@ -110,6 +111,8 @@ CommunityChatsList::CommunityChatsList(
 							}
 							continue;
 						}
+						Ui::LogUnknownGeometryRepaint(
+							"community dialog row animation");
 					}
 					_paintedRows.erase(row);
 					update(

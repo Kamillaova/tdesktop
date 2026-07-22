@@ -22,25 +22,33 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_text_helper.h"
 #include "history/view/media/menu/history_view_poll_menu.h"
 #include "calls/calls_instance.h"
-#include "ui/widgets/dropdown_menu.h"
-#include "ui/widgets/menu/menu_action.h"
-#include "ui/chat/message_bubble.h"
 #include "ui/chat/chat_style.h"
+#include "ui/chat/chat_theme.h"
+#include "ui/chat/message_bubble.h"
+#include "ui/effects/animations.h"
+#include "ui/effects/fireworks_animation.h"
+#include "ui/effects/path_shift_gradient.h"
+#include "ui/effects/radial_animation.h"
+#include "ui/effects/ripple_animation.h"
 #include "ui/image/image.h"
-#include "ui/item_text_options.h"
+#include "ui/layers/generic_box.h"
+#include "ui/paint/damage.h"
+#include "ui/text/format_values.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
-#include "ui/text/format_values.h"
-#include "ui/effects/animations.h"
-#include "ui/effects/radial_animation.h"
-#include "ui/effects/ripple_animation.h"
-#include "ui/effects/fireworks_animation.h"
 #include "ui/toast/toast.h"
-#include "ui/painter.h"
-#include "ui/rect.h"
+#include "ui/widgets/menu/menu_action.h"
+#include "ui/widgets/dropdown_menu.h"
+#include "ui/widgets/labels.h"
+#include "ui/wrap/padding_wrap.h"
+#include "ui/wrap/vertical_layout.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
 #include "ui/dynamic_thumbnails.h"
+#include "ui/item_text_options.h"
+#include "ui/painter.h"
+#include "ui/rect.h"
 #include "poll/poll_link_thumbnail.h"
 #include "poll/poll_media_upload.h"
 #include "history/view/media/history_view_location.h"
@@ -66,18 +74,10 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "apiwrap.h"
 #include "api/api_polls.h"
 #include "window/window_session_controller.h"
-#include "ui/layers/generic_box.h"
-#include "ui/wrap/padding_wrap.h"
-#include "ui/wrap/vertical_layout.h"
-#include "ui/widgets/labels.h"
 #include "history/view/controls/history_view_webpage_processor.h"
 #include "history/view/media/history_view_web_page.h"
 #include "history/admin_log/history_admin_log_item.h"
 #include "history/history.h"
-#include "ui/chat/chat_style.h"
-#include "ui/chat/chat_theme.h"
-#include "ui/effects/path_shift_gradient.h"
-#include "ui/paint/damage.h"
 #include "window/themes/window_theme.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
@@ -2680,6 +2680,7 @@ void Poll::recordRepaintGeometry(
 		repaint.stale = previous;
 		if (stale.isEmpty() && !previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("poll animation");
 			this->repaint();
 		}
 		return;
@@ -2743,6 +2744,7 @@ void Poll::repaintGeometry(RepaintState &repaint) const {
 	if (repaint.known) {
 		repaintRegion(repaint.current);
 	} else {
+		Ui::LogUnknownGeometryRepaint("poll animation");
 		this->repaint();
 	}
 }
@@ -3183,6 +3185,7 @@ void Poll::Header::repaintText(
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("poll header text");
 		_owner->repaint();
 	} else {
 		repaintTextRegion(repaint.current);
@@ -4231,6 +4234,7 @@ void Poll::Options::repaintAnswersAnimation() const {
 	}
 	animation.repaintPending = true;
 	if (animation.repaintRegion.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("poll answers animation");
 		_owner->repaint();
 	} else {
 		repaintAnswersAnimationRegion(animation.repaintRegion);
@@ -4301,6 +4305,7 @@ void Poll::Options::radialAnimationCallback() const {
 	}
 	sending.repaintPending = true;
 	if (sending.repaintRegion.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("poll sending animation");
 		_owner->repaint();
 	} else {
 		repaintSendingAnimationRegion(sending.repaintRegion);
@@ -4391,6 +4396,7 @@ void Poll::Options::answerTextUpdated(
 		&TextRepaint::option);
 	if (repaint == end(_textRepaints)
 		|| repaint->generation != generation) {
+		Ui::LogUnknownGeometryRepaint("poll answer text");
 		_owner->repaint();
 		return;
 	}
@@ -4402,6 +4408,7 @@ void Poll::Options::answerTextUpdated(
 	}
 	repaint->repaintPending = true;
 	if (!repaint->repaintKnown) {
+		Ui::LogUnknownGeometryRepaint("poll answer text");
 		_owner->repaint();
 	} else {
 		repaintAnswerTextRegion(repaint->repaintRegion);
@@ -4580,6 +4587,7 @@ void Poll::Options::thumbnailUpdated(
 		&ThumbnailRepaint::option);
 	if (repaint == end(_thumbnailRepaints)
 		|| repaint->image != image) {
+		Ui::LogUnknownGeometryRepaint("poll answer thumbnail");
 		_owner->repaint();
 		return;
 	}
@@ -4588,6 +4596,7 @@ void Poll::Options::thumbnailUpdated(
 	}
 	repaint->repaintPending = true;
 	if (repaint->repaintRegion.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("poll answer thumbnail");
 		_owner->repaint();
 	} else {
 		repaintAnimatedThumbnailRegion(repaint->repaintRegion);

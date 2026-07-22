@@ -28,18 +28,26 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/click_handler_types.h"
 #include "core/shortcuts.h"
 #include "core/ui_integration.h"
+#include "ui/chat/chats_filter_tag.h"
+#include "ui/effects/loading_element.h"
+#include "ui/effects/ripple_animation.h"
+#include "ui/effects/thanos_effect_session.h"
+#include "ui/paint/damage.h"
+#include "ui/text/text_options.h"
+#include "ui/text/text_utilities.h"
+#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/buttons.h"
+#include "ui/widgets/multi_select.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/scroll_area.h"
-#include "ui/text/text_utilities.h"
-#include "ui/text/text_options.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_thumbnails.h"
-#include "ui/vertical_list.h"
-#include "ui/paint/damage.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/screen_reader_mode.h"
 #include "ui/ui_utility.h"
+#include "ui/unread_badge.h"
+#include "ui/vertical_list.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_drafts.h"
 #include "data/data_folder.h"
@@ -76,13 +84,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "window/window_peer_menu.h"
-#include "ui/chat/chats_filter_tag.h"
-#include "ui/effects/ripple_animation.h"
-#include "ui/effects/loading_element.h"
-#include "ui/effects/thanos_effect_session.h"
-#include "ui/widgets/multi_select.h"
-#include "ui/widgets/menu/menu_add_action_callback_factory.h"
-#include "ui/unread_badge.h"
 #include "boxes/filters/edit_filter_box.h"
 #include "boxes/peers/edit_forum_topic_box.h"
 #include "boxes/peer_list_box.h"
@@ -3610,6 +3611,7 @@ void InnerWidget::repaintDialogRowAnimationAt(
 		int top) {
 	const auto animation = paintedAnimationDamage(row);
 	if (!animation) {
+		Ui::LogUnknownGeometryRepaint("dialog row animation");
 		invalidatePaintedRow(RowsCacheKey(row));
 		update(0, top, width(), row->height());
 		return;
@@ -6952,6 +6954,7 @@ void InnerWidget::repaintQuickActionAnimationAt(
 		int top) {
 	const auto damage = paintedQuickActionAnimationDamage(row);
 	if (!damage) {
+		Ui::LogUnknownGeometryRepaint("dialog quick action");
 		invalidatePaintedRow(RowsCacheKey(row));
 		update(0, top, width(), row->height());
 		return;

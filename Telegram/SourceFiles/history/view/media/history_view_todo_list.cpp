@@ -19,18 +19,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_text_helper.h"
 #include "calls/calls_instance.h"
-#include "ui/chat/message_bubble.h"
 #include "ui/chat/chat_style.h"
+#include "ui/chat/message_bubble.h"
+#include "ui/effects/animations.h"
+#include "ui/effects/fireworks_animation.h"
+#include "ui/effects/radial_animation.h"
+#include "ui/effects/ripple_animation.h"
+#include "ui/paint/damage.h"
+#include "ui/text/format_values.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
-#include "ui/text/format_values.h"
-#include "ui/effects/animations.h"
-#include "ui/effects/radial_animation.h"
-#include "ui/effects/ripple_animation.h"
-#include "ui/effects/fireworks_animation.h"
-#include "ui/paint/damage.h"
 #include "ui/toast/toast.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "data/data_media_types.h"
@@ -371,6 +372,7 @@ void TodoList::recordRepaintGeometry(
 		repaint.stale = previous;
 		if (stale.isEmpty() && !previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("to-do list animation");
 			this->repaint();
 		}
 		return;
@@ -443,6 +445,7 @@ void TodoList::repaintTitle(uint64 generation) const {
 	if (repaint.known) {
 		repaintRegion(repaint.current);
 	} else {
+		Ui::LogUnknownGeometryRepaint("to-do list title");
 		this->repaint();
 	}
 }
@@ -467,6 +470,7 @@ void TodoList::repaintTask(
 	if (repaint.known) {
 		repaintRegion(repaint.current);
 	} else {
+		Ui::LogUnknownGeometryRepaint("to-do list task");
 		this->repaint();
 	}
 }
@@ -482,6 +486,7 @@ void TodoList::repaintFireworks(uint64 generation) const {
 	if (repaint.known) {
 		repaintRegion(repaint.current);
 	} else {
+		Ui::LogUnknownGeometryRepaint("to-do list fireworks");
 		this->repaint();
 	}
 }

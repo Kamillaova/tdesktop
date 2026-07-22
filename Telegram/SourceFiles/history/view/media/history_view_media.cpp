@@ -6,7 +6,6 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/media/history_view_media.h"
-#include "ui/basic_click_handlers.h"
 
 #include "boxes/send_credits_box.h" // CreditsEmoji.
 #include "history/history.h"
@@ -22,15 +21,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/data_session.h"
 #include "data/data_web_page.h"
 #include "lang/lang_keys.h"
-#include "ui/item_text_options.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/message_bubble.h"
 #include "ui/effects/spoiler_mess.h"
 #include "ui/image/image_prepare.h"
+#include "ui/text/text_utilities.h"
+#include "ui/basic_click_handlers.h"
 #include "ui/cached_round_corners.h"
+#include "ui/damage_debug.h"
+#include "ui/item_text_options.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
-#include "ui/text/text_utilities.h"
 #include "core/ui_integration.h"
 #include "styles/style_chat.h"
 #include "styles/style_chat_helpers.h"
@@ -546,6 +547,7 @@ void Media::repaintSpoiler(not_null<MediaSpoiler*> spoiler) const {
 		}
 		_parent->repaint(*spoiler->lastPaintedRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("media spoiler");
 		_parent->repaint();
 	}
 }

@@ -13,12 +13,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/media/history_view_media_common.h"
-#include "ui/item_text_options.h"
+#include "ui/chat/chat_style.h"
+#include "ui/effects/ripple_animation.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_utilities.h"
 #include "ui/cached_round_corners.h"
-#include "ui/chat/chat_style.h"
-#include "ui/effects/ripple_animation.h"
+#include "ui/damage_debug.h"
+#include "ui/item_text_options.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "core/ui_integration.h"
@@ -605,6 +606,7 @@ void Game::repaintDescription(uint64 generation) const {
 	}
 	_descriptionRepaint.pending = true;
 	if (!_descriptionRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("game description");
 		_parent->customEmojiRepaint();
 	} else {
 		repaintDescriptionRegion(_descriptionRepaint.current);
@@ -751,6 +753,7 @@ void Game::repaintRipple(uint64 generation) const {
 	}
 	_rippleRepaint.pending = true;
 	if (!_rippleRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("game ripple");
 		this->repaint();
 	} else {
 		repaintRippleRegion(_rippleRepaint.current);
@@ -784,6 +787,7 @@ void Game::recordRippleRepaintRect(
 		_rippleRepaint.stale = previous;
 		if (!previous.isEmpty()) {
 			_rippleRepaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("game ripple");
 			this->repaint();
 		}
 		return;

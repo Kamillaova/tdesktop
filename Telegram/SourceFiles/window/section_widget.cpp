@@ -9,10 +9,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include "mainwidget.h"
 #include "mainwindow.h"
-#include "ui/ui_utility.h"
-#include "ui/chat/chat_theme.h"
-#include "ui/paint/damage.h"
-#include "ui/painter.h"
 #include "boxes/premium_preview_box.h"
 #include "data/data_peer.h"
 #include "data/data_user.h"
@@ -29,8 +25,13 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "menu/menu_send.h"
 #include "settings/sections/settings_premium.h"
+#include "ui/chat/chat_theme.h"
+#include "ui/paint/damage.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/toast/toast.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
+#include "ui/ui_utility.h"
 #include "window/section_memento.h"
 #include "window/window_slide_animation.h"
 #include "window/window_session_controller.h"
@@ -96,6 +97,7 @@ void RequestCachedGiftRepaint(
 			if (i->boundsKnown) {
 				widget->update(i->bounds);
 			} else {
+				Ui::LogUnknownGeometryRepaint("cached wallpaper gift");
 				widget->update();
 			}
 		}

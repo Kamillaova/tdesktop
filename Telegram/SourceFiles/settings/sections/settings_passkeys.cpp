@@ -24,17 +24,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/boxes/confirm_box.h"
 #include "ui/layers/generic_box.h"
 #include "ui/paint/damage.h"
-#include "ui/painter.h"
-#include "ui/rect.h"
 #include "ui/text/custom_emoji_instance.h"
 #include "ui/text/text_utilities.h"
-#include "ui/vertical_list.h"
-#include "ui/widgets/buttons.h"
-#include "ui/widgets/popup_menu.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
+#include "ui/rect.h"
+#include "ui/vertical_list.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
@@ -248,6 +249,7 @@ void Passkeys::setupContent() {
 						passkey.softwareEmojiId,
 						[=] {
 							if (!emojiRepaint->hasBounds) {
+								Ui::LogUnknownGeometryRepaint("passkey emoji");
 								button->update();
 								return;
 							}

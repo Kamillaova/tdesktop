@@ -1910,6 +1910,8 @@ PRIVATE
     ui/controls/userpic_button.h
     ui/controls/warning_tooltip.cpp
     ui/controls/warning_tooltip.h
+    ui/damage_debug.cpp
+    ui/damage_debug.h
     ui/effects/animated_string.cpp
     ui/effects/animated_string.h
     ui/effects/credits_graphics.cpp

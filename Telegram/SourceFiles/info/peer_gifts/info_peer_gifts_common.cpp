@@ -27,13 +27,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "overview/overview_checkbox.h"
 #include "settings/settings_credits_graphics.h"
+#include "ui/effects/premium_graphics.h"
 #include "ui/layers/generic_box.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/buttons.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
 #include "ui/dynamic_thumbnails.h"
-#include "ui/effects/premium_graphics.h"
 #include "ui/painter.h"
 #include "ui/top_background_gradient.h"
 #include "window/window_session_controller.h"
@@ -422,6 +423,7 @@ void GiftButton::setDocument(not_null<DocumentData*> document) {
 		}
 		result->setRepaintCallback([=] {
 			if (_playerFrameRect.isEmpty()) {
+				Ui::LogUnknownGeometryRepaint("peer gifts player");
 				update();
 			} else {
 				update(_playerFrameRect);

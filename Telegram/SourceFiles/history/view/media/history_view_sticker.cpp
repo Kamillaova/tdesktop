@@ -17,10 +17,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/media/history_view_media_common.h"
 #include "history/view/media/history_view_sticker_player.h"
 #include "lang/lang_keys.h"
-#include "ui/image/image.h"
 #include "ui/chat/chat_style.h"
 #include "ui/effects/path_shift_gradient.h"
+#include "ui/image/image.h"
 #include "ui/text/custom_emoji_instance.h"
+#include "ui/damage_debug.h"
 #include "ui/emoji_config.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
@@ -686,6 +687,7 @@ void Sticker::repaintAnimation() {
 	if (_animationRepaintRect) {
 		_parent->repaint(*_animationRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("sticker animation");
 		_parent->customEmojiRepaint();
 	}
 }

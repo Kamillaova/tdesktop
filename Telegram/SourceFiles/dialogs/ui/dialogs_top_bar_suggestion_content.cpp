@@ -16,17 +16,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animation_value.h"
 #include "ui/layers/generic_box.h"
 #include "ui/paint/damage.h"
-#include "ui/painter.h"
-#include "ui/power_saving.h"
-#include "ui/rect.h"
-#include "ui/round_rect.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_custom_emoji.h"
-#include "ui/ui_rpl_filter.h"
-#include "ui/ui_utility.h"
-#include "ui/unread_badge_paint.h"
-#include "ui/vertical_list.h"
-#include "ui/vertical_list.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/elastic_scroll.h"
 #include "ui/widgets/labels.h"
@@ -35,6 +26,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
+#include "ui/rect.h"
+#include "ui/round_rect.h"
+#include "ui/ui_rpl_filter.h"
+#include "ui/ui_utility.h"
+#include "ui/unread_badge_paint.h"
+#include "ui/vertical_list.h"
+#include "ui/vertical_list.h"
 #include "styles/style_boxes.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_chat.h"
@@ -655,6 +656,9 @@ TopBarSuggestionContent::AnimationDamage TopBarSuggestionContent::draw(
 void TopBarSuggestionContent::requestAnimationRepaint() {
 	if (!_collapseSnapshot.isNull()) {
 		return;
+	}
+	if (!_animationFallbackKnown) {
+		Ui::LogUnknownGeometryRepaint("dialog top bar suggestion");
 	}
 	const auto fallback = _animationFallbackKnown
 		? _animationFallback

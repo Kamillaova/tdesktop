@@ -25,11 +25,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "mainwindow.h"
 #include "main/main_session.h"
 #include "window/window_session_controller.h"
+#include "ui/effects/path_shift_gradient.h"
 #include "ui/text/text_utilities.h"
-#include "ui/widgets/popup_menu.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/labels.h"
-#include "ui/effects/path_shift_gradient.h"
+#include "ui/widgets/popup_menu.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/ui_utility.h"
 #include "history/view/history_view_cursor_state.h"
@@ -350,6 +351,7 @@ void Inner::queueInlineItemRepaint(
 	const auto existing = _pendingRepaintItems.find(layout);
 	if (existing != end(_pendingRepaintItems)) {
 		if (existing->second.result != result) {
+			Ui::LogUnknownGeometryRepaint("inline result identity");
 			clearPendingItemRepaints();
 			_repaintVisiblePending = true;
 			return;
@@ -874,11 +876,14 @@ void Inner::updateInlineItems(const ItemBase *layout) {
 			const auto result = layout->getResult();
 			const auto painted = _paintedRepaintItems.find(layout);
 			if (!result) {
+				Ui::LogUnknownGeometryRepaint("inline result identity");
 				clearPendingItemRepaints();
 				_repaintAllPending = true;
 			} else if (painted != end(_paintedRepaintItems)
 				&& painted->second.result == result) {
 				if (painted->second.position != position) {
+					Ui::LogUnknownGeometryRepaint(
+						"inline result position");
 					clearPendingItemRepaints();
 					_repaintVisiblePending = true;
 				} else {

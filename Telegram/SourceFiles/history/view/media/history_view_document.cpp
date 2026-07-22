@@ -24,13 +24,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_cursor_state.h"
 #include "history/view/history_view_transcribe_button.h"
 #include "history/view/media/history_view_media_common.h"
-#include "ui/text/format_values.h"
-#include "ui/text/format_song_document_name.h"
-#include "ui/text/text_lottie_custom_emoji.h"
-#include "ui/text/text_utilities.h"
 #include "ui/chat/chat_style.h"
 #include "ui/effects/voice_once_particles.h"
 #include "ui/paint/blobs.h"
+#include "ui/text/format_song_document_name.h"
+#include "ui/text/format_values.h"
+#include "ui/text/text_lottie_custom_emoji.h"
+#include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
@@ -2023,6 +2024,7 @@ void Document::repaintTtlAnimation(uint64 generation) const {
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("document TTL animation");
 		this->repaint();
 	} else {
 		repaintTtlAnimationRegion(repaint.current);
@@ -2059,6 +2061,7 @@ void Document::recordTtlAnimationRepaintRegion(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("document TTL animation");
 			this->repaint();
 		}
 		return;
@@ -2180,6 +2183,7 @@ void Document::repaintPlayback() const {
 	if (_playbackRepaintRect) {
 		_parent->repaint(*_playbackRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("document playback");
 		repaint();
 	}
 }
@@ -2221,6 +2225,7 @@ void Document::repaintVoiceInteraction() const {
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("document voice interaction");
 		this->repaint();
 	} else {
 		repaintVoiceInteractionRegion(repaint.current);
@@ -2256,6 +2261,7 @@ void Document::recordVoiceInteractionRepaintRegion(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("document voice interaction");
 			this->repaint();
 		}
 		return;
@@ -2287,6 +2293,7 @@ void Document::repaintCaption(uint64 generation) const {
 	}
 	_captionRepaintPending = true;
 	if (!_captionRepaintKnown) {
+		Ui::LogUnknownGeometryRepaint("document caption");
 		_parent->customEmojiRepaint();
 	} else {
 		_parent->repaint(_captionRepaintRect);

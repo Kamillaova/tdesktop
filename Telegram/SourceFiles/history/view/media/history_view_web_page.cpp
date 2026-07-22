@@ -34,14 +34,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "main/main_session.h"
 #include "menu/menu_sponsored.h"
 #include "ui/chat/chat_style.h"
-#include "ui/painter.h"
-#include "ui/rect.h"
-#include "ui/power_saving.h"
 #include "ui/text/format_values.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h"
 #include "ui/toast/toast.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
+#include "ui/rect.h"
 #include "styles/style_chat.h"
 
 namespace HistoryView {
@@ -995,6 +996,7 @@ void WebPage::repaintDescription(uint64 generation) const {
 	}
 	_descriptionRepaint.pending = true;
 	if (!_descriptionRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("web page description");
 		_parent->customEmojiRepaint();
 	} else {
 		repaintDescriptionRegion(_descriptionRepaint.current);
@@ -1220,6 +1222,7 @@ void WebPage::repaintRipple(
 	}
 	repaint.pending = true;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("web page ripple");
 		this->repaint();
 	} else {
 		repaintRippleRegion(repaint.current);
@@ -1253,6 +1256,7 @@ void WebPage::recordRippleRepaint(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = true;
+			Ui::LogUnknownGeometryRepaint("web page ripple");
 			this->repaint();
 		}
 		return;

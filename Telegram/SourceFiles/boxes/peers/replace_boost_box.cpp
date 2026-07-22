@@ -32,8 +32,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/labels.h"
 #include "ui/wrap/padding_wrap.h"
 #include "ui/wrap/vertical_layout.h"
-#include "ui/empty_userpic.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
+#include "ui/empty_userpic.h"
 #include "ui/painter.h"
 #include "ui/top_background_gradient.h"
 #include "styles/style_boxes.h"
@@ -1068,6 +1069,7 @@ object_ptr<Ui::RpWidget> CreateGiftTransfer(
 		crl::guard(overlay, [=] {
 			const auto rect = state->giftRepaintRect;
 			if (rect.isEmpty()) {
+				Ui::LogUnknownGeometryRepaint("replace boost gift");
 				overlay->update();
 			} else {
 				overlay->update(rect);

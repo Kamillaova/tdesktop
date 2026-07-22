@@ -24,13 +24,14 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lottie/lottie_single_player.h"
 #include "ui/effects/premium_stars_colored.h"
 #include "ui/paint/damage.h"
-#include "ui/painter.h"
 #include "ui/text/format_values.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/labels.h"
+#include "ui/wrap/vertical_layout.h"
+#include "ui/damage_debug.h"
+#include "ui/painter.h"
 #include "ui/top_background_gradient.h"
 #include "ui/vertical_list.h"
-#include "ui/widgets/buttons.h"
-#include "ui/wrap/vertical_layout.h"
-#include "ui/widgets/labels.h"
 #include "info/peer_gifts/info_peer_gifts_common.h"
 #include "styles/style_chat.h"
 #include "styles/style_credits.h"
@@ -216,6 +217,8 @@ UniqueGiftCoverWidget::UniqueGiftCoverWidget(
 				} else if (_state->now.model.lottie.get() == lottie) {
 					const auto rect = _state->now.model.repaintRect;
 					if (rect.isEmpty()) {
+						Ui::LogUnknownGeometryRepaint(
+							"star gift cover model");
 						update();
 					} else {
 						update(rect);

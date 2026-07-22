@@ -18,16 +18,17 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "menu/menu_sponsored.h"
 #include "ui/chat/chat_style.h"
 #include "ui/chat/chat_theme.h"
-#include "ui/dynamic_image.h"
-#include "ui/dynamic_thumbnails.h"
 #include "ui/effects/animation_value.h"
 #include "ui/effects/ripple_animation.h"
 #include "ui/image/image_prepare.h"
 #include "ui/paint/damage.h"
-#include "ui/power_saving.h"
-#include "ui/rect.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/shadow.h"
+#include "ui/damage_debug.h"
+#include "ui/dynamic_image.h"
+#include "ui/dynamic_thumbnails.h"
+#include "ui/power_saving.h"
+#include "ui/rect.h"
 #include "window/section_widget.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
@@ -229,6 +230,9 @@ void FillSponsoredMessageBar(
 		}
 	};
 	const auto requestAnimationRepaint = [=] {
+		if (!state->animationFallbackKnown) {
+			Ui::LogUnknownGeometryRepaint("sponsored message bar");
+		}
 		const auto fallback = state->animationFallbackKnown
 			? state->animationFallback
 			: QRegion(widget->rect());

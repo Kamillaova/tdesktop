@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/view/history_view_element.h"
 #include "history/view/history_view_cursor_state.h"
 #include "ui/chat/chat_style.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_image.h"
 #include "ui/dynamic_thumbnails.h"
 #include "ui/painter.h"
@@ -82,6 +83,7 @@ void MediaGenericPart::requestAnimationRepaint(
 	}
 	repaint.pending = 1;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("generic media animation");
 		parent->repaint();
 		return;
 	}
@@ -116,6 +118,7 @@ void MediaGenericPart::recordAnimationRepaint(
 		repaint.stale = previous;
 		if (stale.isEmpty() && !previous.isEmpty()) {
 			repaint.pending = 1;
+			Ui::LogUnknownGeometryRepaint("generic media animation");
 			parent->repaint();
 		}
 		return;

@@ -19,6 +19,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "chat_helpers/stickers_lottie.h"
 #include "ui/chat/chat_style.h"
 #include "ui/text/text_isolated_emoji.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "styles/style_chat.h"
@@ -348,6 +349,7 @@ void CustomEmoji::repaintCustom(int index) {
 	if (_customRepaintRects[index]) {
 		_parent->repaint(*_customRepaintRects[index]);
 	} else {
+		Ui::LogUnknownGeometryRepaint("custom emoji media");
 		_parent->customEmojiRepaint();
 	}
 }

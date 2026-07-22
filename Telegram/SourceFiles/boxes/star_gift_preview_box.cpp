@@ -22,6 +22,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/layers/generic_box.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/widgets/buttons.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/top_background_gradient.h"
 #include "settings/settings_credits_graphics.h"
@@ -421,6 +422,7 @@ void AttributeButton::setDocument(not_null<DocumentData*> document) {
 		}
 		result->setRepaintCallback([=] {
 			if (_playerFrameRect.isEmpty()) {
+				Ui::LogUnknownGeometryRepaint("gift preview player");
 				update();
 			} else {
 				update(_playerFrameRect);

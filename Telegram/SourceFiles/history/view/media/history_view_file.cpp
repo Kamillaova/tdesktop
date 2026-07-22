@@ -16,6 +16,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "ui/chat/chat_style.h"
 #include "ui/text/format_values.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 
 #include "styles/style_chat.h"
@@ -121,6 +122,7 @@ void File::repaintRadialAnimation() const {
 	if (_animation->radialRepaintRect) {
 		_parent->repaint(*_animation->radialRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("file radial animation");
 		repaint();
 	}
 }

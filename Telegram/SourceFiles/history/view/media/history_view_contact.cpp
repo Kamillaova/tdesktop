@@ -20,14 +20,15 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "ui/chat/chat_style.h"
-#include "ui/empty_userpic.h"
 #include "ui/layers/generic_box.h"
-#include "ui/painter.h"
-#include "ui/power_saving.h"
-#include "ui/rect.h"
 #include "ui/text/format_values.h" // Ui::FormatPhone
 #include "ui/text/text_options.h"
 #include "ui/text/text_utilities.h" // Ui::Text::Wrapped.
+#include "ui/damage_debug.h"
+#include "ui/empty_userpic.h"
+#include "ui/painter.h"
+#include "ui/power_saving.h"
+#include "ui/rect.h"
 #include "ui/vertical_list.h"
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
@@ -726,6 +727,7 @@ void Contact::repaintRipple(
 	}
 	repaint.pending = 1;
 	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint("contact ripple");
 		this->repaint();
 	} else {
 		repaintRippleRegion(repaint.current);
@@ -759,6 +761,7 @@ void Contact::recordRippleRepaint(
 		repaint.stale = previous;
 		if (!previous.isEmpty()) {
 			repaint.pending = 1;
+			Ui::LogUnknownGeometryRepaint("contact ripple");
 			this->repaint();
 		}
 		return;

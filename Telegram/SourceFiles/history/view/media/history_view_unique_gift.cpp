@@ -33,6 +33,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/ripple_animation.h"
 #include "ui/layers/generic_box.h"
 #include "ui/text/text_utilities.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
@@ -141,6 +142,7 @@ void RepaintPaintedRect(not_null<PaintedRectRepaint*> state) {
 	if (state->rect) {
 		state->view->repaint(*state->rect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("unique gift animation");
 		state->view->repaint();
 	}
 }
@@ -342,6 +344,7 @@ void ButtonPart::repaintButton() const {
 		Assert(_buttonRepaintOwner != nullptr);
 		_buttonRepaintOwner->repaint(*_buttonRepaintRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("unique gift button");
 		_repaint();
 	}
 }
@@ -365,6 +368,7 @@ void ButtonPart::recordButtonRepaintRect(
 		_buttonRepaintRect = std::nullopt;
 		if (!previous.isEmpty()) {
 			_buttonRepaintPending = true;
+			Ui::LogUnknownGeometryRepaint("unique gift button");
 			_repaint();
 		}
 		return;

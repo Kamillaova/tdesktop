@@ -58,6 +58,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/popup_menu.h"
 #include "ui/wrap/table_layout.h"
 #include "ui/color_int_conversion.h"
+#include "ui/damage_debug.h"
 #include "ui/dynamic_thumbnails.h"
 #include "ui/vertical_list.h"
 #include "window/window_session_controller.h"
@@ -1946,6 +1947,7 @@ object_ptr<Ui::RpWidget> MakeActiveAuctionRow(
 			document,
 			[=] {
 				if (!repaint->hasBounds) {
+					Ui::LogUnknownGeometryRepaint("auction emoji");
 					raw->update();
 					return;
 				}

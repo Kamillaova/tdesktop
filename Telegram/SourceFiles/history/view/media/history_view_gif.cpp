@@ -23,8 +23,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "media/view/media_view_open_common.h"
 #include "media/view/media_view_playback_progress.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/chat/attach/attach_prepare.h"
+#include "ui/chat/chat_style.h"
+#include "ui/effects/path_shift_gradient.h"
+#include "ui/effects/spoiler_mess.h"
+#include "ui/image/image.h"
+#include "ui/text/format_values.h"
+#include "ui/cached_round_corners.h"
+#include "ui/damage_debug.h"
+#include "ui/grouped_layout.h"
 #include "ui/painter.h"
+#include "ui/power_saving.h"
 #include "ui/rect.h"
+#include "ui/ui_utility.h"
 #include "history/history_item_components.h"
 #include "history/history_item.h"
 #include "history/history.h"
@@ -40,16 +51,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "window/window_session_controller.h"
 #include "core/application.h" // Application::showDocument.
 #include "core/core_settings.h"
-#include "ui/chat/attach/attach_prepare.h"
-#include "ui/chat/chat_style.h"
-#include "ui/image/image.h"
-#include "ui/text/format_values.h"
-#include "ui/grouped_layout.h"
-#include "ui/cached_round_corners.h"
-#include "ui/power_saving.h"
-#include "ui/ui_utility.h"
-#include "ui/effects/path_shift_gradient.h"
-#include "ui/effects/spoiler_mess.h"
 #include "data/data_photo.h"
 #include "data/data_photo_media.h"
 #include "data/data_session.h"
@@ -2438,6 +2439,7 @@ void Gif::repaintSeekAnimation() const {
 	}
 	_seekRepaint.pending = 1;
 	if (!_seekRepaint.known) {
+		Ui::LogUnknownGeometryRepaint("GIF seek animation");
 		repaint();
 	} else {
 		repaintSeekAnimationRegion(_seekRepaint.current);
@@ -2470,6 +2472,7 @@ void Gif::recordSeekAnimationRepaint(
 		_seekRepaint.stale = previous;
 		if (!previous.isEmpty()) {
 			_seekRepaint.pending = 1;
+			Ui::LogUnknownGeometryRepaint("GIF seek animation");
 			repaint();
 		}
 		return;
@@ -2684,6 +2687,7 @@ void Gif::repaintStreamedContent(bool force) const {
 	if (_streamedContentRect) {
 		_parent->repaint(*_streamedContentRect);
 	} else {
+		Ui::LogUnknownGeometryRepaint("GIF stream");
 		repaint();
 	}
 }
