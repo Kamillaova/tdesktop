@@ -7,10 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "boxes/peer_list_box.h"
 #include "base/flat_map.h"
+#include "boxes/peer_list_box.h"
 #include "ui/effects/animations.h"
 #include "ui/unread_badge.h"
+
+#include <QtGui/QRegion>
 
 namespace Ui {
 class ChatStyle;
@@ -52,6 +54,7 @@ public:
 	void setType(Type type);
 	[[nodiscard]] Type type() const;
 	void setRefreshCallback(Fn<void()> callback);
+	void setRepaintCallback(Fn<void(const QRegion &)> callback);
 	void refreshStatus() override;
 
 	[[nodiscard]] UserData *user() const;
@@ -115,6 +118,9 @@ private:
 		bool over);
 	[[nodiscard]] QSize tagSize() const;
 	[[nodiscard]] QSize removeSize() const;
+	[[nodiscard]] QRegion actionRepaintRegion(int outerWidth) const;
+	void recordActionGeometry(int outerWidth);
+	void repaintAction();
 	void checkHoverChanged(bool hovered);
 
 	Type _type;
@@ -123,11 +129,14 @@ private:
 	int _tagTextWidth = 0;
 	QString _removeText;
 	int _removeTextWidth = 0;
+	bool _wasHovered = false;
+	Fn<void()> _refreshCallback;
+	Fn<void(const QRegion &)> _repaintCallback;
+	QRegion _pendingActionRepaint;
+	QRegion _actionRepaint;
 	Ui::Animations::Simple _hoverAnimation;
 	std::unique_ptr<Ui::RippleAnimation> _tagRipple;
 	std::unique_ptr<Ui::RippleAnimation> _removeRipple;
-	Fn<void()> _refreshCallback;
-	bool _wasHovered = false;
 
 };
 

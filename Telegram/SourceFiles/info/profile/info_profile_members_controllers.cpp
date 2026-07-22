@@ -8,17 +8,19 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/info_profile_members_controllers.h"
 
 #include "boxes/peers/edit_participants_box.h"
-#include "info/profile/info_profile_values.h"
 #include "data/data_chat.h"
 #include "data/data_user.h"
-#include "ui/unread_badge.h"
+#include "info/profile/info_profile_values.h"
 #include "lang/lang_keys.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
-#include "styles/style_info.h"
+#include "ui/unread_badge.h"
+
 #include "styles/style_boxes.h"
 #include "styles/style_chat.h"
 #include "styles/style_dialogs.h"
+#include "styles/style_info.h"
 #include "styles/style_widgets.h"
 
 namespace Info {
@@ -38,6 +40,8 @@ void MemberListRow::setType(Type type) {
 	_type = type;
 	_tagRipple = nullptr;
 	_removeRipple = nullptr;
+	_actionRepaint = QRegion();
+	_pendingActionRepaint = QRegion();
 	if (_type.canAddTag) {
 		_tagMode = TagMode::AddTag;
 		_tagText = tr::lng_context_add_my_tag(tr::now);
@@ -81,6 +85,11 @@ UserData *MemberListRow::user() const {
 
 void MemberListRow::setRefreshCallback(Fn<void()> callback) {
 	_refreshCallback = std::move(callback);
+}
+
+void MemberListRow::setRepaintCallback(
+		Fn<void(const QRegion &)> callback) {
+	_repaintCallback = std::move(callback);
 }
 
 bool MemberListRow::tagInteractive() const {
@@ -129,6 +138,50 @@ QSize MemberListRow::removeSize() const {
 	const auto h = p.top() + st::normalFont->height + p.bottom();
 	const auto w = p.left() + _removeTextWidth + p.right();
 	return QSize(std::max(w, h), h);
+}
+
+QRegion MemberListRow::actionRepaintRegion(int outerWidth) const {
+	const auto size = rightActionSize();
+	if (outerWidth <= 0 || size.isEmpty()) {
+		return QRegion();
+	}
+	const auto margins = rightActionMargins();
+	const auto width = margins.left() + size.width() + margins.right();
+	const auto height = margins.top() + size.height() + margins.bottom();
+	const auto logical = QRect(outerWidth - width, 0, width, height);
+	const auto trailing = style::rtlrect(logical, outerWidth);
+	return style::RightToLeft()
+		? QRegion(trailing).united(QRegion(logical))
+		: QRegion(trailing);
+}
+
+void MemberListRow::recordActionGeometry(int outerWidth) {
+	const auto current = actionRepaintRegion(outerWidth);
+	if (current == _actionRepaint) {
+		return;
+	}
+	if (!_actionRepaint.isEmpty()) {
+		_pendingActionRepaint += _actionRepaint;
+		_pendingActionRepaint += current;
+	}
+	_actionRepaint = current;
+}
+
+void MemberListRow::repaintAction() {
+	if (_actionRepaint.isEmpty()) {
+		Ui::LogUnknownGeometryRepaint("profile member right action");
+		if (_refreshCallback) {
+			_refreshCallback();
+		}
+		return;
+	}
+	if (_repaintCallback) {
+		const auto damage = base::take(_pendingActionRepaint)
+			.united(_actionRepaint);
+		_repaintCallback(damage);
+	} else if (_refreshCallback) {
+		_refreshCallback();
+	}
 }
 
 int MemberListRow::elementsCount() const {
@@ -206,7 +259,7 @@ void MemberListRow::elementAddRipple(
 			_tagRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultLightButton.ripple,
 				std::move(mask),
-				updateCallback);
+				[this] { repaintAction(); });
 		}
 		_tagRipple->add(point);
 	} else if (element == kRemoveElement) {
@@ -218,7 +271,7 @@ void MemberListRow::elementAddRipple(
 			_removeRipple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultLightButton.ripple,
 				std::move(mask),
-				updateCallback);
+				[this] { repaintAction(); });
 		}
 		_removeRipple->add(point);
 	}
@@ -252,7 +305,7 @@ void MemberListRow::checkHoverChanged(bool hovered) {
 	}
 	_wasHovered = hovered;
 	_hoverAnimation.start(
-		_refreshCallback ? _refreshCallback : Fn<void()>([] {}),
+		[this] { repaintAction(); },
 		hovered ? 0. : 1.,
 		hovered ? 1. : 0.,
 		st::universalDuration);
@@ -494,6 +547,7 @@ void MemberListRow::elementsPaint(
 		int outerWidth,
 		bool selected,
 		int selectedElement) {
+	recordActionGeometry(outerWidth);
 	checkHoverChanged(selected || (selectedElement > 0));
 	if (_type.canRemove) {
 		const auto removeGeometry = elementGeometry(

@@ -2444,6 +2444,9 @@ std::unique_ptr<PeerListRow> ParticipantsBoxController::createRow(
 	row->setRefreshCallback(crl::guard(this, [=] {
 		delegate()->peerListUpdateRow(raw);
 	}));
+	row->setRepaintCallback(crl::guard(this, [=](const QRegion &damage) {
+		delegate()->peerListRepaintRow(raw, damage);
+	}));
 	return row;
 }
 
