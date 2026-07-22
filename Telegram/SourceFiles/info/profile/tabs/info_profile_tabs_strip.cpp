@@ -10,9 +10,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/effects/animation_value.h"
 #include "ui/effects/animation_value_f.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/paint/damage.h"
+#include "ui/damage_debug.h"
 #include "ui/painter.h"
 #include "ui/rect.h"
 #include "ui/ui_utility.h"
+
 #include "styles/style_basic.h"
 #include "styles/style_chat_helpers.h"
 #include "styles/style_info.h"
@@ -68,12 +71,69 @@ TabsStrip::TabsStrip(QWidget *parent, const style::ProfileTabsStrip &st)
 
 void TabsStrip::setTextContext(Ui::Text::MarkedContext context) {
 	_context = std::move(context);
-	_context.repaint = [=] { invalidate(); };
 }
 
 void TabsStrip::invalidate() {
 	_contentValid = false;
 	update();
+}
+
+void TabsStrip::invalidateContent() {
+	_contentValid = false;
+	const auto island = islandRect().intersected(rect());
+	if (!island.isEmpty()) {
+		update(island);
+	}
+}
+
+void TabsStrip::repaintActiveAnimation() {
+	_contentValid = false;
+	const auto geometry = activeAnimationRepaintRect();
+	if (!geometry.isEmpty()) {
+		update(geometry);
+	}
+}
+
+void TabsStrip::repaintTextAnimation(
+		const std::shared_ptr<ButtonIdentity> &identity) {
+	if (!validButtonIdentity(identity)) {
+		return;
+	}
+	_contentValid = false;
+	if (!identity->textGeometry) {
+		Ui::LogUnknownGeometryRepaint("profile tabs text");
+		update();
+	} else if (!identity->textGeometry->isEmpty()) {
+		update(*identity->textGeometry);
+	}
+}
+
+void TabsStrip::repaintRippleAnimation(
+		const std::shared_ptr<ButtonIdentity> &identity) {
+	if (!validButtonIdentity(identity)) {
+		return;
+	}
+	_contentValid = false;
+	if (!identity->rippleGeometry) {
+		Ui::LogUnknownGeometryRepaint("profile tabs ripple");
+		update();
+	} else if (!identity->rippleGeometry->isEmpty()) {
+		update(*identity->rippleGeometry);
+	}
+}
+
+void TabsStrip::recordAnimationGeometry(
+		std::optional<QRect> &geometry,
+		QRect current,
+		const QRegion &repaintRegion) {
+	current &= rect();
+	if (geometry && *geometry != current) {
+		const auto changed = geometry->united(current).intersected(rect());
+		if (!changed.isEmpty() && !repaintRegion.contains(changed)) {
+			update(changed);
+		}
+	}
+	geometry = current;
 }
 
 void TabsStrip::setTabs(std::vector<StripTab> tabs) {
@@ -93,11 +153,18 @@ void TabsStrip::setTabs(std::vector<StripTab> tabs) {
 		Assert(!tab.id.isEmpty());
 
 		auto button = Button();
+		button.identity = std::make_shared<ButtonIdentity>();
+		button.identity->index = int(buttons.size());
+		auto context = _context;
+		const auto identity = button.identity;
+		context.repaint = crl::guard(this, [=] {
+			repaintTextAnimation(identity);
+		});
 		button.text.setMarkedText(
 			_st.style,
 			tab.text,
 			kMarkupTextOptions,
-			_context);
+			context);
 		const auto width = _st.tabPadding.left()
 			+ button.text.maxWidth()
 			+ _st.tabPadding.right();
@@ -180,6 +247,25 @@ QRect TabsStrip::highlightRect(int index) const {
 	return _buttons[index].geometry - Margins(_st.activeSkip);
 }
 
+QRect TabsStrip::activeAnimationRepaintRect() const {
+	auto geometry = _activeFrom.united(_activeTo);
+	for (const auto index : { _wasActive, _active }) {
+		if (index >= 0 && index < int(_buttons.size())) {
+			geometry |= _buttons[index].geometry;
+		}
+	}
+	const auto island = islandRect();
+	return geometry.translated(contentOrigin()).intersected(island);
+}
+
+QRect TabsStrip::rippleRepaintRect(int index, QRect island) const {
+	const auto cache = style::rtlrect(
+		highlightRect(index).translated(
+			contentOrigin() - island.topLeft()),
+		island.width());
+	return cache.translated(island.topLeft()).intersected(island);
+}
+
 QRectF TabsStrip::currentHighlightRect() const {
 	const auto progress = _activeAnimation.value(1.);
 	const auto from = QRectF(_activeFrom);
@@ -193,6 +279,17 @@ QRectF TabsStrip::currentHighlightRect() const {
 
 int TabsStrip::scrollValue() const {
 	return int(base::SafeRound(_scroll));
+}
+
+bool TabsStrip::validButtonIdentity(
+		const std::shared_ptr<ButtonIdentity> &identity) const {
+	if (!identity) {
+		return false;
+	}
+	const auto index = identity->index;
+	return index >= 0
+		&& index < int(_buttons.size())
+		&& _buttons[index].identity == identity;
 }
 
 void TabsStrip::setSelected(int index) {
@@ -212,7 +309,7 @@ void TabsStrip::setActive(int index) {
 	if (index < 0) {
 		_activeAnimation.stop();
 		_wasActive = -1;
-		invalidate();
+		invalidateContent();
 		return;
 	}
 	const auto to = highlightRect(index);
@@ -227,14 +324,14 @@ void TabsStrip::setActive(int index) {
 		_activeTo = to;
 		_wasActive = previous;
 		_activeAnimation.start(
-			[=] { invalidate(); },
+			[=] { repaintActiveAnimation(); },
 			0.,
 			1.,
 			_st.duration,
 			anim::easeOutQuint);
 	}
 	scrollToTab(index);
-	invalidate();
+	invalidateContent();
 }
 
 void TabsStrip::scrollToTab(int index) {
@@ -258,7 +355,7 @@ void TabsStrip::scrollTo(float64 value) {
 	_scrollTo = std::clamp(value, 0., _scrollMax * 1.);
 	_scrollAnimation.start([=] {
 		_scroll = _scrollAnimation.value(_scrollTo);
-		invalidate();
+		invalidateContent();
 	}, _scroll, _scrollTo, kScrollDuration, anim::easeOutCirc);
 }
 
@@ -292,7 +389,7 @@ void TabsStrip::mouseMoveEvent(QMouseEvent *e) {
 			_dragscroll + _dragx - mousex,
 			0.,
 			_scrollMax * 1.);
-		invalidate();
+		invalidateContent();
 		return;
 	} else if (_pressx > 0 && std::abs(_pressx - mousex) > drag) {
 		_dragx = _pressx;
@@ -321,11 +418,17 @@ void TabsStrip::addRipple(int index, QPoint position) {
 	auto &button = _buttons[index];
 	if (!button.ripple) {
 		const auto size = highlightRect(index).size();
+		const auto identity = button.identity;
 		button.ripple = std::make_unique<Ui::RippleAnimation>(
 			_st.ripple,
 			Ui::RippleAnimation::RoundRectMask(size, size.height() / 2),
-			[=] { invalidate(); });
+			crl::guard(this, [=] {
+				repaintRippleAnimation(identity);
+			}));
 	}
+	button.identity->rippleGeometry = rippleRepaintRect(
+		index,
+		islandRect());
 	const auto highlight = highlightRect(index).translated(
 		contentOrigin());
 	button.ripple->add(position - highlight.topLeft());
@@ -377,7 +480,7 @@ void TabsStrip::wheelEvent(QWheelEvent *e) {
 		e->accept();
 		_scrollAnimation.stop();
 		_scroll = std::clamp(_scroll - delta.x(), 0., _scrollMax * 1.);
-		invalidate();
+		invalidateContent();
 	} else if (_locked == Qt::Horizontal) {
 		e->accept();
 	} else if (wheelScrollsTabs(phase)) {
@@ -438,7 +541,7 @@ void TabsStrip::paintEvent(QPaintEvent *e) {
 	p.setPen(Qt::NoPen);
 	p.drawRoundedRect(island, radius, radius);
 
-	validateContent(island);
+	validateContent(island, e->region());
 
 	auto clip = QPainterPath();
 	clip.addRoundedRect(QRectF(island), radius, radius);
@@ -449,7 +552,9 @@ void TabsStrip::paintEvent(QPaintEvent *e) {
 	PaintIslandOutline(p, QRectF(island), radius, _st.bg);
 }
 
-void TabsStrip::validateContent(QRect island) {
+void TabsStrip::validateContent(
+		QRect island,
+		const QRegion &repaintRegion) {
 	const auto ratio = style::DevicePixelRatio();
 	const auto size = island.size() * ratio;
 	if (_contentValid && _content.size() == size) {
@@ -481,6 +586,10 @@ void TabsStrip::validateContent(QRect island) {
 		if (!button.ripple) {
 			continue;
 		}
+		recordAnimationGeometry(
+			button.identity->rippleGeometry,
+			rippleRepaintRect(i, island),
+			repaintRegion);
 		const auto highlight = highlightRect(i).translated(origin);
 		button.ripple->paint(p, highlight.x(), highlight.y(), island.width());
 		if (button.ripple->empty()) {
@@ -490,7 +599,7 @@ void TabsStrip::validateContent(QRect island) {
 	const auto textTop = (_buttons.front().geometry.height()
 		- _st.style.font->height) / 2;
 	for (auto i = 0, c = int(_buttons.size()); i != c; ++i) {
-		const auto &button = _buttons[i];
+		auto &button = _buttons[i];
 		if (i == _active) {
 			p.setPen(animating
 				? QPen(anim::color(_st.fg, _st.fgActive, progress))
@@ -500,13 +609,42 @@ void TabsStrip::validateContent(QRect island) {
 		} else {
 			p.setPen(_st.fg->c);
 		}
+		const auto position = origin
+			+ button.geometry.topLeft()
+			+ QPoint(_st.tabPadding.left(), textTop);
+		auto customEmojiRepaintBounds
+			= Ui::Text::CustomEmojiRepaintBounds();
 		button.text.draw(p, {
-			.position = origin
-				+ button.geometry.topLeft()
-				+ QPoint(_st.tabPadding.left(), textTop),
+			.position = position,
 			.availableWidth = button.text.maxWidth(),
 			.now = crl::now(),
+			.customEmojiRepaintBounds = button.text.hasCustomEmoji()
+				? &customEmojiRepaintBounds
+				: nullptr,
 		});
+		if (button.text.hasCustomEmoji() || button.text.hasSpoilers()) {
+			auto cacheGeometry = Ui::DamageRect(
+				customEmojiRepaintBounds.rect,
+				p.transform());
+			if (!customEmojiRepaintBounds.repaintBoundsKnown
+				|| button.text.hasSpoilers()) {
+				const auto fallback = QRectF(
+					position,
+					QSize(
+						button.text.maxWidth(),
+						button.text.lineHeight()));
+				cacheGeometry = cacheGeometry.united(Ui::DamageRect(
+					fallback,
+					p.transform()));
+			}
+			const auto widgetGeometry = cacheGeometry
+				.translated(island.topLeft())
+				.intersected(island);
+			recordAnimationGeometry(
+				button.identity->textGeometry,
+				widgetGeometry,
+				repaintRegion);
+		}
 	}
 
 	if (_scrollMax > 0) {

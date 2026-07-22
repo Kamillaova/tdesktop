@@ -7,10 +7,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #pragma once
 
-#include "ui/rp_widget.h"
 #include "ui/effects/animations.h"
 #include "ui/text/text.h"
 #include "ui/widgets/shadow.h"
+#include "ui/rp_widget.h"
+
+#include <QtGui/QRegion>
 
 namespace style {
 struct ProfileTabsStrip;
@@ -40,10 +42,17 @@ public:
 	[[nodiscard]] rpl::producer<QString> contextMenuRequests() const;
 
 private:
+	struct ButtonIdentity {
+		int index = -1;
+		std::optional<QRect> textGeometry;
+		std::optional<QRect> rippleGeometry;
+	};
+
 	struct Button {
 		StripTab tab;
 		QRect geometry;
 		Ui::Text::String text;
+		std::shared_ptr<ButtonIdentity> identity;
 		std::unique_ptr<Ui::RippleAnimation> ripple;
 	};
 
@@ -56,8 +65,18 @@ private:
 	void paintEvent(QPaintEvent *e) override;
 	bool eventHook(QEvent *e) override;
 
-	void validateContent(QRect island);
+	void validateContent(QRect island, const QRegion &repaintRegion);
 	void invalidate();
+	void invalidateContent();
+	void repaintActiveAnimation();
+	void repaintTextAnimation(
+		const std::shared_ptr<ButtonIdentity> &identity);
+	void repaintRippleAnimation(
+		const std::shared_ptr<ButtonIdentity> &identity);
+	void recordAnimationGeometry(
+		std::optional<QRect> &geometry,
+		QRect current,
+		const QRegion &repaintRegion);
 
 	void setSelected(int index);
 	void setActive(int index);
@@ -74,8 +93,12 @@ private:
 	[[nodiscard]] QRect islandRect() const;
 	[[nodiscard]] int islandInteriorWidth() const;
 	[[nodiscard]] QRect highlightRect(int index) const;
+	[[nodiscard]] QRect activeAnimationRepaintRect() const;
+	[[nodiscard]] QRect rippleRepaintRect(int index, QRect island) const;
 	[[nodiscard]] QRectF currentHighlightRect() const;
 	[[nodiscard]] int scrollValue() const;
+	[[nodiscard]] bool validButtonIdentity(
+		const std::shared_ptr<ButtonIdentity> &identity) const;
 
 	const style::ProfileTabsStrip &_st;
 	Ui::Text::MarkedContext _context;
