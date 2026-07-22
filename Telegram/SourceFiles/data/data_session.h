@@ -1277,12 +1277,18 @@ private:
 	std::unordered_map<
 		not_null<const PhotoData*>,
 		base::flat_set<not_null<HistoryItem*>>> _photoItems;
+	base::flat_map<
+		std::pair<not_null<const PhotoData*>, not_null<HistoryItem*>>,
+		int> _photoItemExtraReferences;
 	std::unordered_map<
 		DocumentId,
 		std::unique_ptr<DocumentData>> _documents;
 	std::unordered_map<
 		not_null<const DocumentData*>,
 		base::flat_set<not_null<HistoryItem*>>> _documentItems;
+	base::flat_map<
+		std::pair<not_null<const DocumentData*>, not_null<HistoryItem*>>,
+		int> _documentItemExtraReferences;
 	std::unordered_map<
 		WebPageId,
 		std::unique_ptr<WebPageData>> _webpages;

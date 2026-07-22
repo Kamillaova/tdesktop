@@ -4914,14 +4914,23 @@ not_null<Data::CloudImage*> Session::location(const LocationPoint &point) {
 void Session::registerPhotoItem(
 		not_null<const PhotoData*> photo,
 		not_null<HistoryItem*> item) {
-	_photoItems[photo].insert(item);
+	if (!_photoItems[photo].insert(item).second) {
+		++_photoItemExtraReferences[{ photo, item }];
+	}
 }
 
 void Session::unregisterPhotoItem(
 		not_null<const PhotoData*> photo,
 		not_null<HistoryItem*> item) {
+	const auto extra = _photoItemExtraReferences.find({ photo, item });
+	if (extra != end(_photoItemExtraReferences)) {
+		if (--extra->second == 0) {
+			_photoItemExtraReferences.erase(extra);
+		}
+		return;
+	}
 	const auto i = _photoItems.find(photo);
-	if (i != _photoItems.end()) {
+	if (i != end(_photoItems)) {
 		auto &items = i->second;
 		if (items.remove(item) && items.empty()) {
 			_photoItems.erase(i);
@@ -4935,14 +4944,23 @@ void Session::registerDocumentItem(
 	if (document->isMusicForProfile()) {
 		document->owner().savedMusic().loadIds();
 	}
-	_documentItems[document].insert(item);
+	if (!_documentItems[document].insert(item).second) {
+		++_documentItemExtraReferences[{ document, item }];
+	}
 }
 
 void Session::unregisterDocumentItem(
 		not_null<const DocumentData*> document,
 		not_null<HistoryItem*> item) {
+	const auto extra = _documentItemExtraReferences.find({ document, item });
+	if (extra != end(_documentItemExtraReferences)) {
+		if (--extra->second == 0) {
+			_documentItemExtraReferences.erase(extra);
+		}
+		return;
+	}
 	const auto i = _documentItems.find(document);
-	if (i != _documentItems.end()) {
+	if (i != end(_documentItems)) {
 		auto &items = i->second;
 		if (items.remove(item) && items.empty()) {
 			_documentItems.erase(i);
