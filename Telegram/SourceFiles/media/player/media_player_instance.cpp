@@ -88,6 +88,18 @@ struct Instance::Streamed {
 		friend inline bool operator==(ItemUpdateKey, ItemUpdateKey) = default;
 	};
 
+	struct PlaybackViewUpdateKey {
+		AudioMsgId id;
+		State state = State::Stopped;
+		int64 position = 0;
+		int64 length = 0;
+		int frequency = 0;
+
+		friend inline bool operator==(
+			PlaybackViewUpdateKey,
+			PlaybackViewUpdateKey) = default;
+	};
+
 	Streamed(
 		AudioMsgId id,
 		std::shared_ptr<Streaming::Document> document);
@@ -96,6 +108,7 @@ struct Instance::Streamed {
 	Streaming::Instance instance;
 	View::PlaybackProgress progress;
 	std::optional<ItemUpdateKey> itemUpdateKey;
+	std::optional<PlaybackViewUpdateKey> playbackViewUpdateKey;
 	bool clearing = false;
 	rpl::lifetime lifetime;
 };
@@ -1310,12 +1323,11 @@ void Instance::emitUpdate(
 		if (type == AudioMsgId::Type::Song) {
 			_listenTracker->update(state);
 		}
-		const auto notifyItem = [&] {
-			const auto document = state.id.audio();
-			const auto streamed = data->streamed.get();
-			if (!streamed || !document || !document->isVideoMessage()) {
-				return true;
-			}
+		auto notifyItem = true;
+		auto notifyPlaybackView = false;
+		const auto document = state.id.audio();
+		const auto streamed = data->streamed.get();
+		if (streamed && document) {
 			const auto position = (state.frequency > 0)
 				? (state.position / state.frequency)
 				: state.position;
@@ -1331,13 +1343,34 @@ void Instance::emitUpdate(
 			const auto changed = !streamed->itemUpdateKey
 				|| (*streamed->itemUpdateKey != key);
 			streamed->itemUpdateKey = key;
-			return (mode == ItemUpdateMode::Always) || changed;
-		}();
+			const auto playbackViewKey = Streamed::PlaybackViewUpdateKey{
+				.id = state.id,
+				.state = state.state,
+				.position = state.position,
+				.length = state.length,
+				.frequency = state.frequency,
+			};
+			const auto playbackViewChanged
+				= !streamed->playbackViewUpdateKey
+				|| (*streamed->playbackViewUpdateKey != playbackViewKey);
+			streamed->playbackViewUpdateKey = playbackViewKey;
+			notifyItem = (mode == ItemUpdateMode::Always) || changed;
+			notifyPlaybackView = !notifyItem
+				&& document->isVoiceMessage()
+				&& playbackViewChanged;
+		}
 
 		auto finished = false;
 		_updatedNotifier.fire_copy({state});
 		if (notifyItem) {
 			_itemUpdatedNotifier.fire_copy({state});
+		} else if (notifyPlaybackView && document) {
+			if (const auto item = document->owner().message(
+					state.id.contextId())) {
+				document->owner().requestItemPlaybackViewRepaint(
+					item,
+					document);
+			}
 		}
 		if (data->isPlaying && state.state == State::StoppedAtEnd) {
 			if (repeat(data) == RepeatMode::One) {

@@ -411,6 +411,9 @@ public:
 	void requestItemPlaybackRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);
+	void requestItemPlaybackViewRepaint(
+		not_null<const HistoryItem*> item,
+		not_null<DocumentData*> document);
 	void requestItemPlaybackFrameRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);
@@ -1166,10 +1169,6 @@ private:
 	void enumerateItemViews(
 		not_null<const HistoryItem*> item,
 		Method method);
-	void requestItemPlaybackViewRepaint(
-		not_null<const HistoryItem*> item,
-		not_null<DocumentData*> document);
-
 	void insertCheckedServiceNotification(
 		const TextWithEntities &message,
 		const MTPMessageMedia &media,
