@@ -23,10 +23,13 @@ class PhotoData;
 class QPaintDevice;
 class QPainter;
 class QWidget;
+class ReplyKeyboard;
 class UserData;
+struct ReplyKeyboardButtonPaint;
 struct HistoryMessageReply;
 struct PreparedServiceText;
 struct HistoryMessageReplyMarkup;
+struct ReplyKeyboardRepaintRequest;
 
 namespace Data {
 class Thread;
@@ -833,6 +836,8 @@ public:
 	void hideSpoilers();
 	void repaint(QRect r = QRect()) const;
 	void repaint(const QRegion &region) const;
+	[[nodiscard]] bool repaintInlineKeyboard(
+		ReplyKeyboardRepaintRequest request) const;
 
 	[[nodiscard]] ClickHandlerPtr fromPhotoLink() const {
 		return fromLink();
@@ -910,6 +915,11 @@ protected:
 	void invalidateTextSizeCache();
 	void validateTextSkipBlock(bool has, int width, int height);
 	void validateInlineKeyboard(HistoryMessageReplyMarkup *markup);
+	void recordInlineKeyboardAnimationPaint(
+		const Painter &p,
+		const PaintContext &context,
+		not_null<const ReplyKeyboard*> keyboard,
+		const ReplyKeyboardButtonPaint &painted) const;
 
 	void clearSpecialOnlyEmoji();
 	void checkSpecialOnlyEmoji();
@@ -973,6 +983,24 @@ private:
 	uint64 _servicePreMessageGeneration = 0;
 	mutable QRect _textRepaintRect;
 	mutable QRect _textStaleRepaintRect;
+	struct InlineKeyboardRepaintState {
+		QRect rect;
+		QRect customEmojiRect;
+		uint32 rectKnown : 1 = 0;
+		uint32 customEmojiRectKnown : 1 = 0;
+		uint32 hasCustomEmoji : 1 = 0;
+		uint32 ripple : 1 = 0;
+		uint32 loading : 1 = 0;
+		uint32 customEmojiPending : 1 = 0;
+		uint32 ripplePending : 1 = 0;
+	};
+	struct InlineKeyboardRepaintData {
+		std::vector<std::vector<InlineKeyboardRepaintState>> states;
+		uint32 generation = 0;
+		uint32 loadingRepaintPending : 1 = 0;
+	};
+	mutable std::unique_ptr<InlineKeyboardRepaintData>
+		_inlineKeyboardRepaint;
 	mutable uint32 _textWidth : 16 = 0;
 	mutable uint32 _textRealWidth : 16 = 0;
 	mutable int _textHeight = 0;

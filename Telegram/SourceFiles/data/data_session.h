@@ -20,6 +20,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 class Image;
 class DocumentData;
 class HistoryItem;
+struct ReplyKeyboardRepaintRequest;
 struct WebPageCollage;
 struct WebPageStickerSet;
 struct WebPageAuction;
@@ -408,6 +409,9 @@ public:
 	void requestItemVisualRepaint(
 		not_null<const HistoryItem*> item,
 		QRect r = QRect());
+	[[nodiscard]] bool requestItemInlineKeyboardRepaint(
+		not_null<const HistoryItem*> item,
+		ReplyKeyboardRepaintRequest request);
 	void requestItemPlaybackRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document);

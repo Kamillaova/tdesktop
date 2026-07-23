@@ -2142,6 +2142,20 @@ void Session::requestItemVisualRepaint(
 	}
 }
 
+bool Session::requestItemInlineKeyboardRepaint(
+		not_null<const HistoryItem*> item,
+		ReplyKeyboardRepaintRequest request) {
+	auto accepted = false;
+	enumerateItemViews(item, [&](not_null<const ViewElement*> view) {
+		if (!view->isHiddenByGroup()) {
+			if (view->repaintInlineKeyboard(request)) {
+				accepted = true;
+			}
+		}
+	});
+	return accepted;
+}
+
 void Session::requestItemPlaybackRepaint(
 		not_null<const HistoryItem*> item,
 		not_null<DocumentData*> document) {

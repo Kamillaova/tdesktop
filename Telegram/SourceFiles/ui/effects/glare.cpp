@@ -44,6 +44,21 @@ void GlareEffect::validate(
 		Fn<void()> updateCallback,
 		crl::time timeout,
 		crl::time duration) {
+	validateWhile(
+		color,
+		[callback = std::move(updateCallback)] {
+			callback();
+			return true;
+		},
+		timeout,
+		duration);
+}
+
+void GlareEffect::validateWhile(
+		const QColor &color,
+		Fn<bool()> updateCallback,
+		crl::time timeout,
+		crl::time duration) {
 	if (anim::Disabled()) {
 		return;
 	}
@@ -57,11 +72,12 @@ void GlareEffect::validate(
 					.birthTime = now,
 					.deathTime = now + duration,
 				};
-				updateCallback();
+				return updateCallback();
 			}
 		} else {
-			updateCallback();
+			return updateCallback();
 		}
+		return true;
 	});
 	animation.start();
 	{

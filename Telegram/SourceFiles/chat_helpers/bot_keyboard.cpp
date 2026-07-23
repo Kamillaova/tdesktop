@@ -69,7 +69,8 @@ protected:
 		const QRect &rect,
 		HistoryMessageMarkupButton::Color color,
 		int outerWidth,
-		Ui::BubbleRounding rounding) const override;
+		Ui::BubbleRounding rounding,
+		Fn<bool()> repaint) const override;
 	int minButtonWidth(HistoryMessageMarkupButton::Type type) const override;
 
 private:
@@ -167,7 +168,6 @@ void Style::paintButtonIcon(
 		const QRect &rect,
 		int outerWidth,
 		HistoryMessageMarkupButton::Type type) const {
-	// Buttons with icons should not appear here.
 }
 
 void Style::paintButtonLoading(
@@ -176,8 +176,8 @@ void Style::paintButtonLoading(
 		const QRect &rect,
 		HistoryMessageMarkupButton::Color color,
 		int outerWidth,
-		Ui::BubbleRounding rounding) const {
-	// Buttons with loading progress should not appear here.
+		Ui::BubbleRounding rounding,
+		Fn<bool()>) const {
 }
 
 int Style::minButtonWidth(HistoryMessageMarkupButton::Type type) const {

@@ -72,6 +72,22 @@ base::options::toggle FastButtonsModeOption({
 	.description = "Trigger inline keyboard buttons by 1-9 keyboard keys.",
 });
 
+[[nodiscard]] uint32 NextReplyKeyboardRepaintGeneration() {
+	static auto result = uint32();
+	return ++result;
+}
+
+[[nodiscard]] bool IsLoadingButtonType(
+		HistoryMessageMarkupButton::Type type) {
+	using Type = HistoryMessageMarkupButton::Type;
+	switch (type) {
+	case Type::CallbackWithPassword:
+	case Type::Callback:
+	case Type::Game: return true;
+	default: return false;
+	}
+}
+
 [[nodiscard]] TextWithEntities ComposeTodoTasksList(
 		int fullCount,
 		const std::vector<TextWithEntities> &names) {
@@ -814,6 +830,7 @@ ReplyKeyboard::ReplyKeyboard(
 	not_null<const HistoryItem*> item,
 	std::unique_ptr<Style> &&s)
 : _item(item)
+, _repaintGeneration(NextReplyKeyboardRepaintGeneration())
 , _st(std::move(s)) {
 	if (const auto markup = _item->Get<HistoryMessageReplyMarkup>()) {
 		const auto owner = &_item->history()->owner();
@@ -891,7 +908,15 @@ ReplyKeyboard::ReplyKeyboard(
 						kMarkupTextOptions,
 						Core::TextContext({
 							.session = session,
-							.repaint = [=] { _st->repaint(_item); },
+							.repaint = [=] {
+								_st->repaintAnimation(_item, {
+									.type = ReplyKeyboardRepaintRequest::Type
+										::CustomEmoji,
+									.row = i,
+									.column = j,
+									.generation = _repaintGeneration,
+								});
+							},
 						}));
 				} else {
 					button.text.setText(
@@ -1035,7 +1060,8 @@ void ReplyKeyboard::paint(
 		Ui::BubbleRounding rounding,
 		int outerWidth,
 		const QRect &clip,
-		bool paused) const {
+		bool paused,
+		const PaintCallback &recordAnimationPaint) const {
 	Assert(_st != nullptr);
 	Assert(_width > 0);
 
@@ -1051,7 +1077,6 @@ void ReplyKeyboard::paint(
 				continue;
 			}
 
-			// just ignore the buttons that didn't layout well
 			if (rect.x() + rect.width() > _width) {
 				break;
 			}
@@ -1083,10 +1108,15 @@ void ReplyKeyboard::paint(
 			_st->paintButton(
 				p,
 				st,
+				_item,
 				outerWidth,
+				y,
+				x,
+				_repaintGeneration,
 				button,
 				buttonRounding,
-				paused);
+				paused,
+				recordAnimationPaint);
 
 			if (number) {
 				p.setFont(st::dialogsUnreadFont);
@@ -1113,9 +1143,8 @@ ClickHandlerPtr ReplyKeyboard::getLink(QPoint point) const {
 
 	for (const auto &row : _rows) {
 		for (const auto &button : row) {
-			QRect rect(button.rect);
+			const auto rect = button.rect;
 
-			// just ignore the buttons that didn't layout well
 			if (rect.x() + rect.width() > _width) {
 				break;
 			}
@@ -1204,7 +1233,14 @@ void ReplyKeyboard::clickHandlerPressedChanged(
 				button.ripple = std::make_unique<Ui::RippleAnimation>(
 					_st->_st->ripple,
 					std::move(mask),
-					[=] { _st->repaint(_item); });
+					[=] {
+						_st->repaintAnimation(_item, {
+							.type = ReplyKeyboardRepaintRequest::Type::Ripple,
+							.row = coords.i,
+							.column = coords.j,
+							.generation = _repaintGeneration,
+						});
+					});
 			}
 			button.ripple->add(_savedCoords - button.rect.topLeft());
 		} else {
@@ -1239,13 +1275,25 @@ int ReplyKeyboard::Style::buttonHeight() const {
 	return _st->height;
 }
 
+bool ReplyKeyboard::Style::repaintAnimation(
+		not_null<const HistoryItem*> item,
+		ReplyKeyboardRepaintRequest request) const {
+	repaint(item);
+	return true;
+}
+
 void ReplyKeyboard::Style::paintButton(
 		Painter &p,
 		const Ui::ChatStyle *st,
+		not_null<const HistoryItem*> item,
 		int outerWidth,
+		int row,
+		int column,
+		uint32 repaintGeneration,
 		const ReplyKeyboard::Button &button,
 		Ui::BubbleRounding rounding,
-		bool paused) const {
+		bool paused,
+		const PaintCallback &recordAnimationPaint) const {
 	const auto &rect = button.rect;
 	paintButtonBg(p, st, rect, button.color, rounding, button.howMuchOver);
 	if (button.ripple) {
@@ -1254,24 +1302,33 @@ void ReplyKeyboard::Style::paintButton(
 			: (button.color != HistoryMessageMarkupButton::Color::Normal)
 			? &st::shadowFg->c
 			: nullptr;
-		button.ripple->paint(p, rect.x(), rect.y(), outerWidth, color);
+		p.save();
+		p.translate(rect.topLeft());
+		button.ripple->paint(p, 0, 0, rect.width(), color);
+		p.restore();
 		if (button.ripple->empty()) {
 			button.ripple.reset();
 		}
 	}
 	paintButtonIcon(p, st, rect, outerWidth, button.iconType);
-	if (button.type == HistoryMessageMarkupButton::Type::CallbackWithPassword
-		|| button.type == HistoryMessageMarkupButton::Type::Callback
-		|| button.type == HistoryMessageMarkupButton::Type::Game) {
+	auto loading = false;
+	if (IsLoadingButtonType(button.type)) {
 		if (const auto data = button.link->getButton()) {
 			if (data->requestId) {
+				loading = true;
 				paintButtonLoading(
 					p,
 					st,
 					rect,
 					button.color,
 					outerWidth,
-					rounding);
+					rounding,
+					[=] {
+						return repaintAnimation(item, {
+							.type = ReplyKeyboardRepaintRequest::Type::Loading,
+							.generation = repaintGeneration,
+						});
+					});
 			}
 		}
 	}
@@ -1285,6 +1342,8 @@ void ReplyKeyboard::Style::paintButton(
 		tw = st::botKbStyle.font->elidew;
 	}
 	paintButtonStart(p, st, button.color);
+	const auto hasCustomEmoji = button.text.hasCustomEmoji();
+	auto customEmojiRepaintBounds = Ui::Text::CustomEmojiRepaintBounds();
 	button.text.draw(p, {
 		.position = {
 			tx,
@@ -1294,7 +1353,25 @@ void ReplyKeyboard::Style::paintButton(
 		.align = style::al_top,
 		.paused = paused || On(PowerSaving::kEmojiChat),
 		.elisionLines = 1,
+		.customEmojiRepaintBounds = hasCustomEmoji
+			? &customEmojiRepaintBounds
+			: nullptr,
 	});
+	if (recordAnimationPaint) {
+		recordAnimationPaint({
+			.row = row,
+			.column = column,
+			.rect = rect,
+			.customEmojiRect = !hasCustomEmoji
+				? QRectF()
+				: customEmojiRepaintBounds.repaintBoundsKnown
+				? customEmojiRepaintBounds.rect
+				: QRectF(rect),
+			.hasCustomEmoji = hasCustomEmoji,
+			.ripple = (button.ripple != nullptr),
+			.loading = loading,
+		});
+	}
 	if (button.type == HistoryMessageMarkupButton::Type::SimpleWebView) {
 		const auto &icon = st::markupWebview;
 		st::markupWebview.paint(

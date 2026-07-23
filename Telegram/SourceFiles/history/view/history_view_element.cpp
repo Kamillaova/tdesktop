@@ -110,7 +110,7 @@ Element *MousedElement/* = nullptr*/;
 
 class KeyboardStyle : public ReplyKeyboard::Style {
 public:
-	KeyboardStyle(const style::BotKeyboardButton &st, Fn<void()> repaint);
+	using ReplyKeyboard::Style::Style;
 
 	Images::CornersMaskRef buttonRounding(
 		Ui::BubbleRounding outer,
@@ -118,6 +118,9 @@ public:
 
 	const style::TextStyle &textStyle() const override;
 	void repaint(not_null<const HistoryItem*> item) const override;
+	bool repaintAnimation(
+		not_null<const HistoryItem*> item,
+		ReplyKeyboardRepaintRequest request) const override;
 
 protected:
 	void paintButtonBg(
@@ -143,7 +146,8 @@ protected:
 		const QRect &rect,
 		HistoryMessageMarkupButton::Color color,
 		int outerWidth,
-		Ui::BubbleRounding rounding) const override;
+		Ui::BubbleRounding rounding,
+		Fn<bool()> repaint) const override;
 	int minButtonWidth(HistoryMessageMarkupButton::Type type) const override;
 
 private:
@@ -163,16 +167,8 @@ private:
 	mutable base::flat_map<CacheKey, CachedBg> _cachedBg;
 	mutable base::flat_map<CacheKey, QPainterPath> _cachedOutline;
 	mutable std::unique_ptr<Ui::GlareEffect> _glare;
-	Fn<void()> _repaint;
 
 };
-
-KeyboardStyle::KeyboardStyle(
-	const style::BotKeyboardButton &st,
-	Fn<void()> repaint)
-: ReplyKeyboard::Style(st)
-, _repaint(std::move(repaint)) {
-}
 
 void KeyboardStyle::paintButtonStart(
 		QPainter &p,
@@ -190,6 +186,14 @@ const style::TextStyle &KeyboardStyle::textStyle() const {
 
 void KeyboardStyle::repaint(not_null<const HistoryItem*> item) const {
 	item->history()->owner().requestItemVisualRepaint(item);
+}
+
+bool KeyboardStyle::repaintAnimation(
+		not_null<const HistoryItem*> item,
+		ReplyKeyboardRepaintRequest request) const {
+	return item->history()->owner().requestItemInlineKeyboardRepaint(
+		item,
+		request);
 }
 
 Images::CornersMaskRef KeyboardStyle::buttonRounding(
@@ -334,10 +338,12 @@ void KeyboardStyle::paintButtonLoading(
 		const QRect &rect,
 		HistoryMessageMarkupButton::Color color,
 		int outerWidth,
-		Ui::BubbleRounding rounding) const {
+		Ui::BubbleRounding rounding,
+		Fn<bool()> repaint) const {
 	Expects(st != nullptr);
 
 	if (anim::Disabled()) {
+		_glare.reset();
 		const auto &icon = st->historySendingInvertedIcon();
 		icon.paint(
 			p,
@@ -345,6 +351,9 @@ void KeyboardStyle::paintButtonLoading(
 			rect::bottom(rect) - icon.height() - st::msgBotKbIconPadding,
 			rect.x() * 2 + rect.width());
 		return;
+	}
+	if (_glare && !_glare->animation.animating()) {
+		_glare.reset();
 	}
 
 	const auto key = CacheKey{ rounding.key(), color };
@@ -402,7 +411,11 @@ void KeyboardStyle::paintButtonLoading(
 			constexpr auto kTimeout = crl::time(0);
 			constexpr auto kDuration = crl::time(1100);
 			const auto color = st::premiumButtonFg->c;
-			_glare->validate(color, _repaint, kTimeout, kDuration);
+			_glare->validateWhile(
+				color,
+				std::move(repaint),
+				kTimeout,
+				kDuration);
 		}
 	}
 }
@@ -1812,6 +1825,202 @@ void Element::repaint(const QRegion &region) const {
 	history()->owner().requestViewRepaint(this, region);
 }
 
+bool Element::repaintInlineKeyboard(
+		ReplyKeyboardRepaintRequest request) const {
+	using Type = ReplyKeyboardRepaintRequest::Type;
+	const auto keyboard = data()->inlineReplyKeyboard();
+	if (!keyboard || keyboard->repaintGeneration() != request.generation) {
+		return false;
+	}
+	if (!_inlineKeyboardRepaint) {
+		_inlineKeyboardRepaint
+			= std::make_unique<InlineKeyboardRepaintData>();
+	}
+	const auto tracking = _inlineKeyboardRepaint.get();
+	if (tracking->generation != request.generation) {
+		tracking->generation = request.generation;
+		tracking->states.clear();
+		tracking->loadingRepaintPending = (request.type == Type::Loading);
+		if (request.type != Type::Loading
+			&& request.row >= 0
+			&& request.column >= 0) {
+			tracking->states.resize(request.row + 1);
+			auto &row = tracking->states[request.row];
+			row.resize(request.column + 1);
+			const auto state = &row[request.column];
+			if (request.type == Type::CustomEmoji) {
+				state->customEmojiPending = true;
+			} else {
+				state->ripplePending = true;
+			}
+		}
+		Ui::LogUnknownGeometryRepaint(
+			(request.type == Type::CustomEmoji)
+				? "inline keyboard custom emoji"
+				: (request.type == Type::Ripple)
+				? "inline keyboard ripple"
+				: "inline keyboard loading");
+		repaint();
+		return true;
+	}
+	if (request.type == Type::Loading) {
+		if (tracking->loadingRepaintPending) {
+			return false;
+		}
+		tracking->loadingRepaintPending = true;
+		auto region = QRegion();
+		auto found = false;
+		auto geometryKnown = true;
+		for (const auto &row : tracking->states) {
+			for (const auto &state : row) {
+				if (!state.loading) {
+					continue;
+				}
+				found = true;
+				geometryKnown = geometryKnown && state.rectKnown;
+				if (!state.rect.isEmpty()) {
+					region += state.rect;
+				}
+			}
+		}
+		if (!found) {
+			tracking->loadingRepaintPending = false;
+			return false;
+		} else if (!geometryKnown) {
+			Ui::LogUnknownGeometryRepaint("inline keyboard loading");
+			repaint();
+			return true;
+		} else if (!region.isEmpty()) {
+			repaint(region);
+			return true;
+		} else {
+			tracking->loadingRepaintPending = false;
+			return false;
+		}
+	}
+	auto &states = tracking->states;
+	const auto hasState = (request.row >= 0)
+		&& (request.row < int(states.size()))
+		&& (request.column >= 0)
+		&& (request.column < int(states[request.row].size()));
+	if (!hasState) {
+		return false;
+	}
+	auto &row = states[request.row];
+	const auto state = &row[request.column];
+	const auto customEmoji = (request.type == Type::CustomEmoji);
+	const auto pending = customEmoji
+		? &state->customEmojiPending
+		: &state->ripplePending;
+	if (*pending) {
+		return false;
+	}
+	if (customEmoji && !state->hasCustomEmoji) {
+		return false;
+	}
+	const auto geometryKnown = customEmoji
+		? state->customEmojiRectKnown
+		: state->rectKnown;
+	const auto rect = customEmoji ? state->customEmojiRect : state->rect;
+	*pending = true;
+	if (!geometryKnown) {
+		Ui::LogUnknownGeometryRepaint(
+			customEmoji
+				? "inline keyboard custom emoji"
+				: "inline keyboard ripple");
+		repaint();
+		return true;
+	} else if (!rect.isEmpty()) {
+		repaint(rect);
+		return true;
+	} else {
+		*pending = false;
+		return false;
+	}
+}
+
+void Element::recordInlineKeyboardAnimationPaint(
+		const Painter &p,
+		const PaintContext &context,
+		not_null<const ReplyKeyboard*> keyboard,
+		const ReplyKeyboardButtonPaint &painted) const {
+	const auto canonical = context.hasElementPainter(p);
+	if (!_inlineKeyboardRepaint) {
+		_inlineKeyboardRepaint
+			= std::make_unique<InlineKeyboardRepaintData>();
+	}
+	auto &tracking = *_inlineKeyboardRepaint;
+	const auto generation = keyboard->repaintGeneration();
+	if (tracking.generation != generation) {
+		tracking.generation = generation;
+		tracking.states.clear();
+		tracking.loadingRepaintPending = false;
+	}
+	Expects(painted.row >= 0 && painted.column >= 0);
+	tracking.states.resize(std::max(
+		int(tracking.states.size()),
+		painted.row + 1));
+	auto &row = tracking.states[painted.row];
+	row.resize(std::max(int(row.size()), painted.column + 1));
+	const auto state = &row[painted.column];
+	const auto previousLoading = state->loading;
+	if (!canonical) {
+		state->hasCustomEmoji = painted.hasCustomEmoji;
+		state->ripple = painted.ripple;
+		state->loading = painted.loading;
+		state->customEmojiPending = false;
+		state->ripplePending = false;
+		if (previousLoading || painted.loading) {
+			tracking.loadingRepaintPending = false;
+		}
+		return;
+	}
+	const auto mapped = context.mapToElement(p, painted.rect);
+	const auto customEmojiMapped = painted.hasCustomEmoji
+		? context.mapToElement(p, painted.customEmojiRect)
+		: std::optional<QRect>(QRect());
+	const auto previousRect = state->rect;
+	const auto previousCustomEmojiRect = state->customEmojiRect;
+	const auto previousHasCustomEmoji = state->hasCustomEmoji;
+	const auto previousRipple = state->ripple;
+	state->rect = mapped.value_or(QRect());
+	state->customEmojiRect = customEmojiMapped.value_or(QRect());
+	state->rectKnown = mapped.has_value();
+	state->customEmojiRectKnown = customEmojiMapped.has_value();
+	state->hasCustomEmoji = painted.hasCustomEmoji;
+	state->ripple = painted.ripple;
+	state->loading = painted.loading;
+	state->customEmojiPending = false;
+	state->ripplePending = false;
+	if (previousLoading || painted.loading) {
+		tracking.loadingRepaintPending = false;
+	}
+	auto region = QRegion();
+	if (!previousCustomEmojiRect.isEmpty()
+		&& (previousHasCustomEmoji || painted.hasCustomEmoji)
+		&& (previousCustomEmojiRect != state->customEmojiRect)) {
+		region += previousCustomEmojiRect;
+		region += state->customEmojiRect;
+		state->customEmojiPending = true;
+	}
+	if (!previousRect.isEmpty()
+		&& (previousRipple || painted.ripple)
+		&& (previousRect != state->rect)) {
+		region += previousRect;
+		region += state->rect;
+		state->ripplePending = true;
+	}
+	if (!previousRect.isEmpty()
+		&& (previousLoading || painted.loading)
+		&& (previousRect != state->rect)) {
+		region += previousRect;
+		region += state->rect;
+	}
+	if (!region.isEmpty()) {
+		repaint(region);
+	}
+}
+
 void Element::paintHighlight(
 		Painter &p,
 		const PaintContext &context,
@@ -2604,9 +2813,7 @@ void Element::validateInlineKeyboard(HistoryMessageReplyMarkup *markup) {
 	//}
 	markup->inlineKeyboard = std::make_unique<ReplyKeyboard>(
 		item,
-		std::make_unique<KeyboardStyle>(
-			st::msgBotKbButton,
-			[=] { item->history()->owner().requestItemVisualRepaint(item); }));
+		std::make_unique<KeyboardStyle>(st::msgBotKbButton));
 }
 
 void Element::previousInBlocksChanged() {

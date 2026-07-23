@@ -27,6 +27,29 @@ class ChannelData;
 class VoiceSeekClickHandler;
 class ReplyKeyboard;
 
+struct ReplyKeyboardRepaintRequest {
+	enum class Type : uchar {
+		CustomEmoji,
+		Ripple,
+		Loading,
+	};
+
+	Type type = Type::CustomEmoji;
+	int row = -1;
+	int column = -1;
+	uint32 generation = 0;
+};
+
+struct ReplyKeyboardButtonPaint {
+	int row = -1;
+	int column = -1;
+	QRect rect;
+	QRectF customEmojiRect;
+	uint32 hasCustomEmoji : 1 = 0;
+	uint32 ripple : 1 = 0;
+	uint32 loading : 1 = 0;
+};
+
 namespace Ui {
 struct ChatPaintContext;
 class ChatStyle;
@@ -514,6 +537,8 @@ private:
 	struct Button;
 
 public:
+	using PaintCallback = Fn<void(const ReplyKeyboardButtonPaint &)>;
+
 	class Style {
 	public:
 		Style(const style::BotKeyboardButton &st) : _st(&st) {
@@ -529,6 +554,9 @@ public:
 			RectParts sides) const = 0;
 
 		virtual void repaint(not_null<const HistoryItem*> item) const = 0;
+		virtual bool repaintAnimation(
+			not_null<const HistoryItem*> item,
+			ReplyKeyboardRepaintRequest request) const;
 		virtual ~Style() {
 		}
 
@@ -556,7 +584,8 @@ public:
 			const QRect &rect,
 			HistoryMessageMarkupButton::Color color,
 			int outerWidth,
-			Ui::BubbleRounding rounding) const = 0;
+			Ui::BubbleRounding rounding,
+			Fn<bool()> repaint) const = 0;
 		virtual int minButtonWidth(
 			HistoryMessageMarkupButton::Type type) const = 0;
 
@@ -566,10 +595,15 @@ public:
 		void paintButton(
 			Painter &p,
 			const Ui::ChatStyle *st,
+			not_null<const HistoryItem*> item,
 			int outerWidth,
+			int row,
+			int column,
+			uint32 repaintGeneration,
 			const ReplyKeyboard::Button &button,
 			Ui::BubbleRounding rounding,
-			bool paused) const;
+			bool paused,
+			const PaintCallback &recordAnimationPaint) const;
 		friend class ReplyKeyboard;
 
 	};
@@ -584,9 +618,11 @@ public:
 	void setStyle(std::unique_ptr<Style> &&s);
 	void resize(int width, int height);
 
-	// what width and height will best fit this keyboard
 	int naturalWidth() const;
 	int naturalHeight() const;
+	[[nodiscard]] uint32 repaintGeneration() const {
+		return _repaintGeneration;
+	}
 
 	void paint(
 		Painter &p,
@@ -594,7 +630,8 @@ public:
 		Ui::BubbleRounding rounding,
 		int outerWidth,
 		const QRect &clip,
-		bool paused) const;
+		bool paused,
+		const PaintCallback &recordAnimationPaint = nullptr) const;
 	ClickHandlerPtr getLink(QPoint point) const;
 	ClickHandlerPtr getLinkByIndex(int index) const;
 
@@ -637,6 +674,7 @@ private:
 	ButtonCoords findButtonCoordsByClickHandler(const ClickHandlerPtr &p);
 
 	const not_null<const HistoryItem*> _item;
+	const uint32 _repaintGeneration;
 	int _width = 0;
 
 	std::vector<std::vector<Button>> _rows;

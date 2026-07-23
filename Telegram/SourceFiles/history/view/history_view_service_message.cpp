@@ -657,7 +657,14 @@ void Service::draw(Painter &p, const PaintContext &context) const {
 			KeyboardRounding(),
 			keyboardWidth,
 			context.clip.translated(-keyboardPosition),
-			context.paused);
+			context.paused,
+			[&](const ReplyKeyboardButtonPaint &painted) {
+				recordInlineKeyboardAnimationPaint(
+					p,
+					context,
+					keyboard,
+					painted);
+			});
 		p.translate(-keyboardPosition);
 	}
 

@@ -15,6 +15,11 @@ struct GlareEffect final {
 		Fn<void()> updateCallback,
 		crl::time timeout,
 		crl::time duration);
+	void validateWhile(
+		const QColor &color,
+		Fn<bool()> updateCallback,
+		crl::time timeout,
+		crl::time duration);
 	[[nodiscard]] float64 progress(crl::time now) const;
 	[[nodiscard]] QLinearGradient computeGradient(const QColor &color) const;
 

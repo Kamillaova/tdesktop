@@ -2297,7 +2297,14 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			messageRounding,
 			g.width(),
 			context.clip.translated(-keyboardPosition),
-			context.paused);
+			context.paused,
+			[&](const ReplyKeyboardButtonPaint &painted) {
+				recordInlineKeyboardAnimationPaint(
+					p,
+					context,
+					keyboard,
+					painted);
+			});
 		p.translate(-keyboardPosition);
 	}
 
