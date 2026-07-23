@@ -39,6 +39,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/peers/tag_info_box.h"
 #include "ui/effects/reaction_fly_animation.h"
 #include "ui/effects/ripple_animation.h"
+#include "ui/effects/round_checkbox.h"
 #include "ui/text/text_custom_emoji.h"
 #include "ui/text/text_extended_data.h"
 #include "ui/text/text_options.h"
@@ -47,7 +48,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/painter.h"
 #include "ui/power_saving.h"
 #include "ui/rect.h"
-//#include "ui/round_rect.h"
 #include "data/components/factchecks.h"
 #include "data/components/sponsored_messages.h"
 #include "data/data_session.h"
@@ -534,6 +534,60 @@ struct BadgePillGeometry {
 	};
 }
 
+struct PaintedRectRepaint {
+	QRect current;
+	QRect stale;
+	uint32 pending : 1 = 0;
+	uint32 known : 1 = 0;
+};
+
+void RequestPaintedRectRepaint(
+		not_null<const Element*> view,
+		PaintedRectRepaint &repaint,
+		const char *component) {
+	if (repaint.pending || (repaint.known && repaint.current.isEmpty())) {
+		return;
+	}
+	repaint.pending = 1;
+	if (!repaint.known) {
+		Ui::LogUnknownGeometryRepaint(component);
+		view->repaint();
+	} else {
+		view->repaint(repaint.current);
+	}
+}
+
+void RecordPaintedRectRepaint(
+		not_null<const Element*> view,
+		PaintedRectRepaint &repaint,
+		bool canonical,
+		std::optional<QRect> painted,
+		bool skipConvergence,
+		const char *component) {
+	if (!canonical) {
+		return;
+	}
+	const auto stale = base::take(repaint.stale);
+	const auto previous = stale.united(base::take(repaint.current));
+	repaint.pending = 0;
+	repaint.current = painted.value_or(QRect());
+	repaint.known = painted.has_value() ? 1 : 0;
+	if (skipConvergence) {
+		return;
+	} else if (!repaint.known) {
+		repaint.stale = previous;
+		if (!previous.isEmpty()) {
+			repaint.pending = 1;
+			Ui::LogUnknownGeometryRepaint(component);
+			view->repaint();
+		}
+	} else if (!previous.isEmpty()
+		&& (!stale.isEmpty() || previous != repaint.current)) {
+		repaint.pending = 1;
+		view->repaint(previous.united(repaint.current));
+	}
+}
+
 } // namespace
 
 const char kOptionUnlimitedMessageWidth[]
@@ -554,6 +608,16 @@ struct Message::FromNameStatus {
 	ClickHandlerPtr link;
 	std::optional<QRect> lastRepaintRect;
 	int skip = 0;
+};
+
+struct Message::SelectionCheckbox {
+	explicit SelectionCheckbox(Fn<void()> repaint)
+	: check(st::msgSelectionCheck, std::move(repaint)) {
+	}
+
+	Ui::RoundCheckbox check;
+	PaintedRectRepaint repaint;
+	bool moving = false;
 };
 
 struct Message::RightAction {
@@ -2076,6 +2140,33 @@ void Message::repaintTopicButtonNameRegion(const QRegion &region) const {
 	repaint(region);
 }
 
+void Message::repaintSelectionCheckbox() const {
+	if (const auto state = _selectionCheckbox.get(); state && !state->moving) {
+		RequestPaintedRectRepaint(
+			this,
+			state->repaint,
+			"selection checkbox");
+	}
+}
+
+void Message::finishSelectionCheckboxPaint(
+		bool canonical,
+		std::optional<QRect> paintedRect,
+		bool skipConvergence) const {
+	if (const auto state = _selectionCheckbox.get()) {
+		if (canonical) {
+			state->moving = skipConvergence;
+		}
+		RecordPaintedRectRepaint(
+			this,
+			state->repaint,
+			canonical,
+			paintedRect,
+			skipConvergence,
+			"selection checkbox");
+	}
+}
+
 int Message::marginTop() const {
 	auto result = 0;
 	if (!isHidden()) {
@@ -2120,11 +2211,27 @@ int Message::marginBottom() const {
 }
 
 void Message::draw(Painter &p, const PaintContext &context) const {
-	const auto trackFromNameStatus = context.hasElementPainter(p);
+	const auto canonicalPaint = context.hasElementPainter(p);
 	auto fromNameStatusRepaintRect = std::optional<QRect>(QRect());
 	const auto fromNameStatusPaintGuard = gsl::finally([&] {
-		if (trackFromNameStatus) {
+		if (canonicalPaint) {
 			finishFromNameStatusPaint(fromNameStatusRepaintRect);
+		}
+	});
+	const auto selectionCheckboxCanonical
+		= canonicalPaint && !context.skipSelectionCheck;
+	auto selectionCheckboxPaintedRect = selectionCheckboxCanonical
+		? std::optional<QRect>(QRect())
+		: std::optional<QRect>();
+	auto selectionCheckboxMoving = false;
+	auto clearSelectionCheckbox = false;
+	const auto selectionCheckboxPaintGuard = gsl::finally([&] {
+		finishSelectionCheckboxPaint(
+			selectionCheckboxCanonical,
+			selectionCheckboxPaintedRect,
+			selectionCheckboxMoving);
+		if (clearSelectionCheckbox && selectionCheckboxCanonical) {
+			_selectionCheckbox = nullptr;
 		}
 	});
 	auto g = countGeometry();
@@ -2143,6 +2250,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		p.translate(context.gestureHorizontal.translation, 0);
 	}
 	const auto selectionModeResult = delegate()->elementInSelectionMode(this);
+	selectionCheckboxMoving = selectionModeResult.progress > 0.
+		&& selectionModeResult.progress != 1.;
 	const auto selectionTranslation = (selectionModeResult.progress > 0)
 		? (selectionModeResult.progress
 			* AdditionalSpaceForSelectionCheckbox(this, g))
@@ -2396,7 +2505,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				p,
 				trect,
 				context,
-				trackFromNameStatus
+				canonicalPaint
 					? &fromNameStatusRepaintRect
 					: nullptr);
 			paintEphemeralBadge(p, trect, context);
@@ -2690,13 +2799,11 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				p.scale(-1., 1.);
 			}
 			p.translate(-center);
-			// All the next draws are mirrored.
 			p.drawEllipse(rect);
 			context.st->historyFastShareIcon().paintInCenter(p, rect);
 			p.setPen(pen);
 			p.setBrush(Qt::NoBrush);
 			p.drawArc(arcRect, arc::kQuarterLength, spanAngle);
-			// p.drawArc(arcRect, arc::kQuarterLength, spanAngle);
 			if (reachRatio) {
 				const auto w = style::ConvertFloatScale(kWaveWidth);
 				p.setOpacity(ratio - reachRatio);
@@ -2716,15 +2823,14 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			const auto progress = selectionModeResult.progress;
 			if (progress <= 1.) {
 				if (context.selected()) {
-					if (!_selectionRoundCheckbox) {
-						_selectionRoundCheckbox
-							= std::make_unique<Ui::RoundCheckbox>(
-								st::msgSelectionCheck,
-								[this] { repaint(); });
+					if (!_selectionCheckbox) {
+						_selectionCheckbox
+							= std::make_unique<SelectionCheckbox>(
+								[this] { repaintSelectionCheckbox(); });
 					}
 				}
-				if (_selectionRoundCheckbox) {
-					_selectionRoundCheckbox->setChecked(
+				if (_selectionCheckbox) {
+					_selectionCheckbox->check.setChecked(
 						context.selected(),
 						anim::type::normal);
 				}
@@ -2753,19 +2859,23 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 					auto hq = PainterHighQualityEnabler(p);
 					p.drawEllipse(QRect(pos, Size(st.size)));
 				}
-				if (_selectionRoundCheckbox) {
-					_selectionRoundCheckbox->paint(
+				if (_selectionCheckbox) {
+					const auto painted = _selectionCheckbox->check.paint(
 						p,
 						pos.x(),
 						pos.y(),
 						width());
+					if (selectionCheckboxCanonical) {
+						selectionCheckboxPaintedRect
+							= context.mapToElement(p, QRectF(painted));
+					}
 				}
 			} else {
-				_selectionRoundCheckbox = nullptr;
+				clearSelectionCheckbox = true;
 			}
 		}
 	} else if (!context.skipSelectionCheck) {
-		_selectionRoundCheckbox = nullptr;
+		clearSelectionCheckbox = true;
 	}
 }
 

@@ -27,7 +27,6 @@ struct ReactionId;
 
 namespace Ui {
 struct BubbleRounding;
-class RoundCheckbox;
 } // namespace Ui
 
 namespace HistoryView {
@@ -350,6 +349,7 @@ private:
 	struct LinkRipple;
 	struct FromNameStatus;
 	struct RightAction;
+	struct SelectionCheckbox;
 	struct TopicButtonRippleRepaint {
 		QRegion current;
 		QRegion stale;
@@ -414,6 +414,11 @@ private:
 
 	void toggleRightActionRipple(bool pressed);
 	void toggleBadgeRipple(bool pressed);
+	void repaintSelectionCheckbox() const;
+	void finishSelectionCheckboxPaint(
+		bool canonical,
+		std::optional<QRect> paintedRect,
+		bool skipConvergence) const;
 
 	void toggleReplyRipple(bool pressed);
 	void toggleSummaryHeaderRipple(bool pressed);
@@ -625,7 +630,7 @@ private:
 
 	mutable Ui::Text::String _fromName;
 	mutable std::unique_ptr<FromNameStatus> _fromNameStatus;
-	mutable std::unique_ptr<Ui::RoundCheckbox> _selectionRoundCheckbox;
+	mutable std::unique_ptr<SelectionCheckbox> _selectionCheckbox;
 	mutable uint32 _fromNameVersion : 16 = 0;
 	uint32 _nonTextMaxWidth : 16 = 0;
 	mutable int _bubbleTextualWidthMinimum : 16 = -1;

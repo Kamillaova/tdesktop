@@ -25,7 +25,12 @@ class RoundCheckbox {
 public:
 	RoundCheckbox(const style::RoundCheckbox &st, Fn<void()> updateCallback);
 
-	void paint(QPainter &p, int x, int y, int outerWidth, float64 masterScale = 1.) const;
+	QRect paint(
+		QPainter &p,
+		int x,
+		int y,
+		int outerWidth,
+		float64 masterScale = 1.) const;
 
 	void setDisplayInactive(bool displayInactive);
 	bool checked() const {
@@ -101,7 +106,6 @@ private:
 
 	RoundCheckbox _check;
 
-	//std::optional<QBrush> _fgOverride;
 	std::vector<OutlineSegment> _segments;
 
 	mutable QImage _liveBadgeCache;

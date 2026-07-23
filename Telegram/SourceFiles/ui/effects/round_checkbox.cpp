@@ -263,12 +263,17 @@ RoundCheckbox::RoundCheckbox(const style::RoundCheckbox &st, Fn<void()> updateCa
 , _updateCallback(updateCallback) {
 }
 
-void RoundCheckbox::paint(QPainter &p, int x, int y, int outerWidth, float64 masterScale) const {
+QRect RoundCheckbox::paint(
+		QPainter &p,
+		int x,
+		int y,
+		int outerWidth,
+		float64 masterScale) const {
 	if (!_st.size
 		|| (!_checkedProgress.animating()
 			&& !_checked
 			&& !_displayInactive)) {
-		return;
+		return QRect();
 	}
 
 	auto cacheSize = kWideScale * _st.size * style::DevicePixelRatio();
@@ -289,6 +294,7 @@ void RoundCheckbox::paint(QPainter &p, int x, int y, int outerWidth, float64 mas
 	if (!_inactiveCacheFg.isNull()) {
 		p.drawPixmap(inactiveTo, _inactiveCacheFg, cacheFrom);
 	}
+	return inactiveTo;
 }
 
 void RoundCheckbox::setChecked(bool newChecked, anim::type animated) {
