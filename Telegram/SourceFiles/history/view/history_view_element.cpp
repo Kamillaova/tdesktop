@@ -602,6 +602,75 @@ void PathShiftGradientRepaintTracker::repaint() {
 	}
 }
 
+void PaintedRectRepaintTracker::request(
+		not_null<const Element*> view,
+		const char *component) {
+	if (_pending || (_known && _current.isEmpty())) {
+		return;
+	}
+	_pending = 1;
+	if (!_known) {
+		Ui::LogUnknownGeometryRepaint(component);
+		view->repaint();
+	} else {
+		view->repaint(_current);
+	}
+}
+
+void PaintedRectRepaintTracker::record(
+		not_null<const Element*> view,
+		bool canonical,
+		std::optional<QRect> painted,
+		bool skipConvergence,
+		const char *component) {
+	if (!canonical) {
+		return;
+	}
+	const auto stale = base::take(_stale);
+	const auto previous = stale.united(base::take(_current));
+	_pending = 0;
+	_current = painted.value_or(QRect());
+	_known = painted.has_value() ? 1 : 0;
+	if (skipConvergence) {
+		return;
+	} else if (!_known) {
+		_stale = previous;
+		if (!previous.isEmpty()) {
+			_pending = 1;
+			Ui::LogUnknownGeometryRepaint(component);
+			view->repaint();
+		}
+	} else if (!previous.isEmpty()
+		&& (!stale.isEmpty() || previous != _current)) {
+		_pending = 1;
+		view->repaint(previous.united(_current));
+	}
+}
+
+void PaintedRectRepaintTracker::repaintBeforeRemoval(
+		not_null<const Element*> view,
+		const char *component) {
+	if (!_pending) {
+		if (!_known) {
+			Ui::LogUnknownGeometryRepaint(component);
+			view->repaint();
+		} else {
+			const auto rect = _stale.united(_current);
+			if (!rect.isEmpty()) {
+				view->repaint(rect);
+			}
+		}
+	}
+	reset();
+}
+
+void PaintedRectRepaintTracker::reset() {
+	_current = QRect();
+	_stale = QRect();
+	_pending = 0;
+	_known = 0;
+}
+
 void ElementDelegate::elementPathShiftGradientPainted(
 		not_null<const Element*>,
 		const QPainter &,
@@ -2151,7 +2220,13 @@ void Element::overrideMedia(std::unique_ptr<Media> media) {
 void Element::overrideRightBadge(const QString &text, BadgeRole role) {
 	if (text.isEmpty()) {
 		if (Has<RightBadge>()) {
-			Get<RightBadge>()->overridden = false;
+			const auto badge = Get<RightBadge>();
+			badge->overridden = false;
+			if (badge->ripple) {
+				badge->rippleRepaint.repaintBeforeRemoval(
+					this,
+					"message badge ripple");
+			}
 			RemoveComponents(RightBadge::Bit());
 		}
 		return;
@@ -2160,6 +2235,14 @@ void Element::overrideRightBadge(const QString &text, BadgeRole role) {
 		AddComponents(RightBadge::Bit());
 	}
 	const auto badge = Get<RightBadge>();
+	if (badge->ripple) {
+		badge->rippleRepaint.repaintBeforeRemoval(
+			this,
+			"message badge ripple");
+		badge->ripple.reset();
+	} else {
+		badge->rippleRepaint.reset();
+	}
 	badge->overridden = true;
 	badge->role = role;
 	badge->tag.setMarkedText(

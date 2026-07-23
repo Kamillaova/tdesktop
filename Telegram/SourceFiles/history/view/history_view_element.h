@@ -221,6 +221,30 @@ private:
 
 };
 
+class PaintedRectRepaintTracker final {
+public:
+	void request(
+		not_null<const Element*> view,
+		const char *component);
+	void record(
+		not_null<const Element*> view,
+		bool canonical,
+		std::optional<QRect> painted,
+		bool skipConvergence,
+		const char *component);
+	void repaintBeforeRemoval(
+		not_null<const Element*> view,
+		const char *component);
+	void reset();
+
+private:
+	QRect _current;
+	QRect _stale;
+	uint32 _pending : 1 = 0;
+	uint32 _known : 1 = 0;
+
+};
+
 class DefaultElementDelegate : public ElementDelegate {
 public:
 	bool elementUnderCursor(not_null<const Element*> view) override;

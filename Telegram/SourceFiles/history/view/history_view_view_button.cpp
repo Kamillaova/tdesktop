@@ -14,6 +14,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "history/history.h"
 #include "history/history_item_components.h"
 #include "history/view/history_view_cursor_state.h"
+#include "history/view/history_view_element.h"
 #include "iv/iv_instance.h"
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
@@ -89,11 +90,11 @@ struct ViewButton::Inner {
 	Inner(
 		not_null<Data::Media*> media,
 		uint8 colorIndex,
-		Fn<void()> updateCallback);
+		not_null<const Element*> owner);
 	Inner(
 		FullMsgId itemId,
 		uint8 colorIndex,
-		Fn<void()> updateCallback);
+		not_null<const Element*> owner);
 
 	void createRipple(int height);
 	void toggleRipple(bool pressed, int height);
@@ -101,7 +102,7 @@ struct ViewButton::Inner {
 	const Kind kind;
 	const style::margins &margins;
 	const ClickHandlerPtr link;
-	const Fn<void()> updateCallback;
+	const not_null<const Element*> owner;
 	Data::Media *media = nullptr;
 	FullMsgId itemId;
 	uint32 lastWidth : 24 = 0;
@@ -109,6 +110,7 @@ struct ViewButton::Inner {
 	uint32 aboveInfo : 1 = 0;
 	uint32 externalLink : 1 = 0;
 	QPoint lastPoint;
+	PaintedRectRepaintTracker rippleRepaint;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	Ui::Text::String text;
 };
@@ -120,11 +122,11 @@ bool ViewButton::MediaHasViewButton(not_null<Data::Media*> media) {
 ViewButton::Inner::Inner(
 	not_null<Data::Media*> media,
 	uint8 colorIndex,
-	Fn<void()> updateCallback)
+	not_null<const Element*> owner)
 : kind(Kind::Giveaway)
 , margins(st::historyViewButtonMargins)
 , link(MakeMediaButtonClickHandler(media))
-, updateCallback(std::move(updateCallback))
+, owner(owner)
 , media(media)
 , colorIndex(colorIndex)
 , aboveInfo(1)
@@ -134,11 +136,11 @@ ViewButton::Inner::Inner(
 ViewButton::Inner::Inner(
 	FullMsgId itemId,
 	uint8 colorIndex,
-	Fn<void()> updateCallback)
+	not_null<const Element*> owner)
 : kind(Kind::RichMessage)
 , margins(st::historyViewButtonMargins)
 , link(MakeRichMessageButtonClickHandler(itemId))
-, updateCallback(std::move(updateCallback))
+, owner(owner)
 , itemId(itemId)
 , colorIndex(colorIndex)
 , aboveInfo(1)
@@ -154,7 +156,9 @@ void ViewButton::Inner::createRipple(int height) {
 		Ui::RippleAnimation::RoundRectMask(
 			QSize(lastWidth, height - margins.top() - margins.bottom()),
 			radius),
-		updateCallback);
+		[this] {
+			rippleRepaint.request(owner, "message view button ripple");
+		});
 }
 
 void ViewButton::Inner::toggleRipple(bool pressed, int height) {
@@ -171,21 +175,21 @@ void ViewButton::Inner::toggleRipple(bool pressed, int height) {
 ViewButton::ViewButton(
 	not_null<Data::Media*> media,
 	uint8 colorIndex,
-	Fn<void()> updateCallback)
+	not_null<const Element*> owner)
 : _inner(std::make_unique<Inner>(
 	media,
 	colorIndex,
-	std::move(updateCallback))) {
+	owner)) {
 }
 
 ViewButton::ViewButton(
 		FullMsgId itemId,
 		uint8 colorIndex,
-		Fn<void()> updateCallback)
+		not_null<const Element*> owner)
 : _inner(std::make_unique<Inner>(
 	itemId,
 	colorIndex,
-	std::move(updateCallback))) {
+	owner)) {
 }
 
 ViewButton::~ViewButton() {
@@ -221,21 +225,42 @@ void ViewButton::draw(
 		Painter &p,
 		const QRect &r,
 		const Ui::ChatPaintContext &context) {
+	const auto canonical = context.hasElementPainter(p);
+	const auto hadRipple = (_inner->ripple != nullptr);
+	const auto widthChanged = canonical && (_inner->lastWidth != r.width());
 	const auto st = context.st;
 	const auto stm = context.messageStyle();
 	const auto selected = context.selected();
 	const auto cache = context.outbg
 		? stm->replyCache[st->colorPatternIndex(_inner->colorIndex)].get()
 		: st->coloredReplyCache(selected, _inner->colorIndex).get();
+	auto rippleRect = style::rtlrect(
+		r.left(),
+		r.top(),
+		r.width(),
+		r.height(),
+		r.width());
+	const auto paintRipple = [&] {
+		if (!_inner->ripple) {
+			return;
+		}
+		const auto painted = _inner->ripple->paint(
+			p,
+			r.left(),
+			r.top(),
+			r.width(),
+			&cache->bg);
+		if (!painted.isEmpty()) {
+			rippleRect = painted;
+		}
+		if (canonical && _inner->ripple->empty()) {
+			_inner->ripple.reset();
+		}
+	};
 	if (_inner->kind == Kind::RichMessage) {
 		Ui::Text::ValidateQuotePaintCache(*cache, st::historyPagePreview);
 		Ui::Text::FillQuotePaint(p, r, *cache, st::historyPagePreview);
-		if (_inner->ripple) {
-			_inner->ripple->paint(p, r.left(), r.top(), r.width(), &cache->bg);
-			if (_inner->ripple->empty()) {
-				_inner->ripple = nullptr;
-			}
-		}
+		paintRipple();
 		const auto padding = st::historyPageButtonPadding;
 		const auto availableWidth = r.width()
 			- padding.left()
@@ -257,12 +282,7 @@ void ViewButton::draw(
 		}
 	} else {
 		const auto radius = st::historyPagePreview.radius;
-		if (_inner->ripple) {
-			_inner->ripple->paint(p, r.left(), r.top(), r.width(), &cache->bg);
-			if (_inner->ripple->empty()) {
-				_inner->ripple = nullptr;
-			}
-		}
+		paintRipple();
 		PainterHighQualityEnabler hq(p);
 		p.setPen(Qt::NoPen);
 		p.setBrush(cache->bg);
@@ -288,9 +308,39 @@ void ViewButton::draw(
 				cache->icon);
 		}
 	}
-	if (_inner->lastWidth != r.width()) {
+	_inner->rippleRepaint.record(
+		_inner->owner,
+		canonical,
+		canonical
+			? context.mapToElement(p, QRectF(rippleRect))
+			: std::optional<QRect>(),
+		!hadRipple,
+		"message view button ripple");
+	if (widthChanged) {
 		_inner->lastWidth = r.width();
+		if (_inner->ripple) {
+			_inner->rippleRepaint.repaintBeforeRemoval(
+				_inner->owner,
+				"message view button ripple");
+		}
 		resized();
+	}
+}
+
+void ViewButton::recordRipplePaintAbsent(bool canonical) const {
+	_inner->rippleRepaint.record(
+		_inner->owner,
+		canonical,
+		QRect(),
+		!_inner->ripple,
+		"message view button ripple");
+}
+
+void ViewButton::repaintBeforeRemoval() const {
+	if (_inner->ripple) {
+		_inner->rippleRepaint.repaintBeforeRemoval(
+			_inner->owner,
+			"message view button ripple");
 	}
 }
 

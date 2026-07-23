@@ -471,6 +471,7 @@ void ApplyRevealGradient(
 }
 
 struct SecondRightAction {
+	PaintedRectRepaintTracker repaint;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	ClickHandlerPtr link;
 };
@@ -480,6 +481,30 @@ struct BadgePillGeometry {
 	int width = 0;
 	int height = 0;
 };
+
+struct BottomRippleParts {
+	const style::icon *tail = nullptr;
+	int shift = 0;
+	int added = 0;
+};
+
+[[nodiscard]] BottomRippleParts ComputeBottomRippleParts(
+		Ui::BubbleRounding rounding) {
+	using Corner = Ui::BubbleCornerRounding;
+	const auto tail = (rounding.bottomLeft == Corner::Tail)
+		? &st::historyBubbleTailInLeft
+		: (rounding.bottomRight == Corner::Tail)
+		? &st::historyBubbleTailInRight
+		: nullptr;
+	const auto shift = (rounding.bottomLeft == Corner::Tail)
+		? tail->width()
+		: 0;
+	return {
+		.tail = tail,
+		.shift = shift,
+		.added = tail ? tail->width() : 0,
+	};
+}
 
 [[nodiscard]] bool IsRippleLink(const ClickHandlerPtr &handler) {
 	switch (handler->getTextEntity().type) {
@@ -534,66 +559,13 @@ struct BadgePillGeometry {
 	};
 }
 
-struct PaintedRectRepaint {
-	QRect current;
-	QRect stale;
-	uint32 pending : 1 = 0;
-	uint32 known : 1 = 0;
-};
-
-void RequestPaintedRectRepaint(
-		not_null<const Element*> view,
-		PaintedRectRepaint &repaint,
-		const char *component) {
-	if (repaint.pending || (repaint.known && repaint.current.isEmpty())) {
-		return;
-	}
-	repaint.pending = 1;
-	if (!repaint.known) {
-		Ui::LogUnknownGeometryRepaint(component);
-		view->repaint();
-	} else {
-		view->repaint(repaint.current);
-	}
-}
-
-void RecordPaintedRectRepaint(
-		not_null<const Element*> view,
-		PaintedRectRepaint &repaint,
-		bool canonical,
-		std::optional<QRect> painted,
-		bool skipConvergence,
-		const char *component) {
-	if (!canonical) {
-		return;
-	}
-	const auto stale = base::take(repaint.stale);
-	const auto previous = stale.united(base::take(repaint.current));
-	repaint.pending = 0;
-	repaint.current = painted.value_or(QRect());
-	repaint.known = painted.has_value() ? 1 : 0;
-	if (skipConvergence) {
-		return;
-	} else if (!repaint.known) {
-		repaint.stale = previous;
-		if (!previous.isEmpty()) {
-			repaint.pending = 1;
-			Ui::LogUnknownGeometryRepaint(component);
-			view->repaint();
-		}
-	} else if (!previous.isEmpty()
-		&& (!stale.isEmpty() || previous != repaint.current)) {
-		repaint.pending = 1;
-		view->repaint(previous.united(repaint.current));
-	}
-}
-
 } // namespace
 
 const char kOptionUnlimitedMessageWidth[]
 	= "unlimited-message-width";
 
 struct Message::CommentsButton {
+	PaintedRectRepaintTracker repaint;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	std::vector<UserpicInRow> userpics;
 	QImage cachedUserpics;
@@ -615,12 +587,14 @@ struct Message::SelectionCheckbox {
 	: check(st::msgSelectionCheck, std::move(repaint)) {
 	}
 
+	PaintedRectRepaintTracker repaint;
 	Ui::RoundCheckbox check;
-	PaintedRectRepaint repaint;
 	bool moving = false;
 };
 
 struct Message::RightAction {
+	PaintedRectRepaintTracker repaint;
+	uint32 paintedInDraw : 1 = 0;
 	std::unique_ptr<Ui::RippleAnimation> ripple;
 	ClickHandlerPtr link;
 	QPoint lastPoint;
@@ -1213,8 +1187,21 @@ void Message::refreshRightBadge() {
 	if (const auto badge = Get<RightBadge>(); badge && badge->overridden) {
 		return;
 	}
+	const auto clearRipple = [&] {
+		if (const auto badge = Get<RightBadge>()) {
+			if (badge->ripple) {
+				badge->rippleRepaint.repaintBeforeRemoval(
+					this,
+					"message badge ripple");
+				badge->ripple.reset();
+			} else {
+				badge->rippleRepaint.reset();
+			}
+		}
+	};
 	if (hasOutLayout()) {
 		if (Has<RightBadge>()) {
+			clearRipple();
 			RemoveComponents(RightBadge::Bit());
 		}
 		return;
@@ -1293,6 +1280,7 @@ void Message::refreshRightBadge() {
 	const auto needBadge = !tagText.empty() || boosts;
 	if (!needBadge) {
 		if (Has<RightBadge>()) {
+			clearRipple();
 			RemoveComponents(RightBadge::Bit());
 		}
 		return;
@@ -1301,10 +1289,10 @@ void Message::refreshRightBadge() {
 		AddComponents(RightBadge::Bit());
 	}
 	const auto badge = Get<RightBadge>();
+	clearRipple();
 	badge->role = role;
 	badge->special = special || (text.isEmpty() && !tagText.empty());
 	badge->tagLink = nullptr;
-	badge->ripple = nullptr;
 	if (tagText.empty()) {
 		badge->tag.clear();
 	} else {
@@ -2142,9 +2130,8 @@ void Message::repaintTopicButtonNameRegion(const QRegion &region) const {
 
 void Message::repaintSelectionCheckbox() const {
 	if (const auto state = _selectionCheckbox.get(); state && !state->moving) {
-		RequestPaintedRectRepaint(
+		state->repaint.request(
 			this,
-			state->repaint,
 			"selection checkbox");
 	}
 }
@@ -2157,13 +2144,63 @@ void Message::finishSelectionCheckboxPaint(
 		if (canonical) {
 			state->moving = skipConvergence;
 		}
-		RecordPaintedRectRepaint(
+		state->repaint.record(
 			this,
-			state->repaint,
 			canonical,
 			paintedRect,
 			skipConvergence,
 			"selection checkbox");
+	}
+}
+
+void Message::finishActionRipplesPaint(
+		bool canonical,
+		bool commentsPainted,
+		bool badgePainted,
+		bool viewButtonPainted) const {
+	if (!canonical) {
+		return;
+	}
+	if (const auto action = _rightAction.get()) {
+		if (!action->paintedInDraw) {
+			action->repaint.record(
+				this,
+				canonical,
+				QRect(),
+				!action->ripple,
+				"message primary right action ripple");
+			if (const auto second = action->second.get()) {
+				second->repaint.record(
+					this,
+					canonical,
+					QRect(),
+					!second->ripple,
+					"message secondary right action ripple");
+			}
+		}
+	}
+	if (!commentsPainted) {
+		if (const auto comments = _comments.get()) {
+			comments->repaint.record(
+				this,
+				canonical,
+				QRect(),
+				!comments->ripple,
+				"message comments ripple");
+		}
+	}
+	if (!badgePainted) {
+		if (const auto badge = Get<RightBadge>()) {
+			badge->rippleRepaint.record(
+				this,
+				canonical,
+				QRect(),
+				!badge->ripple,
+				"message badge ripple");
+		}
+	}
+	if (!viewButtonPainted && _viewButton) {
+		_viewButton->recordRipplePaintAbsent(canonical);
 	}
 }
 
@@ -2234,6 +2271,19 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			_selectionCheckbox = nullptr;
 		}
 	});
+	auto commentsRipplePainted = false;
+	auto badgeRipplePainted = false;
+	auto viewButtonRipplePainted = false;
+	const auto actionRipplePaintGuard = gsl::finally([&] {
+		finishActionRipplesPaint(
+			canonicalPaint,
+			commentsRipplePainted,
+			badgeRipplePainted,
+			viewButtonRipplePainted);
+	});
+	if (canonicalPaint && _rightAction) {
+		_rightAction->paintedInDraw = 0;
+	}
 	auto g = countGeometry();
 	if (g.width() < 1) {
 		recordTextRepaintRect(p, context, {});
@@ -2444,6 +2494,8 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			});
 
 		auto inner = g;
+		commentsRipplePainted = data()->repliesAreComments()
+			|| data()->externalReply();
 		paintCommentsButton(p, inner, context);
 
 		auto trect = inner.marginsRemoved(st::msgPadding);
@@ -2476,6 +2528,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 				? (reactionsHeight + 2 * st::mediaInBubbleSkip)
 				: _bottomInfo.height();
 			const auto heightMargins = QMargins(0, 0, 0, infoHeight);
+			viewButtonRipplePainted = true;
 			_viewButton->draw(
 				p,
 				_viewButton->countRect(belowInfo
@@ -2501,6 +2554,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 			recordTopicButtonRippleRepaint(p, context, QRect());
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
+			badgeRipplePainted = displayFromName() && rightBadgeWidth();
 			paintFromName(
 				p,
 				trect,
@@ -2897,21 +2951,41 @@ void Message::paintCommentsButton(
 	const auto top = g.top() + g.height();
 	auto left = g.left();
 	auto width = g.width();
+	const auto canonical = context.hasElementPainter(p);
+	const auto wasActive = (_comments->ripple != nullptr);
+	const auto parts = ComputeBottomRippleParts(countBubbleRounding());
+	auto rippleRect = style::rtlrect(
+		left - parts.shift,
+		top,
+		width + parts.added,
+		st::historyCommentsButtonHeight,
+		width);
 
 	if (_comments->ripple) {
 		p.setOpacity(st::historyPollRippleOpacity);
 		const auto colorOverride = &stm->msgWaveformInactive->c;
-		_comments->ripple->paint(
+		const auto painted = _comments->ripple->paint(
 			p,
 			left - _comments->rippleShift,
 			top,
 			width,
 			colorOverride);
-		if (_comments->ripple->empty()) {
+		if (!painted.isEmpty()) {
+			rippleRect = painted;
+		}
+		if (canonical && _comments->ripple->empty()) {
 			_comments->ripple.reset();
 		}
 		p.setOpacity(1.);
 	}
+	_comments->repaint.record(
+		this,
+		canonical,
+		canonical
+			? context.mapToElement(p, QRectF(rippleRect))
+			: std::optional<QRect>(),
+		!wasActive,
+		"message comments ripple");
 
 	left += st::historyCommentsSkipLeft;
 	width -= st::historyCommentsSkipLeft
@@ -3159,6 +3233,34 @@ void Message::paintFromName(
 			const auto badgeLeft = trect.left()
 				+ trect.width()
 				- badge->width;
+			const auto canonical = context.hasElementPainter(p);
+			const auto rippleWasActive = (badge->ripple != nullptr);
+			auto rippleRect = QRect();
+			const auto paintRipple = [&](QRect pillRect) {
+				rippleRect = style::rtlrect(
+					pillRect.x(),
+					pillRect.y(),
+					pillRect.width(),
+					pillRect.height(),
+					width());
+				if (!badge->ripple) {
+					return;
+				}
+				auto rippleColor = badgeColor;
+				rippleColor.setAlphaF(0.1);
+				const auto painted = badge->ripple->paint(
+					p,
+					pillRect.x(),
+					pillRect.y(),
+					width(),
+					&rippleColor);
+				if (!painted.isEmpty()) {
+					rippleRect = painted;
+				}
+				if (canonical && badge->ripple->empty()) {
+					badge->ripple.reset();
+				}
+			};
 			if (badge->role != BadgeRole::User) {
 				auto bgColor = badgeColor;
 				bgColor.setAlphaF(0.15);
@@ -3180,19 +3282,7 @@ void Message::paintFromName(
 						pill.height / 2.,
 						pill.height / 2.);
 				}
-				if (badge->ripple) {
-					auto rippleColor = badgeColor;
-					rippleColor.setAlphaF(0.1);
-					badge->ripple->paint(
-						p,
-						badgeLeft,
-						badgeTop,
-						width(),
-						&rippleColor);
-					if (badge->ripple->empty()) {
-						badge->ripple.reset();
-					}
-				}
+				paintRipple(pillRect);
 				p.setPen(badgeColor);
 				badge->tag.draw(p, {
 					.position = QPoint(
@@ -3202,24 +3292,14 @@ void Message::paintFromName(
 					.now = context.now,
 				});
 			} else if (!badge->tag.isEmpty()) {
-				if (badge->ripple) {
-					const auto pill = ComputeBadgePillGeometry(badge);
-					const auto &padding = st::msgTagBadgePadding;
-					const auto pillLeft = badgeLeft
-						- (pill.width - pill.textWidth) / 2;
-					const auto pillTop = trect.top() - padding.top();
-					auto rippleColor = badgeColor;
-					rippleColor.setAlphaF(0.1);
-					badge->ripple->paint(
-						p,
-						pillLeft,
-						pillTop,
-						width(),
-						&rippleColor);
-					if (badge->ripple->empty()) {
-						badge->ripple.reset();
-					}
-				}
+				const auto pill = ComputeBadgePillGeometry(badge);
+				const auto &padding = st::msgTagBadgePadding;
+				const auto pillRect = QRect(
+					badgeLeft - (pill.width - pill.textWidth) / 2,
+					trect.top() - padding.top(),
+					pill.width,
+					pill.height);
+				paintRipple(pillRect);
 				p.setPen(st::rankUserFg);
 				badge->tag.draw(p, {
 					.position = QPoint(badgeLeft, trect.top()),
@@ -3227,6 +3307,14 @@ void Message::paintFromName(
 					.now = context.now,
 				});
 			}
+			badge->rippleRepaint.record(
+				this,
+				canonical,
+				canonical
+					? context.mapToElement(p, QRectF(rippleRect))
+					: std::optional<QRect>(),
+				!rippleWasActive,
+				"message badge ripple");
 			if (!badge->boosts.isEmpty()) {
 				const auto boostWidth = badge->boosts.maxWidth();
 				p.setPen(badgeColor);
@@ -3986,14 +4074,19 @@ void Message::clickHandlerPressedChanged(
 		Assert(rightSize != std::nullopt);
 		if (pressed) {
 			if (!_rightAction->second->ripple) {
-				// Create a ripple.
 				_rightAction->second->ripple
 					= std::make_unique<Ui::RippleAnimation>(
 						st::defaultRippleAnimation,
 						Ui::RippleAnimation::RoundRectMask(
 							Size(rightSize->width()),
 							rightSize->width() / 2),
-						[=] { repaint(); });
+						[this] {
+							if (_rightAction && _rightAction->second) {
+								_rightAction->second->repaint.request(
+									this,
+									"message secondary right action ripple");
+							}
+						});
 			}
 			_rightAction->second->ripple->add(_rightAction->lastPoint);
 		} else if (_rightAction->second->ripple) {
@@ -4099,14 +4192,19 @@ void Message::toggleRightActionRipple(bool pressed) {
 
 	if (pressed) {
 		if (!_rightAction->ripple) {
-			// Create a ripple.
 			const auto size = _rightAction->second
 				? Size(rightSize->width())
 				: *rightSize;
 			_rightAction->ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				Ui::RippleAnimation::RoundRectMask(size, size.width() / 2),
-				[=] { repaint(); });
+				[this] {
+					if (_rightAction) {
+						_rightAction->repaint.request(
+							this,
+							"message primary right action ripple");
+					}
+				});
 		}
 		_rightAction->ripple->add(_rightAction->lastPoint);
 	} else if (_rightAction->ripple) {
@@ -4127,7 +4225,13 @@ void Message::toggleBadgeRipple(bool pressed) {
 			badge->ripple = std::make_unique<Ui::RippleAnimation>(
 				st::defaultRippleAnimation,
 				std::move(mask),
-				[=] { repaint(); });
+				[this] {
+					if (const auto current = Get<RightBadge>()) {
+						current->rippleRepaint.request(
+							this,
+							"message badge ripple");
+					}
+				});
 		}
 		badge->ripple->add(badge->lastPoint);
 	} else if (badge->ripple) {
@@ -4187,15 +4291,10 @@ BottomRippleMask Message::bottomRippleMask(int buttonHeight) const {
 	const auto &large = CachedCornersMasks(Radius::BubbleLarge);
 	const auto &small = CachedCornersMasks(Radius::BubbleSmall);
 	const auto rounding = countBubbleRounding();
-	const auto icon = (rounding.bottomLeft == Corner::Tail)
-		? &st::historyBubbleTailInLeft
-		: (rounding.bottomRight == Corner::Tail)
-		? &st::historyBubbleTailInRight
-		: nullptr;
-	const auto shift = (rounding.bottomLeft == Corner::Tail)
-		? icon->width()
-		: 0;
-	const auto added = shift ? shift : icon ? icon->width() : 0;
+	const auto parts = ComputeBottomRippleParts(rounding);
+	const auto icon = parts.tail;
+	const auto shift = parts.shift;
+	const auto added = parts.added;
 	auto corners = CornersMaskRef();
 	const auto set = [&](int index) {
 		corners.p[index] = (rounding[index] == Corner::Large)
@@ -4251,7 +4350,13 @@ void Message::createCommentsButtonRipple() {
 	_comments->ripple = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		std::move(mask.image),
-		[=] { repaint(); });
+		[this] {
+			if (_comments) {
+				_comments->repaint.request(
+					this,
+					"message comments ripple");
+			}
+		});
 	_comments->rippleShift = mask.shift;
 }
 
@@ -4490,6 +4595,11 @@ bool Message::hasHeavyPart() const {
 
 void Message::unloadHeavyPart() {
 	Element::unloadHeavyPart();
+	if (_comments && _comments->ripple) {
+		_comments->repaint.repaintBeforeRemoval(
+			this,
+			"message comments ripple");
+	}
 	_comments = nullptr;
 	if (_topicButton) {
 		invalidateTopicButtonNameRepaint();
@@ -6152,6 +6262,7 @@ void Message::refreshDataIdHook() {
 		_fastReplyLink = fastReplyLink();
 	}
 	if (_viewButton) {
+		_viewButton->repaintBeforeRemoval();
 		_viewButton = nullptr;
 		updateViewButtonExistence();
 	}
@@ -6252,14 +6363,20 @@ void Message::updateViewButtonExistence() {
 		return std::make_unique<ViewButton>(
 			std::forward<decltype(from)>(from),
 			colorIndex(),
-			[=] { repaint(); });
+			this);
+	};
+	const auto replace = [&](std::unique_ptr<ViewButton> next) {
+		if (_viewButton) {
+			_viewButton->repaintBeforeRemoval();
+		}
+		_viewButton = std::move(next);
 	};
 	if (const auto richPage = item->richPage(); richPage && richPage->part) {
 		const auto itemId = item->fullId();
 		if (_viewButton && _viewButton->matches(itemId)) {
 			return;
 		}
-		_viewButton = make(itemId);
+		replace(make(itemId));
 		return;
 	}
 	const auto media = item->media();
@@ -6267,10 +6384,10 @@ void Message::updateViewButtonExistence() {
 		if (_viewButton && _viewButton->matches(media)) {
 			return;
 		}
-		_viewButton = make(media);
+		replace(make(media));
 		return;
 	}
-	_viewButton = nullptr;
+	replace(nullptr);
 }
 
 void Message::initLogEntryOriginal() {
@@ -6787,32 +6904,77 @@ void Message::drawRightAction(
 
 	const auto size = rightActionSize();
 	const auto st = context.st;
+	const auto canonical = context.hasElementPainter(p);
+	if (canonical) {
+		_rightAction->paintedInDraw = 1;
+	}
+	const auto primarySize = _rightAction->second
+		? Size(size->width())
+		: *size;
+	const auto primaryWasActive = (_rightAction->ripple != nullptr);
+	auto primaryRect = style::rtlrect(
+		left,
+		top,
+		primarySize.width(),
+		primarySize.height(),
+		size->width());
 
 	if (_rightAction->ripple) {
 		const auto &stm = context.messageStyle();
 		const auto colorOverride = &stm->msgWaveformInactive->c;
-		_rightAction->ripple->paint(
+		const auto painted = _rightAction->ripple->paint(
 			p,
 			left,
 			top,
 			size->width(),
 			colorOverride);
-		if (_rightAction->ripple->empty()) {
+		if (!painted.isEmpty()) {
+			primaryRect = painted;
+		}
+		if (canonical && _rightAction->ripple->empty()) {
 			_rightAction->ripple.reset();
 		}
 	}
-	if (_rightAction->second && _rightAction->second->ripple) {
-		const auto &stm = context.messageStyle();
-		const auto colorOverride = &stm->msgWaveformInactive->c;
-		_rightAction->second->ripple->paint(
-			p,
+	_rightAction->repaint.record(
+		this,
+		canonical,
+		canonical
+			? context.mapToElement(p, QRectF(primaryRect))
+			: std::optional<QRect>(),
+		!primaryWasActive,
+		"message primary right action ripple");
+	if (const auto second = _rightAction->second.get()) {
+		const auto secondWasActive = (second->ripple != nullptr);
+		auto secondRect = style::rtlrect(
 			left,
 			top + st::historyFastCloseSize,
 			size->width(),
-			colorOverride);
-		if (_rightAction->second->ripple->empty()) {
-			_rightAction->second->ripple.reset();
+			size->width(),
+			size->width());
+		if (second->ripple) {
+			const auto &stm = context.messageStyle();
+			const auto colorOverride = &stm->msgWaveformInactive->c;
+			const auto painted = second->ripple->paint(
+				p,
+				left,
+				top + st::historyFastCloseSize,
+				size->width(),
+				colorOverride);
+			if (!painted.isEmpty()) {
+				secondRect = painted;
+			}
+			if (canonical && second->ripple->empty()) {
+				second->ripple.reset();
+			}
 		}
+		second->repaint.record(
+			this,
+			canonical,
+			canonical
+				? context.mapToElement(p, QRectF(secondRect))
+				: std::optional<QRect>(),
+			!secondWasActive,
+			"message secondary right action ripple");
 	}
 
 	p.setPen(Qt::NoPen);
@@ -7563,6 +7725,11 @@ int Message::resizeContentGetHeight(int newWidth) {
 		if (item->repliesAreComments() || item->externalReply()) {
 			newHeight += st::historyCommentsButtonHeight;
 		} else if (_comments) {
+			if (_comments->ripple) {
+				_comments->repaint.repaintBeforeRemoval(
+					this,
+					"message comments ripple");
+			}
 			_comments = nullptr;
 			checkHeavyPart();
 		}

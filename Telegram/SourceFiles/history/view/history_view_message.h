@@ -159,6 +159,7 @@ struct RightBadge : RuntimeComponent<RightBadge, Element> {
 	BadgeRole role = BadgeRole::User;
 	bool overridden = false;
 	bool special = false;
+	mutable PaintedRectRepaintTracker rippleRepaint;
 	mutable std::unique_ptr<Ui::RippleAnimation> ripple;
 	mutable QPoint lastPoint;
 };
@@ -419,6 +420,11 @@ private:
 		bool canonical,
 		std::optional<QRect> paintedRect,
 		bool skipConvergence) const;
+	void finishActionRipplesPaint(
+		bool canonical,
+		bool commentsPainted,
+		bool badgePainted,
+		bool viewButtonPainted) const;
 
 	void toggleReplyRipple(bool pressed);
 	void toggleSummaryHeaderRipple(bool pressed);

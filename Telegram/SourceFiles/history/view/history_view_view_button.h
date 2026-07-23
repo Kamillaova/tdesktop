@@ -18,6 +18,7 @@ struct WebPageData;
 
 namespace HistoryView {
 
+class Element;
 struct TextState;
 
 class ViewButton {
@@ -30,11 +31,11 @@ public:
 	ViewButton(
 		not_null<Data::Media*> media,
 		uint8 colorIndex,
-		Fn<void()> updateCallback);
+		not_null<const Element*> owner);
 	ViewButton(
 		FullMsgId itemId,
 		uint8 colorIndex,
-		Fn<void()> updateCallback);
+		not_null<const Element*> owner);
 	~ViewButton();
 
 	[[nodiscard]] static bool MediaHasViewButton(
@@ -49,6 +50,8 @@ public:
 		Painter &p,
 		const QRect &r,
 		const Ui::ChatPaintContext &context);
+	void recordRipplePaintAbsent(bool canonical) const;
+	void repaintBeforeRemoval() const;
 
 	[[nodiscard]] const ClickHandlerPtr &link() const;
 	bool checkLink(const ClickHandlerPtr &other, bool pressed);
