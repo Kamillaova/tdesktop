@@ -62,6 +62,7 @@ struct Factcheck : RuntimeComponent<Factcheck, Element> {
 struct PsaTooltipState : RuntimeComponent<PsaTooltipState, Element> {
 	QString type;
 	mutable ClickHandlerPtr link;
+	mutable PaintedRectRepaintTracker iconRepaint;
 	mutable Ui::Animations::Simple buttonVisibleAnimation;
 	mutable bool buttonVisible = true;
 };
@@ -451,6 +452,9 @@ private:
 	void paintForwardedInfo(
 		Painter &p,
 		QRect &trect,
+		const PaintContext &context) const;
+	void recordPsaIconAbsent(
+		const Painter &p,
 		const PaintContext &context) const;
 	void paintReplyInfo(
 		Painter &p,

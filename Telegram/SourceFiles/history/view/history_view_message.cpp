@@ -2289,6 +2289,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		recordTextRepaintRect(p, context, {});
 		recordTopicButtonNameRepaint(p, context, {}, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
+		recordPsaIconAbsent(p, context);
 		return;
 	}
 	const auto item = data();
@@ -2341,6 +2342,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		recordTextRepaintRect(p, context, {});
 		recordTopicButtonNameRepaint(p, context, {}, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
+		recordPsaIconAbsent(p, context);
 		return;
 	}
 
@@ -2552,6 +2554,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 		if (mediaOnTop) {
 			recordTopicButtonNameRepaint(p, context, {}, {});
 			recordTopicButtonRippleRepaint(p, context, QRect());
+			recordPsaIconAbsent(p, context);
 			trect.setY(trect.y() - st::msgPadding.top());
 		} else {
 			badgeRipplePainted = displayFromName() && rightBadgeWidth();
@@ -2754,6 +2757,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	} else if (media && media->isDisplayed()) {
 		recordTextRepaintRect(p, context, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
+		recordPsaIconAbsent(p, context);
 		p.translate(g.topLeft());
 		media->draw(p, context.translated(
 			-g.topLeft()
@@ -2769,6 +2773,7 @@ void Message::draw(Painter &p, const PaintContext &context) const {
 	} else {
 		recordTextRepaintRect(p, context, {});
 		recordTopicButtonRippleRepaint(p, context, QRect());
+		recordPsaIconAbsent(p, context);
 	}
 
 	p.restoreTextPalette();
@@ -3534,13 +3539,23 @@ void Message::paintForwardedInfo(
 			Assert(entry != nullptr);
 			const auto shown = entry->buttonVisibleAnimation.value(
 				entry->buttonVisible ? 1. : 0.);
+			const auto &icon = stm->historyPsaIcon;
+			const auto position = fits
+				? st::historyPsaIconPosition1
+				: st::historyPsaIconPosition2;
+			const auto x = trect.x() + trect.width() - position.x() - icon.width();
+			const auto y = trect.y() + position.y();
+			const auto slot = QRect(x, y, icon.width(), icon.height());
+			const auto canonical = context.hasElementPainter(p);
+			entry->iconRepaint.record(
+				this,
+				canonical,
+				canonical
+					? context.mapToElement(p, QRectF(slot))
+					: std::optional<QRect>(),
+				false,
+				"psa tooltip icon");
 			if (shown > 0) {
-				const auto &icon = stm->historyPsaIcon;
-				const auto position = fits
-					? st::historyPsaIconPosition1
-					: st::historyPsaIconPosition2;
-				const auto x = trect.x() + trect.width() - position.x() - icon.width();
-				const auto y = trect.y() + position.y();
 				if (shown == 1) {
 					icon.paint(p, x, y, trect.width());
 				} else {
@@ -3555,6 +3570,21 @@ void Message::paintForwardedInfo(
 		}
 
 		trect.setY(trect.y() + ((fits ? 1 : 2) * serviceFont->height));
+	} else {
+		recordPsaIconAbsent(p, context);
+	}
+}
+
+void Message::recordPsaIconAbsent(
+		const Painter &p,
+		const PaintContext &context) const {
+	if (const auto entry = Get<PsaTooltipState>()) {
+		entry->iconRepaint.record(
+			this,
+			context.hasElementPainter(p),
+			QRect(),
+			false,
+			"psa tooltip icon");
 	}
 }
 
@@ -5325,8 +5355,15 @@ void Message::psaTooltipToggled(bool tooltipShown) const {
 	}
 	state->buttonVisible = visible;
 	history()->owner().notifyViewLayoutChange(this);
+	const auto weak = base::make_weak(this);
 	state->buttonVisibleAnimation.start(
-		[=] { repaint(); },
+		[weak] {
+			if (const auto view = weak.get()) {
+				if (const auto entry = view->Get<PsaTooltipState>()) {
+					entry->iconRepaint.request(view, "psa tooltip icon");
+				}
+			}
+		},
 		visible ? 0. : 1.,
 		visible ? 1. : 0.,
 		st::fadeWrapDuration);
