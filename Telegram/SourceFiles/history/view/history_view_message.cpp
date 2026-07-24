@@ -3567,6 +3567,8 @@ void Message::paintForwardedInfo(
 					p.restore();
 				}
 			}
+		} else {
+			recordPsaIconAbsent(p, context);
 		}
 
 		trect.setY(trect.y() + ((fits ? 1 : 2) * serviceFont->height));
