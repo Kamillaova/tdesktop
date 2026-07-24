@@ -876,11 +876,17 @@ void Reply::paint(
 	}
 
 	if (_ripple.animation) {
-		_ripple.lastPaintedPoint = inBubble ? QPoint(x, y) : QPoint();
-		_ripple.animation->paint(p, x, y, w, &rippleColor);
+		p.save();
+		p.translate(rect.topLeft());
+		_ripple.animation->paint(
+			p,
+			0,
+			0,
+			rect.width(),
+			&rippleColor);
+		p.restore();
 		if (_ripple.animation->empty()) {
 			_ripple.animation.reset();
-			_ripple.lastPaintedPoint = {};
 		}
 	}
 
@@ -1093,17 +1099,17 @@ void Reply::recordAnimationRepaintRect(
 void Reply::createRippleAnimation(
 		not_null<const Element*> view,
 		QSize size) {
+	const auto weak = base::make_weak(view);
 	_ripple.animation = std::make_unique<Ui::RippleAnimation>(
 		st::defaultRippleAnimation,
 		Ui::RippleAnimation::RoundRectMask(
 			size,
 			st::messageQuoteStyle.radius),
-		[=] {
-			if (_ripple.lastPaintedPoint.isNull()) {
-				Ui::LogUnknownGeometryRepaint("reply ripple");
-				view->repaint();
-			} else {
-				view->repaint(QRect(_ripple.lastPaintedPoint, size));
+		[weak] {
+			if (const auto strong = weak.get()) {
+				if (const auto reply = strong->Get<Reply>()) {
+					reply->repaintAnimation(strong);
+				}
 			}
 		});
 }
