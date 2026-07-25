@@ -2268,7 +2268,7 @@ struct Poll::Options : public Poll::Part {
 		const Answer &answer,
 		FeedbackPart part,
 		QRect rect) const;
-	[[nodiscard]] FeedbackRepaints &ensureFeedbackRepaints(
+	FeedbackRepaints &ensureFeedbackRepaints(
 		const QByteArray &option) const;
 	[[nodiscard]] FeedbackRepaints *findFeedbackRepaints(
 		const QByteArray &option) const;
