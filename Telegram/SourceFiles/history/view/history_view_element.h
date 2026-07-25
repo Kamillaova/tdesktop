@@ -924,8 +924,12 @@ protected:
 	virtual void refreshDataIdHook();
 
 	[[nodiscard]] const Ui::Text::String &text() const;
+
+public:
 	[[nodiscard]] HistoryMessageRichPage *richpage();
 	[[nodiscard]] const HistoryMessageRichPage *richpage() const;
+
+protected:
 	[[nodiscard]] int richPageWidthFor(int textWidth) const;
 	[[nodiscard]] int textHeightFor(int textWidth) const;
 	[[nodiscard]] int textRealWidth() const { return _textRealWidth; }

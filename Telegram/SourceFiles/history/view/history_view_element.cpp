@@ -1978,10 +1978,17 @@ bool Element::repaintInlineKeyboard(
 	auto &row = states[request.row];
 	const auto state = &row[request.column];
 	const auto customEmoji = (request.type == Type::CustomEmoji);
+	const auto setPending = [&](bool value) {
+		if (customEmoji) {
+			state->customEmojiPending = value ? 1 : 0;
+		} else {
+			state->ripplePending = value ? 1 : 0;
+		}
+	};
 	const auto pending = customEmoji
-		? &state->customEmojiPending
-		: &state->ripplePending;
-	if (*pending) {
+		? state->customEmojiPending
+		: state->ripplePending;
+	if (pending) {
 		return false;
 	}
 	if (customEmoji && !state->hasCustomEmoji) {
@@ -1991,7 +1998,7 @@ bool Element::repaintInlineKeyboard(
 		? state->customEmojiRectKnown
 		: state->rectKnown;
 	const auto rect = customEmoji ? state->customEmojiRect : state->rect;
-	*pending = true;
+	setPending(true);
 	if (!geometryKnown) {
 		Ui::LogUnknownGeometryRepaint(
 			customEmoji
@@ -2003,7 +2010,7 @@ bool Element::repaintInlineKeyboard(
 		repaint(rect);
 		return true;
 	} else {
-		*pending = false;
+		setPending(false);
 		return false;
 	}
 }

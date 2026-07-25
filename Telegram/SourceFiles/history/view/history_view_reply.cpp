@@ -331,7 +331,6 @@ Reply::~Reply() = default;
 void Reply::update(
 		not_null<Element*> view,
 		not_null<HistoryMessageReply*> data) {
-	const auto item = view->data();
 	const auto &fields = data->fields();
 	const auto message = data->resolvedMessage.get();
 	const auto messageMedia = (message
