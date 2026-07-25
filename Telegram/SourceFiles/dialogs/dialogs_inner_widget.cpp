@@ -70,6 +70,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "data/stickers/data_custom_emoji.h"
 #include "data/stickers/data_stickers.h"
 #include "data/data_send_action.h"
+#include "base/call_delayed.h"
 #include "base/unixtime.h"
 #include "base/options.h"
 #include "lang/lang_keys.h"

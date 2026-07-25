@@ -154,8 +154,8 @@ struct RightButton final {
 	QImage bg;
 	QImage selectedBg;
 	QImage activeBg;
-	Ui::Text::String text;
-	std::unique_ptr<Ui::RippleAnimation> ripple;
+	::Ui::Text::String text;
+	std::unique_ptr<::Ui::RippleAnimation> ripple;
 
 	explicit operator bool() const {
 		return st != nullptr;
