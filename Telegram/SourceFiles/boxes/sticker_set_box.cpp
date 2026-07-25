@@ -2574,7 +2574,7 @@ void StickerSetBox::Inner::updateItems() {
 void StickerSetBox::Inner::updateLottieItems(
 		const Lottie::MultiUpdate &update) {
 	auto changed = false;
-	for (const auto animation : update.animations) {
+	for (const auto &animation : update.animations) {
 		const auto i = _lottieElementIndices.find(animation.get());
 		if (i == end(_lottieElementIndices)) {
 			continue;

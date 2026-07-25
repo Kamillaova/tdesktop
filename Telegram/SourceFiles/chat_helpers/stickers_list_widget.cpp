@@ -2089,7 +2089,7 @@ void StickersListWidget::ensureLottiePlayer(Set &set) {
 			return;
 		}
 		auto found = false;
-		for (const auto animation : update.animations) {
+		for (const auto &animation : update.animations) {
 			const auto i = current.lottieAnimationIdentities.find(
 				animation.get());
 			if (i == end(current.lottieAnimationIdentities)) {
@@ -2431,7 +2431,9 @@ void StickersListWidget::repaintItems(
 				begin(set.stickers) + from,
 				begin(set.stickers) + till,
 				identity->document,
-				&Sticker::document);
+				[](const Sticker &sticker) {
+					return sticker.document.get();
+				});
 			if (i == begin(set.stickers) + till) {
 				continue;
 			}
