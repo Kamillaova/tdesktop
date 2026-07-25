@@ -222,7 +222,12 @@ void ListController::addItems(const MessageIdsList &ids, bool clear) {
 				std::make_unique<Dialogs::FakeRow>(
 					key,
 					item,
-					[=] { delegate()->peerListUpdateRow(*shared); }));
+					[=](not_null<const Dialogs::FakeRow*>) {
+						delegate()->peerListUpdateRow(*shared);
+					},
+					[=](not_null<const Dialogs::FakeRow*>) {
+						delegate()->peerListUpdateRow(*shared);
+					}));
 			*shared = row.get();
 			delegate()->peerListAppendRow(std::move(row));
 		}
