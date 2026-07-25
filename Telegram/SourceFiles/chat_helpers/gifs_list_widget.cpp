@@ -1099,12 +1099,8 @@ void GifsListWidget::repaintPendingItems() {
 	_updateInlineItems.cancel();
 	const auto visible = visibleRepaintRect();
 	auto damage = QRegion();
-	auto visibleCount = 0;
 	for (auto &entry : _repaintItems) {
 		auto &item = entry.second;
-		if (item.current.intersects(visible)) {
-			++visibleCount;
-		}
 		if (!base::take(item.pending)) {
 			continue;
 		}
@@ -1115,14 +1111,7 @@ void GifsListWidget::repaintPendingItems() {
 		}
 	}
 	if (!damage.isEmpty()) {
-		const auto damageCount = damage.rectCount();
-		if (damageCount > 1
-			&& visibleCount > 0
-			&& damageCount * 2 >= visibleCount) {
-			update(damage.boundingRect());
-		} else {
-			update(damage);
-		}
+		update(damage);
 	}
 }
 
