@@ -626,7 +626,9 @@ void MessageBar::paint(Painter &p, const QRegion &repaintRegion) {
 			p.setPen(_st.textFg);
 			textAnimationFallback = QRect(
 				QPoint(body.x(), text.y()),
-				QSize(body.width(), _text.lineHeight()));
+				QSize(body.width(), _text.isNull()
+					? st::normalFont->height
+					: _text.lineHeight()));
 			_text.draw(p, {
 				.position = { body.x(), text.y() },
 				.outerWidth = width,
