@@ -11218,7 +11218,6 @@ void HistoryWidget::paintEvent(QPaintEvent *e) {
 		e->rect());
 
 	Painter p(this);
-	const auto clip = e->rect();
 	if (_list) {
 		const auto restrictionHidden = fieldOrDisabledShown()
 			|| isRecording();

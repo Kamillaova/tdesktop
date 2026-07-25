@@ -2791,12 +2791,12 @@ void ListWidget::reorderItemsInSections(int oldIndex, int newIndex) {
 			oldSection->items().begin() + first,
 			oldSection->items().begin() + last + 1);
 		auto repaint = QRect();
-		for (const auto item : items) {
+		for (const auto &item : items) {
 			repaint = repaint.united(reorderItemGeometry(item));
 		}
 		oldSection->reorderItems(oldSectionIndex, newSectionIndex);
 		resizeToContentHeight();
-		for (const auto item : items) {
+		for (const auto &item : items) {
 			repaint = repaint.united(reorderItemGeometry(item));
 		}
 		if (!repaint.isEmpty()) {
@@ -2872,7 +2872,7 @@ void ListWidget::finishShiftAnimations() {
 		_shiftAnimations.clear();
 	}
 	resetAllItemShifts();
-	for (const auto item : items) {
+	for (const auto &item : items) {
 		repaint = repaint.united(reorderItemGeometry(item));
 	}
 	if (!repaint.isEmpty()) {
