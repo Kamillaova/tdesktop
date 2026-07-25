@@ -1803,11 +1803,16 @@ void Element::recordTextRepaintRect(
 	_flags &= ~Flag::TextRepaintPending;
 	auto current = QRect();
 	const auto needsTextFallback
-		= !customEmojiRepaintBounds.repaintBoundsKnown
-		|| _text.hasSpoilers();
+		= !customEmojiRepaintBounds.repaintBoundsKnown;
 	auto geometryKnown = customEmojiRepaintBounds.repaintBoundsKnown
 		|| (needsTextFallback && !textFallback.isEmpty());
 	auto repaintRect = customEmojiRepaintBounds.rect;
+	const auto spoilerRect = customEmojiRepaintBounds.spoilerRect;
+	if (!spoilerRect.isEmpty()) {
+		repaintRect = repaintRect.isEmpty()
+			? spoilerRect
+			: repaintRect.united(spoilerRect);
+	}
 	if (needsTextFallback && !textFallback.isEmpty()) {
 		repaintRect = repaintRect.isEmpty()
 			? textFallback
