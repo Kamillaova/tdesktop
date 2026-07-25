@@ -3610,6 +3610,9 @@ void InnerWidget::repaintDialogRowAnimation(not_null<Entry*> entry) {
 void InnerWidget::repaintDialogRowAnimationAt(
 		not_null<Row*> row,
 		int top) {
+	if (top >= _visibleBottom || top + row->height() <= _visibleTop) {
+		return;
+	}
 	const auto animation = paintedAnimationDamage(row);
 	if (!animation) {
 		Ui::LogUnknownGeometryRepaint("dialog row animation");
